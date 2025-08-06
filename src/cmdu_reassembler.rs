@@ -105,7 +105,11 @@ impl CmduReassembler {
             first_received: Instant::now(),
         });
 
-        entry.fragments.insert(fragment.fragment, fragment.clone());
+        let inserted = entry.fragments.insert(fragment.fragment, fragment.clone());
+        if inserted.is_some() {
+            tracing::trace!("Duplicated fragment: {:?}", fragment.fragment);
+            return Some(Err(CmduReassemblyError::DuplicatedFragment));
+        }
 
         if fragment.is_last_fragment() {
             tracing::trace!("All fragments arrived. Generating reassembled CMDU");
