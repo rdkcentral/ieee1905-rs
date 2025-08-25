@@ -1,0 +1,98 @@
+# Ignore Visual Studio Code workspace settings
+.vscode/
+
+# Ignore Visual Studio Code workspace settings
+*.code-workspace
+
+#ingnore Testing files
+Testing/
+
+#ignore  rust target directory
+target/
+
+#ingnore CMAKE files
+CMakeFiles/
+cmake_install.cmake
+CMakeCache.txt
+*.cmake
+Makefile
+# Ignore CMake build directory
+systemd/
+
+#ignore systemd for now
+target/
+
+# Ignore Makefile build artifacts
+*.d        # Dependency files
+*.o        # Object files
+*.out      # Output files
+*.a        # Static libraries
+*.so       # Shared libraries
+*.exe      # Executables
+*.bin      # Binary files
+*.elf      # Executable and Linkable Format
+*.log      # Log files
+
+# Ignore generated documentation backup
+*.bkup
+.$*
+
+# Ignore IDE/project-specific files
+.idea/            # JetBrains IDE (CLion, WebStorm, etc.) settings
+*.swp             # vi swap files
+*.swo
+*.bak             # Backup files
+*~                # Temporary files
+
+# Ignore OS-specific files
+.DS_Store         # macOS Finder metadata
+Thumbs.db         # Windows image file cache
+desktop.ini       # Windows desktop file
+
+# Ignore binary executables or build outputs in a bin folder
+bin/
+
+# Ignore debug or profiling outputs
+*.dSYM/           # macOS debug symbols
+*.stackdump       # Stack dumps
+*.core            # Core dump files
+
+# Ignore environment-specific files
+.env              # Python or Node.js environment files
+
+# Ignore temporary files
+*.tmp
+*.temp
+*.~lock*          # LibreOffice lock files
+__pycache__/      # Python cache files
+
+# Ignore auto-generated files from package managers or tools
+node_modules/     # Node.js dependencies
+*.iml             # IntelliJ IDEA project files
+
+# Ignore archives
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Ignore editor/IDE files
+*.sln             # Visual Studio solution files
+*.user            # Visual Studio user-specific settings
+*.vcxproj         # Visual Studio project files
+
+# Ignore Python virtual environments
+venv/
+.env/
+
+# Ignore yarn lock files
+yarn.lock
+
+# Ignore docker files
+Docker*
+
+# Ignore docker-compose files
+docker-*
+
+# Ignore .dockignore files
+.dockerignore
