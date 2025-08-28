@@ -208,55 +208,105 @@ impl AlTopologyChange {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    // Test registration request parser for too short registration request data packet.
+    // Registration request should contain exactly 2 bytes. Try to parse only 1 byte request
+    // to check if parser returns error: LengthValue. It should.
     #[test]
-    #[should_panic]
     fn test_parse_too_short_registration_request() {
-        assert!(AlServiceRegistrationRequest::parse(&[1]).is_ok());
+        // Pass only 1 byte to parser
+        let s = AlServiceRegistrationRequest::parse(&[1]);
+
+        // Expect ErrorKind::LengthValue
+        match s {
+            Err(NomErr::Failure(nom::error::Error { code, .. })) => {
+                assert_eq!(code, ErrorKind::LengthValue);
+            }
+            _ => {
+                panic!("Expected error: LengthValue, but got: {s:?}");
+            }
+        }
     }
 
+    // Test registration request parser for several proper registration requests.
+    // All tests are expected to pass.
     #[test]
     fn test_parse_proper_registration_request() {
+        // Pass 2 bytes to parser:
+        // byte 0 == 1: ServiceOperation::Enable
+        // byte 1 == 1: ServiceType::EasyMeshAgent
         assert!(AlServiceRegistrationRequest::parse(&[1, 1]).is_ok());
         assert_eq!(AlServiceRegistrationRequest::parse(&[1, 1]).unwrap().1.service_operation, ServiceOperation::Enable);
         assert_eq!(AlServiceRegistrationRequest::parse(&[1, 1]).unwrap().1.service_type, ServiceType::EasyMeshAgent);
     }
 
+    // Test service operation parser for proper value. Should succeed.
     #[test]
     fn test_parse_proper_service_operation() {
+        // Pass proper value of ServiceOperation::Disable == 2. Expect success in parsing it.
         assert!(ServiceOperation::parse(&[2]).is_ok());
     }
 
+    // Test service operation parser for improper value.
     #[test]
-    #[should_panic]
     fn test_try_to_parse_inappropriate_service_operation() {
-        assert!(ServiceOperation::parse(&[0]).is_ok());
+        // Pass improper value of 0. Expect parse error: ErrorKind::Tag
+        match ServiceOperation::parse(&[0]) {
+            Err(NomErr::Failure(nom::error::Error { code, .. })) => {
+                assert_eq!(code, ErrorKind::Tag);
+            }
+            s => {
+                panic!("Expected error: Tag, but got: {s:?}");
+            }
+        }
     }
 
+    // Test service type parser for proper value.
     #[test]
     fn test_parse_proper_service_type() {
+        // Pass proper value of ServiceType::EasyMeshController == 2. Expect success.
         assert!(ServiceType::parse(&[2]).is_ok());
     }
 
+    // Test service type parser for improper value.
     #[test]
-    #[should_panic]
     fn test_try_to_parse_inappropriate_service_type() {
-        assert!(ServiceType::parse(&[0]).is_ok());
+        // Pass wrong value of 0. Expect parse error: ErrorKind::Tag
+        match ServiceType::parse(&[0]) {
+            Err(NomErr::Failure(nom::error::Error { code, .. })) => {
+                assert_eq!(code, ErrorKind::Tag);
+            }
+            s => {
+                panic!("Expected error: Tag, but got: {s:?}");
+            }
+        }
     }
 
+    // Test parsing of several proper registration results
     #[test]
     fn test_parse_proper_registration_result() {
         assert!(RegistrationResult::parse(&[0]).is_ok());
+        assert!(RegistrationResult::parse(&[1]).is_ok());
         assert!(RegistrationResult::parse(&[2]).is_ok());
         assert!(RegistrationResult::parse(&[3]).is_ok());
+        assert!(RegistrationResult::parse(&[4]).is_ok());
         assert_eq!(RegistrationResult::parse(&[0]).unwrap().1, RegistrationResult::Unknown);
+        assert_eq!(RegistrationResult::parse(&[1]).unwrap().1, RegistrationResult::Success);
+        assert_eq!(RegistrationResult::parse(&[2]).unwrap().1, RegistrationResult::NoRangesAvailable);
+        assert_eq!(RegistrationResult::parse(&[3]).unwrap().1, RegistrationResult::ServiceNotSupported);
+        assert_eq!(RegistrationResult::parse(&[4]).unwrap().1, RegistrationResult::OperationNotSupported);
     }
 
+    // Try to parse some value that is out of range of allowed in enum RegistrationResult
     #[test]
-    #[should_panic]
     fn test_try_to_parse_inappropriate_registration_result() {
-        assert!(RegistrationResult::parse(&[5]).is_ok());
+        // The value of 5 is not allowed (not covered in RegistrationResult enum) so expect ErrorKind::Tag error
+        if let Err(NomErr::Failure(nom::error::Error { code, .. })) = RegistrationResult::parse(&[5]) {
+            assert_eq!(code, ErrorKind::Tag);
+        }
     }
 
+    // Check if parser returns not consumed data untouched (not modified)
     #[test]
     fn test_check_consumption_of_registration_result_parser() {
         // Check if size of returned not used data is correct
@@ -266,6 +316,7 @@ pub mod tests {
         assert_eq!(RegistrationResult::parse(&[4, 5, 6, 7]).unwrap().0, &[5, 6, 7]);
     }
 
+    // Check if parser returns not consumed data untouched (not modified)
     #[test]
     fn test_check_consumption_of_registration_request_parser() {
         // Check if size of returned not used data is correct
@@ -277,8 +328,8 @@ pub mod tests {
 
     #[test]
     fn test_registration_response_parse_and_serialize() {
-        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
-        let mut registration_response_data: Vec<u8> = mac;
+        let mac_address: Vec<u8> = vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+        let mut registration_response_data: Vec<u8> = mac_address;
         let start: Vec<u8> = vec![0x00, 0x01];
         let end: Vec<u8> = vec![0x00, 0x10];
         let result = RegistrationResult::Success.serialize();
@@ -304,23 +355,22 @@ pub mod tests {
     }
 
     #[test]
-    fn test_topology_change_parse_and_serialize_add() {
-        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
+    fn test_topology_parsing_and_serializing_correctness() {
+        let mac_address: Vec<u8> = vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+
+        // Verify "Add" topology change type
         let topology_type = TopologyChangeType::Add.serialize();
-        let mut topology_change_data: Vec<u8> = mac;
+        let mut topology_change_data: Vec<u8> = mac_address.clone();
 
         topology_change_data.push(topology_type);
 
         let parsed = AlTopologyChange::parse(&topology_change_data).unwrap().1;
 
         assert_eq!(topology_change_data, parsed.serialize());
-    }
 
-    #[test]
-    fn test_topology_change_parse_and_serialize_delete() {
-        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
+        // Verify "Delete" topology change type
         let topology_type = TopologyChangeType::Delete.serialize();
-        let mut topology_change_data: Vec<u8> = mac;
+        let mut topology_change_data: Vec<u8> = mac_address;
 
         topology_change_data.push(topology_type);
 
