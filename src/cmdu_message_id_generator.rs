@@ -45,7 +45,13 @@ impl MessageIdGenerator {
         debug!("Generated Message ID: {:#06X}", current_id);
 
         // Update the counter using modulo 2^16
-        *counter = counter.wrapping_add(1);
+        let check = counter.overflowing_add(1);
+        *counter = check.0;
+
+        // After overflow correct the value to 1
+        if check.1 {
+            *counter = 0x0001;
+        }
 
         current_id
     }
@@ -73,5 +79,31 @@ pub async fn get_message_id_generator() -> Arc<MessageIdGenerator> {
     info!("Global MessageIdGenerator instance accessed");
     instance
 }
-//TODO creation of unittests check it doesnt get overloaded and works as ring when the last message is reached
-//TODO add a test to check that the ID is reset to 0x0001 after
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+
+    // Check correctness of generating consecutive message id values
+    // and u16 type overflow handling
+    #[tokio::test]
+    async fn test_check_message_id_value_overflow() {
+        let gen = get_message_id_generator().await;
+
+        assert_eq!(gen.next_id(), 1);
+        assert_eq!(gen.next_id(), 2);
+
+        // Rewind u16 type values to the value of 0xFFFE (near the last value of u16)
+        for _i in 0u32..(u16::MAX as u32 - 4) {
+            let _ = gen.next_id();
+        }
+
+        assert_eq!(gen.next_id(), 0xFFFE);
+        assert_eq!(gen.next_id(), 0xFFFF);  // last value of u16 type
+
+        // Expect counter overflow and correcting action of the value after overflow
+        // The next value after 0xFFFF should be 1 (the value of message id == 0 should be skipped)
+        assert_eq!(gen.next_id(), 1);
+        assert_eq!(gen.next_id(), 2);
+    }
+}
