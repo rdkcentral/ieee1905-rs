@@ -2,9 +2,10 @@
 name = "ieee1905"
 version = "0.1.0"
 edition = "2021"
-repository = "https://github.com/rdkcentral/rdkb-ieee1905/"
+repository = "git@github.com:rdkcentral/ieee1905-rs.git"
 license = "Apache-2.0"
 license-file = "LICENSE"
+publish = false    # keep this if you don’t want to publish to crates.io
 
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
