@@ -975,6 +975,56 @@ pkcs11.finalize()?;
 
 ```
 
+## Release Types
+
+We follow **Semantic Versioning (SemVer)**, using the format **MAJOR.MINOR.PATCH**:
+
+---
+
+### Patch Release (`x.y.Z`)
+**Contains:**
+- Bug fixes  
+- Security patches  
+- Performance improvements  
+- Internal changes with **no effect** on the public API  
+- No new features  
+
+**Example:**  
+`0.2.0` → `0.2.1`
+
+---
+
+### Minor Release (`x.Y.z`)
+**Contains:**
+- New **features**  
+- Enhancements to existing functionality  
+- Backwards-compatible API additions  
+- Deprecations (features marked for removal but still working)  
+- May include multiple patch fixes bundled together  
+
+**Example:**  
+`0.2.3` → `0.3.0`
+
+---
+
+### Major Release (`X.y.z`)
+**Contains:**
+- **Breaking changes** to APIs or behavior  
+- Removal of deprecated functionality  
+- Large refactors or architectural changes  
+- Any change that requires users to modify their code or configs  
+
+**Example:**  
+`0.3.5` → `1.0.0`
+
+---
+
+**Summary**:  
+- **Patch** → fixes only  
+- **Minor** → new features, backwards compatible  
+- **Major** → breaking changes  
+
+
 ## Third-Party Licenses
 
 This project includes third-party software under permissive open source licenses
