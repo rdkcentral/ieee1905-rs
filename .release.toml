@@ -26,6 +26,6 @@ sign-commit = true
 sign-tag = true
 
 # Generate/refresh changelog for the new version
-pre-release-hook = "git cliff -o CHANGELOG.md --tag v{{version}}"
+pre-release-hook = "git cliff -o CHANGELOG.md --unreleased --tag v{{version}}"
 # Ensure it gets included in the release commit
 extra-files = ["CHANGELOG.md"]
