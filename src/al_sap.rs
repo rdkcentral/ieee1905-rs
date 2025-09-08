@@ -472,11 +472,6 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
                                     let complete_sdu = fragment.clone();
                                     tracing::debug!("Sending single message");
 
-                                    intercept_roles_and_compare_with_local(
-                                        complete_sdu.payload.clone(),
-                                    )
-                                    .await;
-
                                     match send_cmdu_from_sdu(complete_sdu.clone()).await {
                                         Ok(()) => {
                                             tracing::trace!("Successfully sent CMDU from SDU");
