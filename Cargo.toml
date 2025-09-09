@@ -1,6 +1,6 @@
 [package]
 name = "ieee1905"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 repository = "git@github.com:rdkcentral/ieee1905-rs.git"
 license = "Apache-2.0"
