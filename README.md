@@ -197,14 +197,18 @@ IEEE1905 has been specified to work in multiple topologies but it is specially u
         The topology discovery process is continuous, with devices periodically re-broadcasting their presence and updating their topology databases as they receive new information.
         This ensures that the topology information remains current, even as devices join, leave, or move within the network.
 
-    7. Registrar identification.
+    7. Registrar role protection.
 
-        As part of the topology graph construction IEEE1905 agent will inspect the AP autoconfig search CMDU and AP autoconfig response CMDU, delivered to the EM-HLE, to add to the  topology graph, the AL_MAC of the registrar.
-        The IEEE1905 will not take part in the registrar selection process, but the topology graph will not contain more that one registrar per network, the process will be:
-        1. When the AL_SAP receives an AP autoconfig response with TLV supported role set to 0x00 into a SDU the local AL_MAC will be set as registrar.
-        2. When the IEEE1905 receives an AP autoconfig response with TLV supported role set to 0x00 the remote AL_MAC will be set as registrar.
-        3. When the AL_SAP receives an AP autoconfig search with TLV searched role set to 0x00 into a SDU, in case the local AL_MAC is set as registrar it will be cleaned up.
-        4. In any other case the CMDU's will be ignored and we will not update the topology map.
+        As part of the IEEE1905 implementation we will provide the capability to protect the network from having more than one registrar (controller), this will avoid role collisions and split brain scenarios, we will model this feature as follows:
+        
+        1. We will update the local topology based on the value of the role received during al_sap registration process.
+        2. When local entity registers as EasyMeshController, we will check that there is no other entity acting as controller in the network based on the content of the topology map and in case there is already one we will return an error as "Already a controller in the network"
+        3. When local entity registers as EasyMeshController this entity will be the only one granted to send AP-AUTOCONFIG-RESPONSE CMDUs,
+        4. EasyMeshController will not send AP-AUTOCONFIG-SEARCH during the time it is registered as Registrar.
+        5. EasyMeshAgent will not send AP-AUTOCONFIG-RESPONSE during the time it is registered as Agent.
+        6. When there is an entity registered as controller in the topology map if we receive an AP-AUTOCONFIG-RESPONSE from other entity it will be discarded.
+        7. We there is no controller registered via AL_SAP, for instance in case of third party controller, this functionalicty will not be applicable.
+        
 
 
     8.  Path Performance monitoring.
