@@ -24,8 +24,3 @@ verify = false
 # We sign everything
 sign-commit = true
 sign-tag = true
-
-# Generate/refresh changelog for the new version
-pre-release-hook = "git cliff -o CHANGELOG.md --tag v{{version}}"
-# Ensure it gets included in the release commit
-extra-files = ["CHANGELOG.md"]
