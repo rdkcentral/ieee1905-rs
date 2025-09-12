@@ -908,54 +908,34 @@ pub struct CMDU {
     pub message_id: u16,
     pub fragment: u8,
     pub flags: u8,
-    #[cfg(feature = "size_based_fragmentation")]
     pub payload: Vec<u8>,
-    #[cfg(not(feature = "size_based_fragmentation"))]
-    pub payload: Vec<TLV>,
 }
 impl CMDU {
     pub fn get_tlvs(self) -> Vec<TLV> {
-        #[cfg(not(feature = "size_based_fragmentation"))]
-        return self.payload;
-        #[cfg(feature = "size_based_fragmentation")]
-        {
-            let mut tlvs: Vec<TLV> = vec![];
-            let mut remaining_input = self.payload.as_slice();
-            let mut has_reached_end = false;
-            while !remaining_input.is_empty() && !has_reached_end {
-                //tracing::trace!("Remaining input {:?}", remaining_input);
-                //let (next_input, tlv) = TLV::parse(remaining_input)?;
-                match TLV::parse(remaining_input) {
-                    Ok(tlv) => {
-                        tracing::trace!("Parsed TLV {:?}", tlv.1);
-                        /* The minimum Ethernet frame length (over the wire) is 60 bytes
-                         * For very small frames like Topology Discovery, it is likely
-                         * there will be zero padding after the content of the frame
-                         */
-                        if tlv.1.tlv_type == IEEE1905TLVType::EndOfMessage.to_u8()
-                            && tlv.1.tlv_length == 0
-                            && tlv.1.tlv_value.is_none()
-                        {
-                            has_reached_end = true;
-                        }
-                        tlvs.push(tlv.1);
-                        remaining_input = tlv.0;
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to parse TLV {:?}", e);
+        let mut tlvs: Vec<TLV> = vec![];
+        let mut remaining_input = self.payload.as_slice();
+        //let mut has_reached_end = false;
+        while !remaining_input.is_empty(){
+            match TLV::parse(remaining_input) {
+                Ok(tlv) => {
+                    tracing::trace!("Parsed TLV {:?}", tlv.1);
+                    tlvs.push(tlv.1);
+                    remaining_input = tlv.0;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to parse TLV {:?}", e);
 
-                        let hex_string = remaining_input
-                            .iter()
-                            .map(|b| format!("{:02X}", b))
-                            .collect::<Vec<String>>()
-                            .join(" ");
-                        tracing::trace!("Remaining {}", hex_string);
-                        panic!("Failed to parse TLV: {e:?}. Unparseable data: <{hex_string:?}>");
-                    }
+                    let hex_string = remaining_input
+                        .iter()
+                        .map(|b| format!("{:02X}", b))
+                        .collect::<Vec<String>>()
+                        .join(" ");
+                    tracing::trace!("Remaining {}", hex_string);
+                    panic!("Failed to parse TLV: {e:?}. Unparseable data: <{hex_string:?}>");
                 }
             }
-            tlvs
         }
+        tlvs
     }
     //Force message version to be used for CMDUs received via HLE SDUs
     pub fn set_message_version(&mut self, version: MessageVersion) {
@@ -974,105 +954,36 @@ impl CMDU {
         let (input, message_id) = be_u16(input)?;
         let (input, fragment) = be_u8(input)?;
         let (input, flags) = be_u8(input)?;
-        #[cfg(feature = "size_based_fragmentation")]
-        let remaining_input: &[u8] = &[];
-
-        #[cfg(not(feature = "size_based_fragmentation"))]
-        let mut payload: Vec<TLV> = Vec::new();
-        #[cfg(not(feature = "size_based_fragmentation"))]
-        let mut remaining_input = input;
-        #[cfg(not(feature = "size_based_fragmentation"))]
-        let mut has_reached_end = false;
 
         tracing::trace!("CMDU_parse: message_version {message_version:?}, reserved {reserved:?},
                          message_type: {message_type:?}, message_id {message_id:?}, fragment: {fragment:?}");
         // Since in size based fragmentation remaining input might have incomplete TLV's
-        // there is no need to analyze TLV's as it's impossible to match them here.
-        // so we will be reading max  bytes
-        // and we will push it deeper.
-        #[cfg(feature = "size_based_fragmentation")]
-        {
-            tracing::trace!(
-                "Returning CMDU. Might have incomplete TLV's due to size fragmentation"
-            );
-            Ok((
-                remaining_input,
-                Self {
-                    message_version,
-                    reserved,
-                    message_type,
-                    message_id,
-                    fragment,
-                    flags,
-                    payload: input.into(),
-                },
-            ))
-        }
-        #[cfg(not(feature = "size_based_fragmentation"))]
-        {
-            while !remaining_input.is_empty() && !has_reached_end {
-                //tracing::trace!("Remaining input {:?}", remaining_input);
-                //let (next_input, tlv) = TLV::parse(remaining_input)?;
-                match TLV::parse(remaining_input) {
-                    Ok(tlv) => {
-                        tracing::trace!("Parsed TLV {:?}", tlv.1);
-                        /* The minimum Ethernet frame length (over the wire) is 60 bytes
-                         * For very small frames like Topology Discovery, it is likely
-                         * there will be zero padding after the content of the frame
-                         */
-                        if tlv.1.tlv_type == IEEE1905TLVType::EndOfMessage.to_u8()
-                            && tlv.1.tlv_length == 0
-                            && tlv.1.tlv_value.is_none()
-                        {
-                            has_reached_end = true;
-                        }
-                        payload.push(tlv.1);
-                        remaining_input = tlv.0;
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to parse TLV {:?}", e);
-                        let hex_string = remaining_input
-                            .iter()
-                            .map(|b| format!("{:02X}", b))
-                            .collect::<Vec<String>>()
-                            .join(" ");
+        // there is one case in which it can be checked in here.
+        // when fragment is equal to zero.
 
-                        tracing::trace!("Remaining {}", hex_string);
-                        return Err(NomErr::Failure(Error::new(input, ErrorKind::Fail)));
-                    }
-                }
-            }
-            let no_tlvs = payload.len();
-            tracing::trace!("CMDU_Parse: number of tlvs: {no_tlvs:?}");
-            // Check if the last TLV is a valid EndOfMessage TLV
-            if let Some(tlv) = payload.last() {
-                if tlv.tlv_type == IEEE1905TLVType::EndOfMessage.to_u8()
-                    && tlv.tlv_length == 0
-                    && tlv.tlv_value.is_none()
+        let cmdu = CMDU {
+            message_version,
+            reserved,
+            message_type,
+            message_id,
+            fragment,
+            flags,
+            payload: input.into(),
+        };
+        if flags & 0x80 != 0 && fragment == 0 {
+            // We can check if TLV's can be parsed and last TLV is really EoF
+            if let Some(last_tlv) = cmdu.clone().get_tlvs().last() {
+                if last_tlv.tlv_type != IEEE1905TLVType::EndOfMessage.to_u8()
+                    || last_tlv.tlv_length != 0
+                    || last_tlv.tlv_value.is_some()
                 {
-                    tracing::trace!("CMDU_parse: returning valid CMDU");
-
-                    Ok((
-                        remaining_input,
-                        Self {
-                            message_version,
-                            reserved,
-                            message_type,
-                            message_id,
-                            fragment,
-                            flags,
-                            payload,
-                        },
-                    ))
-                } else {
-                    tracing::error!("CMDU_Parse: the last TLV is not end of message type.");
-                    Err(NomErr::Failure(Error::new(input, ErrorKind::Tag)))
+                    tracing::error!("TLV: Last is not end of message");
+                    return Err(NomErr::Failure(Error::new(input, ErrorKind::Tag)));
                 }
-            } else {
-                tracing::error!("CMDU_Parse: there is no last element in payload");
-                Err(NomErr::Failure(Error::new(input, ErrorKind::Eof)))
-            }
+            };
         }
+        tracing::trace!("Returning CMDU. Might have incomplete TLV's due to size fragmentation");
+        Ok((&[],cmdu))
     }
 
     // Convert the CMDU to bytes
@@ -1088,21 +999,11 @@ impl CMDU {
         bytes.push(self.flags); // 1 byte: flags
 
         // Serialize payload u8 vec
-        #[cfg(feature = "size_based_fragmentation")]
         bytes.extend_from_slice(self.payload.as_slice());
-
-        // Serialize the payload (list of TLVs)
-        #[cfg(not(feature = "size_based_fragmentation"))]
-        {
-            for tlv in &self.payload {
-                bytes.extend_from_slice(&tlv.serialize());
-            }
-        }
 
         bytes
     }
 
-    #[cfg(feature = "size_based_fragmentation")]
     pub fn fragment(mut self, max_size: usize) -> Vec<CMDU> {
         let tlvs_size = self.payload.len(); // tlv_size is just payload size
         let total_size = 8 + tlvs_size;
@@ -1132,73 +1033,9 @@ impl CMDU {
             fragments.push(current_fragment);
             fragment_no += 1;
         }
-        if let Some(last_elem) = fragments.last_mut(){
+        if let Some(last_elem) = fragments.last_mut() {
             last_elem.flags |= 0x80;
         }
-        fragments
-    }
-
-    #[cfg(not(feature = "size_based_fragmentation"))]
-    pub fn fragment(mut self, max_size: usize) -> Vec<CMDU> {
-        // Estimate total size: 8 bytes for header + all TLVs
-        let tlvs_size: usize = self
-            .payload
-            .iter()
-            .map(|tlv| 3 + tlv.tlv_length as usize)
-            .sum();
-        let total_size = 8 + tlvs_size;
-        if total_size <= max_size {
-            self.fragment = 0;
-            self.flags |= 0x80; // EndOfMessage
-            return vec![self];
-        }
-        let mut fragments = Vec::new();
-        let mut current_fragment = CMDU {
-            message_version: self.message_version,
-            reserved: self.reserved,
-            message_type: self.message_type,
-            message_id: self.message_id,
-            fragment: 0,
-            flags: 0,
-            payload: Vec::new(),
-        };
-
-        let mut current_size = 8; // CMDU header
-
-        for tlv in self.payload.drain(..) {
-            let tlv_bytes = tlv.serialize();
-            let tlv_len = tlv_bytes.len();
-
-            assert!(
-                tlv_len + 8 <= 1500,
-                "TLV too large ({}) to fit in the frame of 1500 bytes (TLV max is: {})",
-                tlv_len,
-                1500 - 8
-            );
-
-            if current_size + tlv_len > max_size {
-                fragments.push(current_fragment);
-
-                current_fragment = CMDU {
-                    message_version: self.message_version,
-                    reserved: self.reserved,
-                    message_type: self.message_type,
-                    message_id: self.message_id,
-                    fragment: fragments.len() as u8,
-                    flags: 0,
-                    payload: Vec::new(),
-                };
-
-                current_size = 8;
-            }
-
-            current_fragment.payload.push(tlv);
-            current_size += tlv_len;
-        }
-
-        current_fragment.flags |= 0x80; // End of message flag
-        fragments.push(current_fragment);
-
         fragments
     }
 
@@ -1265,15 +1102,7 @@ impl CMDU {
     /// Calculates the total size of the CMDU (header + all TLVs)
     pub fn total_size(&self) -> usize {
         let header_size = 8; // message_version (1) + reserved (1) + message_type (2) + message_id (2) + fragment (1) + flags (1)
-        #[cfg(feature = "size_based_fragmentation")]
         let payload_size = self.payload.len();
-        #[cfg(not(feature = "size_based_fragmentation"))]
-        let payload_size: usize = self
-            .payload
-            .iter()
-            .map(|tlv| 1 + 2 + tlv.tlv_length as usize) // 1 byte type + 2 bytes length + tlv_length
-            .sum();
-
         header_size + payload_size
     }
 }
@@ -1296,9 +1125,7 @@ pub mod tests {
             .map(|(i, size)| make_dummy_tlv(i as u8, size))
             .collect();
 
-        #[cfg(feature = "size_based_fragmentation")]
         let mut serialized_payload: Vec<u8> = vec![];
-        #[cfg(feature = "size_based_fragmentation")]
         for tlv in payload {
             serialized_payload.extend(tlv.serialize());
         }
@@ -1310,10 +1137,7 @@ pub mod tests {
             message_id: 0x1234,
             fragment: 0,
             flags: 0x00,
-            #[cfg(feature = "size_based_fragmentation")]
             payload: serialized_payload,
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload,
         }
     }
     #[test]
@@ -1417,10 +1241,7 @@ pub mod tests {
             tlv_value: None,
         };
 
-        #[cfg(feature = "size_based_fragmentation")]
         let whole_payload = end_of_message_tlv.serialize();
-        #[cfg(not(feature = "size_based_fragmentation"))]
-        let whole_payload = vec![end_of_message_tlv];
 
         let cmdu = CMDU {
             message_version: 0x01,
@@ -1429,7 +1250,7 @@ pub mod tests {
             message_id: 0x1234,
             fragment: 0x01,
             flags: 0x00,
-            payload: whole_payload
+            payload: whole_payload,
         };
         assert!(cmdu.is_fragmented());
     }
@@ -1448,13 +1269,9 @@ pub mod tests {
             tlv_length: 0,
             tlv_value: None,
         };
-        #[cfg(feature = "size_based_fragmentation")]
         let mut serialized_payload: Vec<u8> = vec![];
-        #[cfg(feature = "size_based_fragmentation")]
-        {
-            serialized_payload.extend(al_mac_tlv.clone().serialize());
-            serialized_payload.extend(end_of_message_tlv.clone().serialize());
-        }
+        serialized_payload.extend(al_mac_tlv.clone().serialize());
+        serialized_payload.extend(end_of_message_tlv.clone().serialize());
         // Construct the CMDU
         let cmdu_topology_discovery = CMDU {
             message_version: 1,
@@ -1463,10 +1280,7 @@ pub mod tests {
             message_id: 123,
             fragment: 0,
             flags: 0x80, // Not fragmented
-            #[cfg(feature = "size_based_fragmentation")]
             payload: serialized_payload,
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![al_mac_tlv.clone(), end_of_message_tlv.clone()],
         };
 
         // Serialize the CMDU
@@ -1492,13 +1306,9 @@ pub mod tests {
             tlv_length: 0,
             tlv_value: None,
         };
-        #[cfg(feature = "size_based_fragmentation")]
         let mut serialized_payload: Vec<u8> = vec![];
-        #[cfg(feature = "size_based_fragmentation")]
-        {
-            serialized_payload.extend(al_mac_tlv.clone().serialize());
-            serialized_payload.extend(end_of_message_tlv.clone().serialize());
-        }
+        serialized_payload.extend(al_mac_tlv.clone().serialize());
+        serialized_payload.extend(end_of_message_tlv.clone().serialize());
 
         let cmdu_topology_notification = CMDU {
             message_version: 1,
@@ -1507,10 +1317,7 @@ pub mod tests {
             message_id: 456,
             fragment: 0,
             flags: 0x80, // Not fragmented
-            #[cfg(feature = "size_based_fragmentation")]
             payload: serialized_payload,
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![al_mac_tlv.clone(), end_of_message_tlv.clone()],
         };
 
         let serialized_notification = cmdu_topology_notification.serialize();
@@ -1534,10 +1341,7 @@ pub mod tests {
             message_id: 789,
             fragment: 0,
             flags: 0x80, // Not fragmented
-            #[cfg(feature = "size_based_fragmentation")]
             payload: end_of_message_tlv.clone().serialize(),
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![end_of_message_tlv.clone()],
         };
 
         let serialized_query = cmdu_topology_query.serialize();
@@ -1590,16 +1394,12 @@ pub mod tests {
             tlv_value: None,
         };
 
-        #[cfg(feature = "size_based_fragmentation")]
         let mut serialized_payload: Vec<u8> = vec![];
-        #[cfg(feature = "size_based_fragmentation")]
-        {
-            serialized_payload.extend(al_mac_tlv.clone().serialize());
-            serialized_payload.extend(mac_address_tlv.clone().serialize());
-            serialized_payload.extend(ieee_neighbor_device_tlv.clone().serialize()); // IEEE 1905 Neighbor Devices TLV
-            serialized_payload.extend(non_ieee_neighbor_device_tlv.clone().serialize()); // Non-IEEE 1905 Neighbor Devices TLV
-            serialized_payload.extend(end_of_message_tlv.clone().serialize());
-        }
+        serialized_payload.extend(al_mac_tlv.clone().serialize());
+        serialized_payload.extend(mac_address_tlv.clone().serialize());
+        serialized_payload.extend(ieee_neighbor_device_tlv.clone().serialize()); // IEEE 1905 Neighbor Devices TLV
+        serialized_payload.extend(non_ieee_neighbor_device_tlv.clone().serialize()); // Non-IEEE 1905 Neighbor Devices TLV
+        serialized_payload.extend(end_of_message_tlv.clone().serialize());
 
         let cmdu_topology_response = CMDU {
             message_version: 1,
@@ -1608,16 +1408,7 @@ pub mod tests {
             message_id: 123,
             fragment: 0,
             flags: 0x80, // Not fragmented
-            #[cfg(feature = "size_based_fragmentation")]
             payload: serialized_payload,
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![
-                al_mac_tlv.clone(),
-                mac_address_tlv.clone(),
-                ieee_neighbor_device_tlv.clone(), // IEEE 1905 Neighbor Devices TLV
-                non_ieee_neighbor_device_tlv.clone(), // Non-IEEE 1905 Neighbor Devices TLV
-                end_of_message_tlv.clone(),
-            ],
         };
 
         let serialized_response = cmdu_topology_response.serialize();
@@ -1643,13 +1434,9 @@ pub mod tests {
             tlv_value: None,
         };
 
-        #[cfg(feature = "size_based_fragmentation")]
         let mut serialized_payload: Vec<u8> = vec![];
-        #[cfg(feature = "size_based_fragmentation")]
-        {
-            serialized_payload.extend(searched_role_tlv.clone().serialize());
-            serialized_payload.extend(end_of_message_tlv.clone().serialize());
-        }
+        serialized_payload.extend(searched_role_tlv.clone().serialize());
+        serialized_payload.extend(end_of_message_tlv.clone().serialize());
 
         // we build the CMDU
         let cmdu_autoconfig_search = CMDU {
@@ -1659,10 +1446,7 @@ pub mod tests {
             message_id: 42,
             fragment: 0,
             flags: 0x80, // Not fragmented
-            #[cfg(feature = "size_based_fragmentation")]
             payload: serialized_payload,
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![searched_role_tlv.clone(), end_of_message_tlv.clone()],
         };
 
         // Serializing
@@ -1690,13 +1474,9 @@ pub mod tests {
             tlv_value: None,
         };
 
-        #[cfg(feature = "size_based_fragmentation")]
         let mut serialized_payload: Vec<u8> = vec![];
-        #[cfg(feature = "size_based_fragmentation")]
-        {
-            serialized_payload.extend(supported_role_tlv.clone().serialize());
-            serialized_payload.extend(end_of_message_tlv.clone().serialize());
-        }
+        serialized_payload.extend(supported_role_tlv.clone().serialize());
+        serialized_payload.extend(end_of_message_tlv.clone().serialize());
         // we build ApAutoConfigResponse
         let cmdu_autoconfig_response = CMDU {
             message_version: 1,
@@ -1705,10 +1485,7 @@ pub mod tests {
             message_id: 99,
             fragment: 0,
             flags: 0x80, // Not fragmented
-            #[cfg(feature = "size_based_fragmentation")]
             payload: serialized_payload,
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![supported_role_tlv.clone(), end_of_message_tlv.clone()],
         };
 
         // serialization and parsing
@@ -1736,13 +1513,9 @@ pub mod tests {
             tlv_length: 0,
             tlv_value: None,
         };
-        #[cfg(feature = "size_based_fragmentation")]
         let mut serialized_payload: Vec<u8> = vec![];
-        #[cfg(feature = "size_based_fragmentation")]
-        {
-            serialized_payload.extend(searched_role_tlv.clone().serialize());
-            serialized_payload.extend(end_of_message_tlv.clone().serialize());
-        }
+        serialized_payload.extend(searched_role_tlv.clone().serialize());
+        serialized_payload.extend(end_of_message_tlv.clone().serialize());
         let cmdu = CMDU {
             message_version: 1,
             reserved: 0,
@@ -1750,10 +1523,7 @@ pub mod tests {
             message_id: 43,
             fragment: 0,
             flags: 0x80,
-            #[cfg(feature = "size_based_fragmentation")]
             payload: serialized_payload,
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![searched_role_tlv.clone(), end_of_message_tlv.clone()],
         };
 
         let serialized = cmdu.serialize();
@@ -1795,13 +1565,9 @@ pub mod tests {
             tlv_length: 0,
             tlv_value: None,
         };
-        #[cfg(feature = "size_based_fragmentation")]
         let mut serialized_payload: Vec<u8> = vec![];
-        #[cfg(feature = "size_based_fragmentation")]
-        {
-            serialized_payload.extend(searched_role_tlv.clone().serialize());
-            serialized_payload.extend(end_of_message_tlv.clone().serialize());
-        }
+        serialized_payload.extend(searched_role_tlv.clone().serialize());
+        serialized_payload.extend(end_of_message_tlv.clone().serialize());
         let cmdu = CMDU {
             message_version: 1,
             reserved: 0,
@@ -1809,10 +1575,7 @@ pub mod tests {
             message_id: 43,
             fragment: 0,
             flags: 0x80,
-            #[cfg(feature = "size_based_fragmentation")]
             payload: serialized_payload,
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![searched_role_tlv.clone(), end_of_message_tlv.clone()],
         };
 
         let serialized = cmdu.serialize();
@@ -1876,21 +1639,11 @@ pub mod tests {
             tlv_value: None,
         };
 
-        #[cfg(feature = "size_based_fragmentation")]
         let mut serialized_payload: Vec<u8> = vec![];
-        #[cfg(feature = "size_based_fragmentation")]
-        {
-            for tlv in unknown_tlvs {
-                serialized_payload.extend(tlv.serialize());
-            }
-            serialized_payload.extend(end_of_message_tlv.clone().serialize());
+        for tlv in unknown_tlvs {
+            serialized_payload.extend(tlv.serialize());
         }
-
-        #[cfg(not(feature = "size_based_fragmentation"))]
-        let whole_payload = unknown_tlvs
-            .into_iter()
-            .chain(std::iter::once(end_of_message_tlv.clone()))
-            .collect();
+        serialized_payload.extend(end_of_message_tlv.clone().serialize());
 
         let cmdu_unknown = CMDU {
             message_version: 1,
@@ -1899,10 +1652,7 @@ pub mod tests {
             message_id: 999,
             fragment: 0,
             flags: 0x80, // Not fragmented
-            #[cfg(feature = "size_based_fragmentation")]
             payload: serialized_payload,
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: whole_payload,
         };
 
         let serialized_unknown = cmdu_unknown.serialize();
@@ -1911,9 +1661,6 @@ pub mod tests {
         assert_eq!(cmdu_unknown, parsed_unknown);
     }
 
-    
-    //TODO review the unit test
-    #[cfg(not(feature = "size_based_fragmentation"))]
     #[test]
     #[should_panic]
     fn test_unknown_tlv() {
@@ -1930,20 +1677,15 @@ pub mod tests {
             message_id: 789,
             fragment: 0,
             flags: 0x80, // Not fragmented
-            #[cfg(feature = "size_based_fragmentation")]
             payload: end_of_message_tlv.clone().serialize(),
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![end_of_message_tlv.clone()],
         };
 
         let serialized_query = cmdu_topology_query.serialize();
         let parsed_query = CMDU::parse(&serialized_query).unwrap().1;
 
-        //#[cfg(not(feature = "size_based_fragmentation"))]
         assert_eq!(cmdu_topology_query, parsed_query);
     }
 
-    //TODO check the unit test
     #[test]
     fn test_fragmentation_and_reassembly() {
         // TLVs that will force at least 2 fragments (each ~600 bytes)
@@ -2028,16 +1770,12 @@ pub mod tests {
     }
 
     #[test]
-    #[should_panic]
-    #[cfg(
-        not(feature = "size_based_fragmentation")
-    )] // size based fragmentation allows for a larger payloads
     fn test_a_few_fragments_with_last_one_exceeding_mtu() {
         // CMDU with one TLV exceeding MTU
         let cmdu = make_dummy_cmdu(vec![400, 500, 1500]); // ~2400 bytes
 
         // Try to do the fragmentation on CMDU
-        // It should panic in fragment() as the third TLV (1500B) exceeds maximum allowed size: (MTU - CMDU_header - TLV_header)
+        // It should not panic in fragment() as tlv's are fragmented based on size.
         let _fragments = cmdu.clone().fragment(1500);
     }
 
@@ -2065,7 +1803,6 @@ pub mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "size_based_fragmentation"))]
     fn test_single_cmdu_fragment_without_tlv() {
         // Make CMDU with empty TLV list
         let cmdu = make_dummy_cmdu(vec![]);
@@ -2074,23 +1811,26 @@ pub mod tests {
         let z = CMDU::parse(&serialized);
 
         match z {
-            Ok(_) => { panic!("ErrorKind::Eof should be returned"); }
+            Ok(_) => {
+                // Ok it is ok. Since when we are parsing CMDU tlv's are checked
+                // after complete refragmentation. So even empty TLV is ok.
+            }
             Err(NomErr::Failure(err)) => {
                 assert_eq!(err.code, ErrorKind::Eof);
             }
-            Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => panic!("ErrorKind::Eof should be returned")
+            Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => {
+                panic!("ErrorKind::Eof should be returned")
+            }
         }
     }
 
     #[test]
-    #[should_panic]
-    #[cfg(not(feature = "size_based_fragmentation"))]
     fn test_single_cmdu_fragment_with_size_of_mtu_plus_one() {
         // Single CMDU that exceeds MTU (1500 bytes) by one byte
         let cmdu = make_dummy_cmdu(vec![1500 - 8 - 3 + 1]); // Whole CMDU (with CMDU header) has 1501 bytes
 
         // Try to do the fragmentation on CMDU
-        // It should panic in fragment() as the third TLV (1500B) exceeds maximum allowed size: (MTU - CMDU_header - TLV_header)
+        // It should not panic in fragment() as the TLV (1500B)fragmented based on size
         let _fragments = cmdu.clone().fragment(1500);
     }
 
@@ -2118,7 +1858,8 @@ pub mod tests {
         let fragments: Vec<CMDU> = Vec::new();
 
         // Trying to reassemble empty fragment should cause panic
-        let reassembled = CMDU::reassemble(fragments).expect_err("Reassembly shouldn't succeed on empty fragment list");
+        let reassembled = CMDU::reassemble(fragments)
+            .expect_err("Reassembly shouldn't succeed on empty fragment list");
 
         assert_eq!(reassembled, CmduReassemblyError::EmptyFragments);
     }
@@ -2132,7 +1873,8 @@ pub mod tests {
         cmdu2.message_id = 0x6789;
 
         let fragments: Vec<CMDU> = vec![cmdu1, cmdu2];
-        let reassembled = CMDU::reassemble(fragments).expect_err("Reassembly shouldn't succeed on inconsistent CMDUs");
+        let reassembled = CMDU::reassemble(fragments)
+            .expect_err("Reassembly shouldn't succeed on inconsistent CMDUs");
 
         assert_eq!(reassembled, CmduReassemblyError::InconsistentMetadata);
     }
@@ -2147,7 +1889,8 @@ pub mod tests {
         cmdu2.fragment = 0x2;
 
         let fragments: Vec<CMDU> = vec![cmdu1, cmdu2];
-        let reassembled = CMDU::reassemble(fragments).expect_err("Reassembly shouldn't succeed on missed fragment");
+        let reassembled = CMDU::reassemble(fragments)
+            .expect_err("Reassembly shouldn't succeed on missed fragment");
 
         assert_eq!(reassembled, CmduReassemblyError::MissingFragments);
     }
@@ -2162,7 +1905,8 @@ pub mod tests {
         cmdu2.fragment = 0x1;
 
         let fragments: Vec<CMDU> = vec![cmdu1, cmdu2];
-        let reassembled = CMDU::reassemble(fragments).expect_err("Reassembly shouldn't succeed on missed EndOfMessage TLV");
+        let reassembled = CMDU::reassemble(fragments)
+            .expect_err("Reassembly shouldn't succeed on missed EndOfMessage TLV");
 
         assert_eq!(reassembled, CmduReassemblyError::MissingEndOfMessage);
     }
@@ -2209,7 +1953,7 @@ pub mod tests {
         match DeviceInformation::parse(&serialized, len) {
             Ok((_, parsed)) => {
                 assert_eq!(serialized, parsed.serialize());
-            },
+            }
             Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) | Err(NomErr::Failure(_)) => {
                 panic!("Parsing of serialized data should succeed");
             }
@@ -2218,7 +1962,8 @@ pub mod tests {
 
     #[test]
     fn test_device_information_try_to_parse_too_many_data() {
-        let mut local_interface_data: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02, 0x00, 0x01, 0x00];
+        let mut local_interface_data: Vec<u8> =
+            vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02, 0x00, 0x01, 0x00];
         let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
         let mut device_information_data: Vec<u8> = mac;
         device_information_data.push(0x1);
@@ -2235,7 +1980,9 @@ pub mod tests {
             Ok((_, parsed)) => {
                 assert_eq!(device_information_data, parsed.serialize());
             }
-            Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => panic!("Failure::LengthValue should be returned")
+            Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => {
+                panic!("Failure::LengthValue should be returned")
+            }
         };
     }
 
@@ -2251,8 +1998,9 @@ pub mod tests {
                 assert_eq!(serialized, parsed.serialize());
             }
 
-            Err(nom::Err::Incomplete(_)) | Err(NomErr::Failure(_)) | Err(nom::Err::Error(_)) =>
-                panic!("Parsing of serialized data should succeed"),
+            Err(nom::Err::Incomplete(_)) | Err(NomErr::Failure(_)) | Err(nom::Err::Error(_)) => {
+                panic!("Parsing of serialized data should succeed")
+            }
         };
     }
 
@@ -2264,11 +2012,15 @@ pub mod tests {
         let bridging_tuple = BridgingTuple::parse(data);
         println!("{:?}", bridging_tuple);
         match bridging_tuple {
-            Ok(_) => { panic!("ErrorKind::Eof should be returned"); }
+            Ok(_) => {
+                panic!("ErrorKind::Eof should be returned");
+            }
             Err(NomErr::Failure(err)) => {
                 assert_eq!(err.code, ErrorKind::Eof);
             }
-            Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => panic!("ErrorKind::Eof should be returned")
+            Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => {
+                panic!("ErrorKind::Eof should be returned")
+            }
         }
     }
 
@@ -2282,7 +2034,9 @@ pub mod tests {
 
         bridging_capability.append(&mut serialized.clone());
 
-        let parsed = DeviceBridgingCapability::parse(&bridging_capability).unwrap().1;
+        let parsed = DeviceBridgingCapability::parse(&bridging_capability)
+            .unwrap()
+            .1;
         assert_eq!(parsed.serialize(), bridging_capability);
     }
 
@@ -2302,7 +2056,9 @@ pub mod tests {
         let mut neighborhood = al_mac;
         neighborhood.append(&mut neighbor_mac.clone());
 
-        let parsed = NonIEEE1905LocalInterfaceNeighborhood::parse(&neighborhood[..], 1).unwrap().1;
+        let parsed = NonIEEE1905LocalInterfaceNeighborhood::parse(&neighborhood[..], 1)
+            .unwrap()
+            .1;
         assert_eq!(parsed.serialize(), neighborhood);
     }
 
@@ -2313,7 +2069,9 @@ pub mod tests {
 
         let mut neighbor_devices: Vec<u8> = al_mac;
         neighbor_devices.append(&mut neighbor_mac.clone());
-        let parsed = NonIeee1905NeighborDevices::parse(&neighbor_devices, 1).unwrap().1;
+        let parsed = NonIeee1905NeighborDevices::parse(&neighbor_devices, 1)
+            .unwrap()
+            .1;
         assert_eq!(parsed.serialize(), neighbor_devices);
     }
 
@@ -2323,12 +2081,16 @@ pub mod tests {
         let neighbor_devices: Vec<u8> = al_mac;
         let parsed = NonIeee1905NeighborDevices::parse(&neighbor_devices, 1);
         match parsed {
-            Ok(_) => { panic!("ErrorKind::Eof should be returned"); }
+            Ok(_) => {
+                panic!("ErrorKind::Eof should be returned");
+            }
             Err(NomErr::Error(err)) => {
                 println!("errcode___: {:?}", err.code);
                 assert_eq!(err.code, ErrorKind::Eof)
             }
-            Err(nom::Err::Incomplete(_)) | Err(nom::Err::Failure(_)) => { panic!("ErrorKind::Eof should be returned"); }
+            Err(nom::Err::Incomplete(_)) | Err(nom::Err::Failure(_)) => {
+                panic!("ErrorKind::Eof should be returned");
+            }
         }
     }
 
@@ -2342,18 +2104,24 @@ pub mod tests {
 
         let parsed = NonIeee1905NeighborDevices::parse(&neighbor_devices, 1);
         match parsed {
-            Ok(_) => { panic!("ErrorKind::Eof should be returned"); }
+            Ok(_) => {
+                panic!("ErrorKind::Eof should be returned");
+            }
             Err(NomErr::Error(err)) => {
                 assert_eq!(err.code, ErrorKind::Eof)
             }
-            Err(nom::Err::Incomplete(_)) | Err(nom::Err::Failure(_)) => { panic!("ErrorKind::Eof should be returned"); }
+            Err(nom::Err::Incomplete(_)) | Err(nom::Err::Failure(_)) => {
+                panic!("ErrorKind::Eof should be returned");
+            }
         }
     }
 
     #[test]
     fn test_al_mac_address_parse_and_serialize() {
         let al_mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
-        let parsed = AlMacAddress::parse(&al_mac[..], al_mac.len() as u16).unwrap().1;
+        let parsed = AlMacAddress::parse(&al_mac[..], al_mac.len() as u16)
+            .unwrap()
+            .1;
         assert_eq!(parsed.serialize(), al_mac);
     }
 
@@ -2361,7 +2129,9 @@ pub mod tests {
     #[should_panic]
     fn test_al_mac_address_try_to_parse_not_enough_data() {
         let al_mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64];
-        let _ = AlMacAddress::parse(&al_mac[..], al_mac.len() as u16).unwrap().1;
+        let _ = AlMacAddress::parse(&al_mac[..], al_mac.len() as u16)
+            .unwrap()
+            .1;
     }
 
     #[test]
@@ -2375,7 +2145,6 @@ pub mod tests {
         let (rest, _) = AlMacAddress::parse(&data[..], al_mac.len() as u16).unwrap();
         assert_eq!(rest, &[0x11]);
     }
-
 
     #[test]
     fn test_mac_address_parse_and_serialize() {
@@ -2404,10 +2173,22 @@ pub mod tests {
 
     #[test]
     fn test_message_version_check_version_correctness() {
-        assert_eq!(MessageVersion::Version2013.to_u8(), MessageVersion::from_u8(0).unwrap().to_u8());
-        assert_eq!(MessageVersion::Version2014.to_u8(), MessageVersion::from_u8(1).unwrap().to_u8());
-        assert_eq!(MessageVersion::Version2020.to_u8(), MessageVersion::from_u8(2).unwrap().to_u8());
-        assert_eq!(MessageVersion::Version2025.to_u8(), MessageVersion::from_u8(3).unwrap().to_u8());
+        assert_eq!(
+            MessageVersion::Version2013.to_u8(),
+            MessageVersion::from_u8(0).unwrap().to_u8()
+        );
+        assert_eq!(
+            MessageVersion::Version2014.to_u8(),
+            MessageVersion::from_u8(1).unwrap().to_u8()
+        );
+        assert_eq!(
+            MessageVersion::Version2020.to_u8(),
+            MessageVersion::from_u8(2).unwrap().to_u8()
+        );
+        assert_eq!(
+            MessageVersion::Version2025.to_u8(),
+            MessageVersion::from_u8(3).unwrap().to_u8()
+        );
         assert_eq!(None, MessageVersion::from_u8(4));
     }
 
@@ -2445,17 +2226,47 @@ pub mod tests {
 
     #[test]
     fn test_ieee1905_tlv_type_check_from_u8() {
-        assert_eq!(IEEE1905TLVType::from_u8(0x00), IEEE1905TLVType::EndOfMessage);
-        assert_eq!(IEEE1905TLVType::from_u8(0x01), IEEE1905TLVType::AlMacAddress);
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x00),
+            IEEE1905TLVType::EndOfMessage
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x01),
+            IEEE1905TLVType::AlMacAddress
+        );
         assert_eq!(IEEE1905TLVType::from_u8(0x02), IEEE1905TLVType::MacAddress);
-        assert_eq!(IEEE1905TLVType::from_u8(0x03), IEEE1905TLVType::DeviceInformation);
-        assert_eq!(IEEE1905TLVType::from_u8(0x04), IEEE1905TLVType::DeviceBridgingCapability);
-        assert_eq!(IEEE1905TLVType::from_u8(0x05), IEEE1905TLVType::Unknown(0x05));
-        assert_eq!(IEEE1905TLVType::from_u8(0x06), IEEE1905TLVType::NonIeee1905NeighborDevices);
-        assert_eq!(IEEE1905TLVType::from_u8(0x07), IEEE1905TLVType::Ieee1905NeighborDevices);
-        assert_eq!(IEEE1905TLVType::from_u8(0x0b), IEEE1905TLVType::VendorSpecificInfo);
-        assert_eq!(IEEE1905TLVType::from_u8(0x0d), IEEE1905TLVType::SearchedRole);
-        assert_eq!(IEEE1905TLVType::from_u8(0x0f), IEEE1905TLVType::SupportedRole);
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x03),
+            IEEE1905TLVType::DeviceInformation
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x04),
+            IEEE1905TLVType::DeviceBridgingCapability
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x05),
+            IEEE1905TLVType::Unknown(0x05)
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x06),
+            IEEE1905TLVType::NonIeee1905NeighborDevices
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x07),
+            IEEE1905TLVType::Ieee1905NeighborDevices
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x0b),
+            IEEE1905TLVType::VendorSpecificInfo
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x0d),
+            IEEE1905TLVType::SearchedRole
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x0f),
+            IEEE1905TLVType::SupportedRole
+        );
     }
 
     #[test]
@@ -2473,8 +2284,8 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::SupportedRole.to_u8(), 0x0f);
     }
     #[test]
-    fn test_fragmentation(){
-        let mut huge_cmdu = make_dummy_cmdu(vec![500,500,500,500]);
+    fn test_fragmentation() {
+        let mut huge_cmdu = make_dummy_cmdu(vec![500, 500, 500, 500]);
         huge_cmdu.flags = 0x80;
         let fragmented_cmdus = huge_cmdu.fragment(1492);
         let no_of_fragments = fragmented_cmdus.len();
@@ -2485,7 +2296,6 @@ pub mod tests {
 
     #[test]
     #[should_panic]
-    #[cfg(feature = "size_based_fragmentation")]
     fn test_get_tlvs_too_short_data() {
         let cmdu = make_dummy_cmdu(vec![100, 200]);
 
@@ -2493,16 +2303,15 @@ pub mod tests {
         let bad_tlv_length = TLV {
             tlv_type: IEEE1905TLVType::VendorSpecificInfo.to_u8(),
             tlv_length: 100,
-            tlv_value: Some(vec![ 1 ])
+            tlv_value: Some(vec![1]),
         };
         let cmdu_serialized = cmdu.serialize();
         let mut cmdu_payload_extended = cmdu_serialized.clone();
         cmdu_payload_extended.append(&mut bad_tlv_length.serialize());
-        let (_, cmdu_parsed )= CMDU::parse(cmdu_payload_extended.as_slice()).unwrap();
+        let (_, cmdu_parsed) = CMDU::parse(cmdu_payload_extended.as_slice()).unwrap();
 
         // Here we expect panic as the bad_tlv_length.tlv_length doesn't match the TLV length
         let _tlvs = cmdu_parsed.get_tlvs();
     }
 }
-//TODO move everything to size based fragementation and verify all the unit test
 //TODO organize the unittest first we verify TLV use cases, content, serialization and parsing, plus error scenarios for malformed

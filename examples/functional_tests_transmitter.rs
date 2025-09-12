@@ -67,126 +67,6 @@ fn _prepare_test_packet_with_payload(
     sdu.serialize()
 }
 
-#[cfg(not(feature = "size_based_fragmentation"))]
-fn prepare_autoconfig_search_request_sdu(
-    r: &AlServiceRegistrationResponse,
-    multicast: bool,
-) -> Vec<u8> {
-    // Here is whole SDU with autoconfig request taken from onewifi_em_agent
-    let src_mac_addr = r.al_mac_address_local;
-    let mut dest_mac_addr: MacAddr = MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02);
-    if multicast {
-        dest_mac_addr = MacAddr::new(0x01, 0x80, 0xc2, 0x00, 0x00, 0x13);
-    }
-    let sdu_bytes: Vec<u8> = vec![
-        src_mac_addr.0,     // SDU source_al_mac_address
-        src_mac_addr.1,
-        src_mac_addr.2,
-        src_mac_addr.3,
-        src_mac_addr.4,
-        src_mac_addr.5,
-        dest_mac_addr.0,    // SDU destination_al_mac_address
-        dest_mac_addr.1,
-        dest_mac_addr.2,
-        dest_mac_addr.3,
-        dest_mac_addr.4,
-        dest_mac_addr.5,
-        0x00,                // SDU is_fragment
-        0x01,                // SDU is_last_fragment
-        0x00,                // SDU fragment_id
-
-        // Start of CMDU
-        0x00,               // CMDU message_version
-        0x00,               // CMDU reserved
-        0x00, 0x07,         // CMDU message_type
-        0x0a, 0x00,         // CMDU message_id
-        0x00,               // CMDU fragment
-        0xc0,               // CMDU flags
-
-        // Start of TLVs
-        // TLV 1: 6-9 AL MAC address type TLV
-        0x01,               // TLV type 1: 6-9 AL MAC address
-        0x00, 0x06,         // TLV length
-        src_mac_addr.0,     // AL MAC address
-        src_mac_addr.1,
-        src_mac_addr.2,
-        src_mac_addr.3,
-        src_mac_addr.4,
-        src_mac_addr.5,
-
-        // TLV 2: 6-22—SearchedRole TLV
-        0x0d,               // TLV type: 6-22 SearchedRole
-        0x00, 0x01,         // TLV length
-        0x00,               // TLV payload
-
-        // TLV 3: 6-23 AutoconfigFreqBand TLV
-        0x0e,               // TLV type 14: 6-23 AutoconfigFreqBand
-        0x00, 0x01,         // TLV length
-        0x00,               // TLV 6-23 AutoconfigFreqBand
-
-         // TLV 4: supported service 17.2.1
-        0x80,
-        0x00, 0x02,
-        0x01, 0x01,         // TLV supported service 17.2.1
-
-        // TLV 5: searched service 17.2.2
-        0x81,
-        0x00, 0x02,         // TLV length
-        0x01, 0x00,         // TLV searched service 17.2.2
-
-        // TLV 6: One multiAP profile tlv 17.2.47
-        0xb3,
-        0x00, 0x01,         // TLV length
-        0x03,               // TLV One multiAP profile tlv 17.2.47
-
-        0x00,               // TLV 7 End of message
-        0x00,
-        0x00,
-    ];
-    tracing::trace!("SDU_BYTES: [{:?}] <{:?}>", sdu_bytes.len(), sdu_bytes);
-    if let Ok((_, sdu)) = SDU::parse(sdu_bytes.as_slice()) {
-        return sdu.serialize();
-    }
-    vec![]
-}
-
-#[cfg(not(feature = "size_based_fragmentation"))]
-fn _prepare_test_packet_channel_selection_request(r: &AlServiceRegistrationResponse) -> Vec<u8> {
-    let al_mac = r.al_mac_address_local;
-
-    let payload: Vec<u8> = vec![
-        // CMDU
-        0x00,               // messsage version
-        0x00,               // reserved
-        0x00, 0x07,         // messsage type
-        0x00, 0x00,         // messsage id
-        0x00,               // fragment
-        0x80,               // flags
-
-        // CMDU payload
-        0x8b, 0x00, 0x13, 0xd8, 0x3a, 0xdd, 0x5e, 0x8a, 0x11, 0x03, 0x51, 0x01, 0x06, 0xee, 0x73,
-        0x01, 0x24, 0xee, 0x87, 0x01, 0x01, 0xee, 0x8d, 0x00, 0x07, 0xd8, 0x3a, 0xdd, 0x5e, 0x8a,
-        0x11, 0x00, 0x01, 0x00, 0x06, 0x02, 0x42, 0xc0, 0xa8, 0x64,
-        0x03, // our (transmitter/node2) al_mac address
-        0x02, 0x00, 0x06, 0x02, 0x42, 0xc0, 0xa8, 0x64, 0x03, // our (transmitter/node2) mac address
-        0x00, 0x00, 0x00,
-    ];
-
-    let res = CMDU::parse(&payload[..]);
-    println!("After cmdu parse: {:?}", res);
-
-    let sdu = SDU {
-        source_al_mac_address: al_mac,
-        destination_al_mac_address: MacAddr::new(0xee, 0x42, 0xc0, 0xa8, 0x64, 0x02),
-        is_fragment: 0,
-        is_last_fragment: 1,
-        fragment_id: 0,
-        payload: payload,
-    };
-
-    sdu.serialize()
-}
-
 fn prepare_payload_with_small_tlv(r: &AlServiceRegistrationResponse, multicast: bool) -> Vec<u8> {
     // Here is whole SDU with autoconfig request taken from onewifi_em_agent_
     let src_mac_addr = r.al_mac_address_local;
@@ -262,7 +142,6 @@ fn prepare_payload_with_small_tlv(r: &AlServiceRegistrationResponse, multicast: 
 }
 
 
-#[cfg(feature = "size_based_fragmentation")]
 fn prepare_payload_with_huge_tlv(r: &AlServiceRegistrationResponse, multicast: bool) -> Vec<u8> {
     // Here is whole SDU with autoconfig request taken from onewifi_em_agent_
     let src_mac_addr = r.al_mac_address_local;
@@ -626,10 +505,7 @@ async fn test1() -> Result<()> {
 
     loop {
         println!("2.0 Prepare and send multicast autoconfig search request");
-        #[cfg(feature = "size_based_fragmentation")]
         let sdu_autoconfig_search = prepare_payload_with_huge_tlv(&reg_resp, true);
-        #[cfg(not(feature = "size_based_fragmentation"))]
-        let sdu_autoconfig_search = prepare_autoconfig_search_request_sdu(&reg_resp, true);
         match framed_data_socket
             .send(Bytes::from(sdu_autoconfig_search.clone()))
             .await
@@ -746,10 +622,7 @@ async fn send_huge_data(
 ) -> anyhow::Result<Vec<u8>> {
     println!("Sending data");
     println!("Prepare and send multicast autoconfig search request");
-    #[cfg(feature = "size_based_fragmentation")]
     let sdu_autoconfig_search = prepare_payload_with_huge_tlv(&reg_resp, true);
-    #[cfg(not(feature = "size_based_fragmentation"))]
-    let sdu_autoconfig_search = prepare_autoconfig_search_request_sdu(&reg_resp, true);
     match framed_data_socket
         .send(Bytes::from(sdu_autoconfig_search.clone()))
         .await
@@ -1226,10 +1099,7 @@ async fn test4_break_connection_and_receive(sap_control_path: &str, sap_data_pat
 
             State::SendData => {
                 if let Some(ref mut data_socket) = framed_data_socket {
-                    #[cfg(feature = "size_based_fragmentation")]
                     let res = send_huge_data(data_socket, reg_resp.clone().unwrap()).await;
-                    #[cfg(not(feature = "size_based_fragmentation"))]
-                    let res = send_short_data(data_socket, reg_resp.clone().unwrap()).await;
                     match res {
                         Err(e) => {
                             println!("Sending failed: {e:?}");

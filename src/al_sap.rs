@@ -512,7 +512,6 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
 
                                 assembled_payload.extend_from_slice(&fragment.payload);
                                 if fragment.is_last_fragment == 1 {
-                                    #[cfg(feature = "size_based_fragmentation")]
                                     {
                                         // here is proper place to validate CMDU for size based fragmentation!
 

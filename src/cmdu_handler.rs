@@ -958,14 +958,10 @@ impl CMDUHandler {
                 debug!(remote= %source_mac,
                         metadata = ?updated_node.metadata,
                         "Sending the serviceAccessPointDataIndication");
-                #[cfg(feature = "size_based_fragmentation")]
                 let mut serialized_payload: Vec<u8> = vec![];
-                #[cfg(feature = "size_based_fragmentation")]
-                {
                     for tlv in tlvs {
                         serialized_payload.extend(tlv.serialize());
                     }
-                }
 
                 let sdu = SDU {
                     source_al_mac_address: self.local_al_mac,
@@ -980,10 +976,7 @@ impl CMDUHandler {
                         message_id,
                         fragment: 0,
                         flags: 0x80,
-                        #[cfg(feature = "size_based_fragmentation")]
                         payload: serialized_payload,
-                        #[cfg(not(feature = "size_based_fragmentation"))]
-                        payload: tlvs.to_vec(),
                     }
                     .serialize(),
                 };
@@ -1111,7 +1104,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "size_based_fragmentation")]
     #[tokio::test]
     async fn test_custom_fragments() {
         let cmdu_frag_0: Vec<u8> = vec![

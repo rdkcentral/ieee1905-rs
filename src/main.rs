@@ -165,14 +165,14 @@ async fn main() -> Result<()> {
 
     tracing::info!("Tracing initialized!");
 
-    #[cfg(feature = "size_based_fragmentation")]
     tracing::info!("Fragmentation type: SIZE BASED");
-    #[cfg(not(feature = "size_based_fragmentation"))]
-    tracing::info!("Fragmentation type: TLV BASED");
+
     #[cfg(feature = "enable_tokio_console")]
     tracing::info!("Tokio console: Enabled");
+
     #[cfg(not(feature = "enable_tokio_console"))]
     tracing::info!("Tokio console: Disabled");
+
     tracing::info!("TOPOLOGY_UI {:?}", cli.topology_ui);
 
     //ADDING logic for CRYPTO_CONTEXT here
