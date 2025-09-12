@@ -1002,6 +1002,7 @@ mod tests {
     use crate::interface_manager::get_forwarding_interface_name;
     use crate::interface_manager::get_local_al_mac;
     use tokio::sync::Mutex;
+    use crate::cmdu_reassembler::CmduReassemblyError;
 
     #[tokio::test]
     #[should_panic]
@@ -1230,5 +1231,36 @@ mod tests {
             }
         }
         assert!(reassembled.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_recognition_of_duplicate_fragment() {
+        let mut cmdu0 = make_dummy_cmdu(vec![10, 20]);
+        let mut cmdu1 = make_dummy_cmdu(vec![30, 40]);
+        let mut cmdu2 = make_dummy_cmdu(vec![50, 60]);
+
+        cmdu0.fragment = 0;
+        cmdu1.fragment = 1;
+        cmdu2.fragment = 1;         // duplicated fragment No. 1
+        cmdu2.flags = 0x80;         // set last fragment flag
+
+        let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
+        let fragments = vec![cmdu0, cmdu1, cmdu2];
+        let cmdu_reasm = CmduReassembler::new().await;
+
+        for fragment in fragments.iter() {
+            match cmdu_reasm.push_fragment(source_mac, fragment.clone()).await {
+                Some(Ok(_)) => {
+                    panic!("DuplicatedFragment error expected but CMDU is completely reassembled");
+                }
+                Some(Err(e)) => {
+                    assert_eq!(e, CmduReassemblyError::DuplicatedFragment);
+                    error!("Error reassembling CMDU: {:?}", e);
+                }
+                None => {
+                    trace!("Fragment stored. Waiting for more...");
+                }
+            }
+        }
     }
 }

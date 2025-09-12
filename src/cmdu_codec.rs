@@ -1068,10 +1068,10 @@ impl CMDU {
             }
         }
 
-        // Verify EndOfMessage flag on the last fragment
+        // Verify LastFragment flag on the last fragment
         let last = fragments.last().unwrap();
         if last.flags & 0x80 == 0 {
-            return Err(CmduReassemblyError::MissingEndOfMessage);
+            return Err(CmduReassemblyError::MissingLastFragment);
         }
 
         // Reassemble payload
@@ -1908,7 +1908,7 @@ pub mod tests {
         let reassembled = CMDU::reassemble(fragments)
             .expect_err("Reassembly shouldn't succeed on missed EndOfMessage TLV");
 
-        assert_eq!(reassembled, CmduReassemblyError::MissingEndOfMessage);
+        assert_eq!(reassembled, CmduReassemblyError::MissingLastFragment);
     }
 
     #[test]
@@ -2310,8 +2310,79 @@ pub mod tests {
         cmdu_payload_extended.append(&mut bad_tlv_length.serialize());
         let (_, cmdu_parsed) = CMDU::parse(cmdu_payload_extended.as_slice()).unwrap();
 
-        // Here we expect panic as the bad_tlv_length.tlv_length doesn't match the TLV length
+        // Expect panic as the bad_tlv_length.tlv_length doesn't match the real TLV length
         let _tlvs = cmdu_parsed.get_tlvs();
+    }
+
+
+    // Test sequence of CMDU fragments that arrived out of order.
+    #[test]
+    #[cfg(feature = "size_based_fragmentation")]
+    fn test_out_of_order_fragments() {
+        let mut cmdu0 = make_dummy_cmdu(vec![10, 20]);
+        let mut cmdu1 = make_dummy_cmdu(vec![30, 40]);
+        let mut cmdu2 = make_dummy_cmdu(vec![50, 60]);
+
+        cmdu0.fragment = 0;
+        cmdu1.fragment = 1;
+        cmdu2.fragment = 2;
+
+        // Set last fragment flag
+        cmdu2.flags = 0x80;
+
+        // Prepare vector with out of order CMDU fragments
+        let fragments: Vec<CMDU> = vec![cmdu0, cmdu2, cmdu1];
+
+        // Pass the vector with out of order CMDUs
+        let reassembled = CMDU::reassemble(fragments);
+        assert!(reassembled.is_ok());
+
+        // Verify the length of reassembled CMDU payload which is sum of 6 TLV headers and their payload
+        // 6 TLVs data take 210 bytes and additional 6 TLV headers takes 3 bytes each
+        #[cfg(feature = "size_based_fragmentation")]
+        assert_eq!(reassembled.clone().unwrap().payload.len(), 10 + 20 + 30 + 40 + 50 + 60 + 6 * 3);
+
+        // Verify if the data from out of order CMDUs are in proper order after reassembly.
+        let mut offset = 0;
+
+        // Define vector of sizes of consecutive TLVs for verification (from already sorted CMDUs)
+        let sizes = vec![10, 20, 30, 40, 50, 60];
+
+        // Iter on all the TLVs and check their size with the predefined vector "sizes"
+        for i in sizes.iter() {
+            let chunk = &reassembled.clone().unwrap().payload[offset..offset + 3 + i];
+
+            #[cfg(feature = "size_based_fragmentation")]
+            assert_eq!(TLV::parse(chunk).unwrap().1.tlv_length, *i as u16);
+
+            // Move offset to the next chunk: size of current TLV payload + TLV header length
+            offset += i + 3;
+        }
+    }
+
+    // Test if CMDU reassembly procedure reports missed CMDU fragment
+    #[test]
+    fn test_missed_one_fragment() {
+        let mut cmdu0 = make_dummy_cmdu(vec![10, 20]);
+        let mut cmdu1 = make_dummy_cmdu(vec![30, 40]);
+        let mut cmdu2 = make_dummy_cmdu(vec![50, 60]);
+        let mut cmdu3 = make_dummy_cmdu(vec![70, 80]);
+
+        // Create CMDU fragments chain with missing fragment No. 2
+        cmdu0.fragment = 0;
+        cmdu1.fragment = 1;
+        cmdu2.fragment = 3;         // Skip fragment 2 and set fragment to id = 3
+        cmdu3.fragment = 4;
+
+        // Set last fragment flag
+        cmdu3.flags = 0x80;
+
+        // Prepare vector with CMDU fragments
+        let fragments: Vec<CMDU> = vec![cmdu0, cmdu1, cmdu2, cmdu3];
+        let reassembled = CMDU::reassemble(fragments);
+
+        // Expect MissingFragments error
+        assert_eq!(CmduReassemblyError::MissingFragments, reassembled.unwrap_err());
     }
 }
 //TODO organize the unittest first we verify TLV use cases, content, serialization and parsing, plus error scenarios for malformed
