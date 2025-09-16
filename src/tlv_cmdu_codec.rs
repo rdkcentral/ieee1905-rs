@@ -119,30 +119,37 @@ mod tests {
     use nom::error::ErrorKind;
     use super::TLV;
 
+    // Verify parsing of valid TLV with some payload
     #[test]
     fn test_parse_with_value() {
         let input = &[0x01, 0x00, 0x03, 0x41, 0x42, 0x43]; // TLV: type=1, length=3, value="ABC"
         let result = TLV::parse(input);
         assert!(result.is_ok());
         let (remaining, tlv) = result.unwrap();
+
+        // Expect successes
         assert_eq!(remaining.len(), 0);
         assert_eq!(tlv.tlv_type, 1);
         assert_eq!(tlv.tlv_length, 3);
         assert_eq!(tlv.tlv_value, Some(vec![0x41, 0x42, 0x43]));
     }
 
+    // Verify parsing of valid TLV but without any payload
     #[test]
     fn test_parse_without_value() {
         let input = &[0x01, 0x00, 0x00]; // TLV: type=1, length=0, no value
         let result = TLV::parse(input);
         assert!(result.is_ok());
         let (remaining, tlv) = result.unwrap();
+
+        // Expect successes
         assert_eq!(remaining.len(),0);
         assert_eq!(tlv.tlv_type, 1);
         assert_eq!(tlv.tlv_length, 0);
         assert_eq!(tlv.tlv_value, None);
     }
 
+    // Verify serializing of valid TLV with some payload
     #[test]
     fn test_serialize_with_value() {
         let tlv = TLV {
@@ -151,9 +158,12 @@ mod tests {
             tlv_value: Some(vec![0x41, 0x42, 0x43]),
         };
         let serialized = tlv.serialize();
+
+        // Expect successful serialization
         assert_eq!(serialized, vec![0x01, 0x00, 0x03, 0x41, 0x42, 0x43]);
     }
 
+    // Verify serializing of valid TLV but without any payload
     #[test]
     fn test_serialize_without_value() {
         let tlv = TLV {
@@ -162,19 +172,28 @@ mod tests {
             tlv_value: None,
         };
         let serialized = tlv.serialize();
+
+        // Expect successful serialization
         assert_eq!(serialized, vec![0x01, 0x00, 0x00]);
     }
 
+    // Verify parsing of invalid TLV with not enough data
     #[test]
     fn test_try_to_parse_not_enough_data() {
+        // Prepare invalid TLV with tlv_length == 4 but only 3 bytes as a TLV payload
         let tlv = TLV {
             tlv_type: 1,
             tlv_length: 4,
             tlv_value: Some(vec![0x41, 0x42, 0x43]),
         };
+
+        // Serialize TLV
         let serialized = tlv.serialize();
+
+        // Do the parsing
         let parsed = TLV::parse(&serialized);
 
+        // Expect ErrorKind::LengthValue error after parsing TLV
         match parsed {
             Ok(_) => {
                panic!("Expected parsing to fail due to insufficient data, but it succeeded.")
@@ -187,5 +206,30 @@ mod tests {
             }
         }
     }
+
+    // Verify parsing of valid TLV but with too much data
+    #[test]
+    fn test_try_to_parse_too_much_data() {
+        // Prepare valid TLV with tlv_length == 4 and pass 5 bytes as a TLV payload
+        let tlv = TLV {
+            tlv_type: 1,
+            tlv_length: 4,
+            tlv_value: Some(vec![0x41, 0x42, 0x43, 0x44, 0x45]),
+        };
+
+        // Serialize TLV
+        let serialized = tlv.serialize();
+
+        // Do the parsing
+        let parsed = TLV::parse(&serialized);
+
+        // Expect success while parsing
+        assert!(parsed.is_ok());
+
+        // Expect one byte returned as not consumed during parsing
+        assert_eq!(parsed.clone().unwrap().0.len(), 1);
+
+        // Expect exactly 0x45 byte returned as not consumed
+        assert_eq!(parsed.unwrap().0, &[0x45]);
+    }
 }
-//TODO create unit test when the data is more than the length specified in TLV
