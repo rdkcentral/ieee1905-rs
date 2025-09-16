@@ -19,8 +19,15 @@
 
 #![deny(warnings)]
 // External crates
-use nom::{bytes::complete::take, multi::many0, number::complete::be_u8, IResult, Parser};
+use nom::{
+    bytes::complete::take,
+    multi::many0,
+    number::complete::be_u8,
+    Parser,
+    IResult,
+};
 use pnet::datalink::MacAddr;
+
 // Standard library
 use crate::cmdu_codec::*;
 use std::fmt::Debug;
@@ -163,6 +170,7 @@ mod tests {
     use nom::Err as NomErr;
     use pnet::datalink::MacAddr;
 
+    // Verify parsing and serializing of SDU and CMDU
     #[test]
     fn test_sdu_with_topology_query_cmdus() {
         let end_of_message_tlv = TLV {
@@ -171,6 +179,7 @@ mod tests {
             tlv_value: None,
         };
 
+        // Prepare CMDU with only EndOfMessage TLV
         let cmdu_topology_query = CMDU {
             message_version: 1,
             reserved: 0,
@@ -183,6 +192,7 @@ mod tests {
 
         let serialized_cmd = cmdu_topology_query.serialize();
 
+        // Prepare SDU with serialized CMDU as payload
         let sdu = SDU {
             source_al_mac_address: MacAddr::new(0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E),
             destination_al_mac_address: MacAddr::new(0x00, 0x2A, 0x3B, 0x4C, 0x5D, 0x6E),
@@ -192,24 +202,29 @@ mod tests {
             payload: serialized_cmd.clone(),
         };
 
+        // Serialize SDU
         let serialized_sdu = sdu.serialize();
 
+        // Do the parsing of SDU
         let parsed_sdu = SDU::parse(&serialized_sdu).expect("Failed to parse SDU").1;
         assert_eq!(sdu, parsed_sdu);
 
-        let parsed_cmd = CMDU::parse(&parsed_sdu.payload)
-            .expect("Failed to parse CMDU")
-            .1;
+        // Parse CMDU which is SDU payload
+        let parsed_cmd = CMDU::parse(&parsed_sdu.payload).expect("Failed to parse CMDU").1;
+
+        // Expect success comparing serialized and parsed CMDU with original one
         assert_eq!(parsed_cmd, cmdu_topology_query);
         tracing::info!("Original SDU: {:#?}", sdu);
         tracing::info!("Parsed SDU: {:#?}", parsed_sdu);
     }
 
+    // Verify the correctness of detection and signalling too short data
     #[test]
     fn test_too_short_sdu() {
         // Prepare not enough amount of data for SDU parser
         let too_short_input = &[1];
 
+        // Expect ErrorKind::Eof error because of trying to parse not enough amounts of data
         if let Err(NomErr::Error(err)) = SDU::parse(too_short_input) {
             assert_eq!(err.code, ErrorKind::Eof)
         } else {
@@ -219,15 +234,17 @@ mod tests {
         }
     }
 
+    // Verify parsing SDU with one small TLV and without EndOfMessage TLV
     #[test]
     fn test_small_sdu_without_end_of_message_tlv_no_reassembly() {
-        // Prepare one, single TLV different that EndOfMessage
+        // Prepare one, single TLV but different from EndOfMessage
         let tlv = TLV {
             tlv_type: IEEE1905TLVType::AlMacAddress.to_u8(),
             tlv_length: 6,
             tlv_value: vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66].into(),
         };
 
+        // Prepare CMDU
         let cmdu = CMDU {
             message_version: 1,
             reserved: 0,
@@ -238,8 +255,10 @@ mod tests {
             payload: tlv.serialize(),
         };
 
+        // Serialize CMDU for SDU as payload
         let serialized_cmd = cmdu.serialize();
 
+        // Create SDU with CMDU as payload
         let sdu = SDU {
             source_al_mac_address: MacAddr::new(0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E),
             destination_al_mac_address: MacAddr::new(0x00, 0x2A, 0x3B, 0x4C, 0x5D, 0x6E),
@@ -249,18 +268,21 @@ mod tests {
             payload: serialized_cmd.clone(),
         };
 
+        // Serialize SDU
         let serialized_sdu = sdu.serialize();
 
+        // Expect ErrorKind::Tag error because of parsing a TLV chain without EndOfMessage
         match SDU::parse(&serialized_sdu) {
             Err(NomErr::Error(_)) | Err(NomErr::Incomplete(_)) | Ok(_) => {
                 panic!("ErrorKind::Tag should be returned on lack of EndOfMessage TLV in CMDU");
-            }
+            },
             Err(NomErr::Failure(e)) => {
                 assert_eq!(e.code, nom::error::ErrorKind::Tag);
-            }
+            },
         }
     }
 
+    // Verify parsing SDU with big TLV and without EndOfMessage TLV
     #[test]
     #[rustfmt::skip]
     fn test_large_sdu_without_end_of_message_tlv() {
@@ -268,21 +290,22 @@ mod tests {
         let dest_mac_addr: MacAddr = MacAddr::new(0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc);
 
         let sdu_bytes: Vec<u8> = vec![
-            src_mac_addr.0, // SDU source_al_mac_address
+            src_mac_addr.0,     // SDU source_al_mac_address
             src_mac_addr.1,
             src_mac_addr.2,
             src_mac_addr.3,
             src_mac_addr.4,
             src_mac_addr.5,
-            dest_mac_addr.0, // SDU destination_al_mac_address
+            dest_mac_addr.0,    // SDU destination_al_mac_address
             dest_mac_addr.1,
             dest_mac_addr.2,
             dest_mac_addr.3,
             dest_mac_addr.4,
             dest_mac_addr.5,
-            0x00, // SDU is_fragment
-            0x01, // SDU is_last_fragment
-            0x00, // SDU fragment_id
+            0x00,               // SDU is_fragment
+            0x01,               // SDU is_last_fragment
+            0x00,               // SDU fragment_id
+
             // Start of CMDU
             0x00, // CMDU message_version
             0x00, // CMDU reserved
@@ -524,8 +547,10 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00,
             // End of zeroed 1500 bytes block
+            // EndOfMessage TLV should be here but is intentionally missed
         ];
 
+        // Expect ErrorKind::Tag error because of parsing a TLV chain without EndOfMessage
         match SDU::parse(&sdu_bytes) {
             Err(NomErr::Error(_)) | Err(NomErr::Incomplete(_)) | Ok(_) => {
                 panic!("ErrorKind::Tag should be returned on lack of EndOfMessage TLV in CMDU");
@@ -536,6 +561,7 @@ mod tests {
         }
     }
 
+    // Verify parsing SDU with TLV chain and redundant TLV after EndOfMessage TLV
     #[test]
     fn test_one_tlv_after_end_of_message_tlv() {
         let src_mac_addr: MacAddr = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
@@ -592,6 +618,7 @@ mod tests {
             src_mac_addr.5,
         ];
 
+        // Expect ErrorKind::Tag error trying to parse TLV chain with additional redundant TLV after EndOfMessage TLV
         match SDU::parse(&sdu_bytes) {
             Err(NomErr::Error(_)) | Err(NomErr::Incomplete(_)) | Ok(_) => {
                 panic!("ErrorKind::Tag should be returned on additional TLV after EndOfMessage TLV in CMDU");
