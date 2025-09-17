@@ -35,15 +35,6 @@ cryptoki = "0.10"
 tracing-appender = "0.2.3"
 thiserror = "2.0.12"
 
-
-[[bin]]
-name="functional_tests_transmitter"
-path="examples/functional_tests_transmitter.rs"
-
-[[bin]]
-name="functional_tests_receiver"
-path="examples/functional_tests_receiver.rs"
-
 [profile.release]
 strip = true
 debug = false
