@@ -29,21 +29,16 @@ use nom::{
 use pnet::datalink::MacAddr;
 
 // Standard library
+use crate::cmdu_codec::*;
 use std::fmt::Debug;
-
-// Internal modules
-#[cfg(not(feature="size_based_fragmentation"))]
-use crate::cmdu_codec::{CMDU, IEEE1905TLVType};
-
-
 #[derive(Debug, PartialEq, Clone)]
 pub struct SDU {
-    pub source_al_mac_address: MacAddr,       // Source MAC address
-    pub destination_al_mac_address: MacAddr,  // Destination MAC address
-    pub is_fragment: u8,                      // Indicates if the SDU is fragmented
-    pub is_last_fragment: u8,                 // Indicates if this is the last fragment
-    pub fragment_id: u8,                      // Fragment ID
-    pub payload: Vec<u8>,                     // Payload data
+    pub source_al_mac_address: MacAddr,      // Source MAC address
+    pub destination_al_mac_address: MacAddr, // Destination MAC address
+    pub is_fragment: u8,                     // Indicates if the SDU is fragmented
+    pub is_last_fragment: u8,                // Indicates if this is the last fragment
+    pub fragment_id: u8,                     // Fragment ID
+    pub payload: Vec<u8>,                    // Payload data
 }
 
 impl SDU {
@@ -77,57 +72,52 @@ impl SDU {
         // Parse payload
         let mut parser = many0(be_u8);
         let (input, payload) = parser.parse(input)?;
-        #[cfg(feature="size_based_fragmentation")]
-        {
-            // always return SDU with payload
-            // do not validate payload
-            // let SDU reassembler do it
-            tracing::trace!("Returning SDU based on <{input:?}> and <{payload:?}>");
-            let empty_slice: &[u8] = &[];
-            Ok((
-                empty_slice,
-                SDU {
-                    source_al_mac_address,
-                    destination_al_mac_address,
-                    is_fragment,
-                    is_last_fragment,
-                    fragment_id,
-                    payload,
-                },
-            ))
-        }
-        #[cfg(not(feature="size_based_fragmentation"))]
-        {
-            // Validate payload if it contains a CMDU
-            tracing::trace!("ParseSDU: sourceAlMac: {source_al_mac_address:?}, destinationAlMac: {destination_al_mac_address:?}, isFragment: {is_fragment:?}, isLastFragment: {is_last_fragment:?}, fragment_id: {fragment_id:?}");
+
+        // validate it when it's not fragmented SDU
+        if is_fragment == 0 && is_last_fragment == 1 {
             match CMDU::parse(&payload) {
-                Ok((rest, parsed_cmd)) => {
+                Ok((_, parsed_cmd)) => {
                     if let Some(last_tlv) = parsed_cmd.get_tlvs().last() {
-                        if last_tlv.tlv_type != IEEE1905TLVType::EndOfMessage.to_u8() || last_tlv.tlv_length != 0 || last_tlv.tlv_value.is_some() ||
-                            !rest.is_empty() {
+                        if last_tlv.tlv_type != IEEE1905TLVType::EndOfMessage.to_u8()
+                            || last_tlv.tlv_length != 0
+                            || last_tlv.tlv_value.is_some()
+                        {
                             tracing::error!("ParseSDU: Last is not end of message");
-                            return Err(nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
+                            return Err(nom::Err::Failure(nom::error::Error::new(
+                                input,
+                                nom::error::ErrorKind::Tag,
+                            )));
                         }
+                    } else {
+                        tracing::error!("ParseSDU: EoF");
+                        return Err(nom::Err::Failure(nom::error::Error::new(
+                            input,
+                            nom::error::ErrorKind::Eof,
+                        )));
                     }
                 }
                 Err(_) => {
                     tracing::error!("ParseSDU: Cannot parse CMDU");
-                    return Err(nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
+                    return Err(nom::Err::Failure(nom::error::Error::new(
+                        input,
+                        nom::error::ErrorKind::Tag,
+                    )));
                 }
             }
-            tracing::trace!("ParseSDU: returning valid SDU");
-            Ok((
-                input,
-                SDU {
-                    source_al_mac_address,
-                    destination_al_mac_address,
-                    is_fragment,
-                    is_last_fragment,
-                    fragment_id,
-                    payload,
-                },
-            ))
-        }//
+        }
+        tracing::trace!("Returning SDU based on <{input:?}> and <{payload:?}>");
+        let empty_slice: &[u8] = &[];
+        Ok((
+            empty_slice,
+            SDU {
+                source_al_mac_address,
+                destination_al_mac_address,
+                is_fragment,
+                is_last_fragment,
+                fragment_id,
+                payload,
+            },
+        ))
     }
 
     /// Serializes the `SDU` into a byte vector.
@@ -164,22 +154,23 @@ impl SDU {
 
         serialized_data
     }
+
     pub fn destination_al_mac_address(&self) -> MacAddr {
         self.destination_al_mac_address
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use crate::cmdu_codec:: IEEE1905TLVType;
     use super::*;
+    use crate::cmdu_codec::IEEE1905TLVType;
+    use crate::cmdu_codec::{CMDUType, CMDU};
+    use crate::tlv_cmdu_codec::TLV;
     use nom::error::ErrorKind;
     use nom::Err as NomErr;
     use pnet::datalink::MacAddr;
-    use crate::tlv_cmdu_codec::TLV;
-    use crate::cmdu_codec::{CMDUType, CMDU};
 
+    // Verify parsing and serializing of SDU and CMDU
     #[test]
     fn test_sdu_with_topology_query_cmdus() {
         let end_of_message_tlv = TLV {
@@ -188,6 +179,7 @@ mod tests {
             tlv_value: None,
         };
 
+        // Prepare CMDU with only EndOfMessage TLV
         let cmdu_topology_query = CMDU {
             message_version: 1,
             reserved: 0,
@@ -195,14 +187,12 @@ mod tests {
             message_id: 789,
             fragment: 0,
             flags: 0x80,
-            #[cfg(feature = "size_based_fragmentation")]
             payload: end_of_message_tlv.serialize(),
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![end_of_message_tlv.clone()],
         };
 
         let serialized_cmd = cmdu_topology_query.serialize();
 
+        // Prepare SDU with serialized CMDU as payload
         let sdu = SDU {
             source_al_mac_address: MacAddr::new(0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E),
             destination_al_mac_address: MacAddr::new(0x00, 0x2A, 0x3B, 0x4C, 0x5D, 0x6E),
@@ -212,39 +202,49 @@ mod tests {
             payload: serialized_cmd.clone(),
         };
 
+        // Serialize SDU
         let serialized_sdu = sdu.serialize();
 
+        // Do the parsing of SDU
         let parsed_sdu = SDU::parse(&serialized_sdu).expect("Failed to parse SDU").1;
         assert_eq!(sdu, parsed_sdu);
 
+        // Parse CMDU which is SDU payload
         let parsed_cmd = CMDU::parse(&parsed_sdu.payload).expect("Failed to parse CMDU").1;
+
+        // Expect success comparing serialized and parsed CMDU with original one
         assert_eq!(parsed_cmd, cmdu_topology_query);
         tracing::info!("Original SDU: {:#?}", sdu);
         tracing::info!("Parsed SDU: {:#?}", parsed_sdu);
     }
 
+    // Verify the correctness of detection and signalling too short data
     #[test]
-     fn test_too_short_sdu() {
+    fn test_too_short_sdu() {
         // Prepare not enough amount of data for SDU parser
         let too_short_input = &[1];
 
+        // Expect ErrorKind::Eof error because of trying to parse not enough amounts of data
         if let Err(NomErr::Error(err)) = SDU::parse(too_short_input) {
             assert_eq!(err.code, ErrorKind::Eof)
         } else {
-            panic!("ErrorKind::Eof should be returned on not enough amount of data for SDU parsing");
+            panic!(
+                "ErrorKind::Eof should be returned on not enough amount of data for SDU parsing"
+            );
         }
     }
 
-    #[cfg(not(feature = "size_based_fragmentation"))]
+    // Verify parsing SDU with one small TLV and without EndOfMessage TLV
     #[test]
     fn test_small_sdu_without_end_of_message_tlv_no_reassembly() {
-        // Prepare one, single TLV different that EndOfMessage
+        // Prepare one, single TLV but different from EndOfMessage
         let tlv = TLV {
             tlv_type: IEEE1905TLVType::AlMacAddress.to_u8(),
             tlv_length: 6,
             tlv_value: vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66].into(),
         };
 
+        // Prepare CMDU
         let cmdu = CMDU {
             message_version: 1,
             reserved: 0,
@@ -252,14 +252,13 @@ mod tests {
             message_id: 789,
             fragment: 0,
             flags: 0x80,
-            #[cfg(feature = "size_based_fragmentation")]
             payload: tlv.serialize(),
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![tlv.clone()],
         };
 
+        // Serialize CMDU for SDU as payload
         let serialized_cmd = cmdu.serialize();
 
+        // Create SDU with CMDU as payload
         let sdu = SDU {
             source_al_mac_address: MacAddr::new(0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E),
             destination_al_mac_address: MacAddr::new(0x00, 0x2A, 0x3B, 0x4C, 0x5D, 0x6E),
@@ -269,21 +268,23 @@ mod tests {
             payload: serialized_cmd.clone(),
         };
 
+        // Serialize SDU
         let serialized_sdu = sdu.serialize();
 
+        // Expect ErrorKind::Tag error because of parsing a TLV chain without EndOfMessage
         match SDU::parse(&serialized_sdu) {
-            Err(NomErr::Error(_)) |  Err(NomErr::Incomplete(_)) | Ok(_)  => {
+            Err(NomErr::Error(_)) | Err(NomErr::Incomplete(_)) | Ok(_) => {
                 panic!("ErrorKind::Tag should be returned on lack of EndOfMessage TLV in CMDU");
             },
             Err(NomErr::Failure(e)) => {
                 assert_eq!(e.code, nom::error::ErrorKind::Tag);
             },
         }
-
     }
 
-    #[cfg(not(feature = "size_based_fragmentation"))]
+    // Verify parsing SDU with big TLV and without EndOfMessage TLV
     #[test]
+    #[rustfmt::skip]
     fn test_large_sdu_without_end_of_message_tlv() {
         let src_mac_addr: MacAddr = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
         let dest_mac_addr: MacAddr = MacAddr::new(0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc);
@@ -306,52 +307,56 @@ mod tests {
             0x00,               // SDU fragment_id
 
             // Start of CMDU
-            0x00,               // CMDU message_version
-            0x00,               // CMDU reserved
-            0x00, 0x07,         // CMDU message_type
-            0x0a, 0x00,         // CMDU message_id
-            0x00,               // CMDU fragment
-            0x00,               // CMDU flags
-
+            0x00, // CMDU message_version
+            0x00, // CMDU reserved
+            0x00,
+            0x07, // CMDU message_type
+            0x0a,
+            0x00, // CMDU message_id
+            0x00, // CMDU fragment
+            0x00, // CMDU flags
             // Start of TLVs
             // TLV 1: 6-9 AL MAC address type TLV
-            0x01,               // TLV type 1: 6-9 AL MAC address
-            0x00, 0x06,         // TLV length
-            src_mac_addr.0,     // AL MAC address
+            0x01, // TLV type 1: 6-9 AL MAC address
+            0x00,
+            0x06,           // TLV length
+            src_mac_addr.0, // AL MAC address
             src_mac_addr.1,
             src_mac_addr.2,
             src_mac_addr.3,
             src_mac_addr.4,
             src_mac_addr.5,
-
             // TLV 2: 6-22 SearchedRole TLV
-            0x0d,               // TLV type 2: 6-22 SearchedRole
-            0x00, 0x01,         // TLV length
-            0x00,               // TLV 2 payload
-
+            0x0d, // TLV type 2: 6-22 SearchedRole
+            0x00,
+            0x01, // TLV length
+            0x00, // TLV 2 payload
             // TLV 3: 6-23 AutoconfigFreqBand TLV
-            0x0e,               // TLV type 14: 6-23 AutoconfigFreqBand
-            0x00, 0x01,         // TLV length
-            0x00,               // TLV 3 6-23 AutoconfigFreqBand
-
+            0x0e, // TLV type 14: 6-23 AutoconfigFreqBand
+            0x00,
+            0x01, // TLV length
+            0x00, // TLV 3 6-23 AutoconfigFreqBand
             // TLV 4: supported service 17.2.1
             0x80,
-            0x00, 0x02,         // TLV length
-            0x01, 0x01,         // TLV supported service 17.2.1
-
+            0x00,
+            0x02, // TLV length
+            0x01,
+            0x01, // TLV supported service 17.2.1
             // TLV 5: searched service 17.2.2
             0x81,
-            0x00, 0x02,         // TLV length
-            0x01, 0x00,         // TLV searched service 17.2.2
-
+            0x00,
+            0x02, // TLV length
+            0x01,
+            0x00, // TLV searched service 17.2.2
             // TLV 6: One multiAP profile tlv 17.2.47
             0xb3,
-            0x00, 0x01,         // TLV length
-            0x03,               // TLV 6: One multiAP profile tlv 17.2.47
-
+            0x00,
+            0x01, // TLV length
+            0x03, // TLV 6: One multiAP profile tlv 17.2.47
             // TLV 7: type Vendor Specific
-            0x0b,               // TLV type: Vendor Specific
-            0x05, 0xdc,         // TLV length: 1500 bytes
+            0x0b, // TLV type: Vendor Specific
+            0x05,
+            0xdc, // TLV length: 1500 bytes
             // TLV 7 vendor specific payload (zeroed placeholder)
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -542,66 +547,70 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00,
             // End of zeroed 1500 bytes block
+            // EndOfMessage TLV should be here but is intentionally missed
         ];
 
+        // Expect ErrorKind::Tag error because of parsing a TLV chain without EndOfMessage
         match SDU::parse(&sdu_bytes) {
-            Err(NomErr::Error(_)) |  Err(NomErr::Incomplete(_)) | Ok(_)  => {
+            Err(NomErr::Error(_)) | Err(NomErr::Incomplete(_)) | Ok(_) => {
                 panic!("ErrorKind::Tag should be returned on lack of EndOfMessage TLV in CMDU");
-            },
+            }
             Err(NomErr::Failure(e)) => {
                 assert_eq!(e.code, nom::error::ErrorKind::Tag);
-            },
+            }
         }
     }
 
-    #[cfg(not(feature = "size_based_fragmentation"))]
+    // Verify parsing SDU with TLV chain and redundant TLV after EndOfMessage TLV
     #[test]
     fn test_one_tlv_after_end_of_message_tlv() {
         let src_mac_addr: MacAddr = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
         let dest_mac_addr: MacAddr = MacAddr::new(0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc);
 
         let sdu_bytes: Vec<u8> = vec![
-            src_mac_addr.0,     // SDU source_al_mac_address
+            src_mac_addr.0, // SDU source_al_mac_address
             src_mac_addr.1,
             src_mac_addr.2,
             src_mac_addr.3,
             src_mac_addr.4,
             src_mac_addr.5,
-            dest_mac_addr.0,    // SDU destination_al_mac_address
+            dest_mac_addr.0, // SDU destination_al_mac_address
             dest_mac_addr.1,
             dest_mac_addr.2,
             dest_mac_addr.3,
             dest_mac_addr.4,
             dest_mac_addr.5,
-            0x00,               // SDU is_fragment
-            0x01,               // SDU is_last_fragment
-            0x00,               // SDU fragment_id
-
+            0x00, // SDU is_fragment
+            0x01, // SDU is_last_fragment
+            0x00, // SDU fragment_id
             // Start of CMDU
-            0x00,               // CMDU message_version
-            0x00,               // CMDU reserved
-            0x00, 0x07,         // CMDU message_type
-            0x0a, 0x00,         // CMDU message_id
-            0x00,               // CMDU fragment
-            0x00,               // CMDU flags
-
+            0x00, // CMDU message_version
+            0x00, // CMDU reserved
+            0x00,
+            0x07, // CMDU message_type
+            0x0a,
+            0x00, // CMDU message_id
+            0x00, // CMDU fragment
+            0x00, // CMDU flags
             // Start of TLVs
             // TLV 1: 6-9 AL MAC address type TLV
-            0x01,               // TLV type 1: 6-8 AL MAC address
-            0x00, 0x06,         // TLV length
-            src_mac_addr.0,     // AL MAC address
+            0x01, // TLV type 1: 6-8 AL MAC address
+            0x00,
+            0x06,           // TLV length
+            src_mac_addr.0, // AL MAC address
             src_mac_addr.1,
             src_mac_addr.2,
             src_mac_addr.3,
             src_mac_addr.4,
             src_mac_addr.5,
-
-            0x00, 0x00, 0x00,   // End of message
-
+            0x00,
+            0x00,
+            0x00, // End of message
             // Additional TLV after end of message
-            0x02,               // TLV type 2: 6-9 MAC address
-            0x00, 0x06,         // TLV length
-            src_mac_addr.0,     // MAC address
+            0x02, // TLV type 2: 6-9 MAC address
+            0x00,
+            0x06,           // TLV length
+            src_mac_addr.0, // MAC address
             src_mac_addr.1,
             src_mac_addr.2,
             src_mac_addr.3,
@@ -609,13 +618,14 @@ mod tests {
             src_mac_addr.5,
         ];
 
+        // Expect ErrorKind::Tag error trying to parse TLV chain with additional redundant TLV after EndOfMessage TLV
         match SDU::parse(&sdu_bytes) {
             Err(NomErr::Error(_)) | Err(NomErr::Incomplete(_)) | Ok(_) => {
                 panic!("ErrorKind::Tag should be returned on additional TLV after EndOfMessage TLV in CMDU");
-            },
+            }
             Err(NomErr::Failure(e)) => {
                 assert_eq!(e.code, nom::error::ErrorKind::Tag);
-            },
+            }
         }
     }
 
@@ -627,9 +637,12 @@ mod tests {
             is_fragment: 0,
             is_last_fragment: 0,
             fragment_id: 0,
-            payload: vec![]
+            payload: vec![],
         };
 
-        assert_eq!(sdu.destination_al_mac_address(), MacAddr::new(0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc));
+        assert_eq!(
+            sdu.destination_al_mac_address(),
+            MacAddr::new(0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc)
+        );
     }
 }

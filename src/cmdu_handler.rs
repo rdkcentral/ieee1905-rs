@@ -958,14 +958,10 @@ impl CMDUHandler {
                 debug!(remote= %source_mac,
                         metadata = ?updated_node.metadata,
                         "Sending the serviceAccessPointDataIndication");
-                #[cfg(feature = "size_based_fragmentation")]
                 let mut serialized_payload: Vec<u8> = vec![];
-                #[cfg(feature = "size_based_fragmentation")]
-                {
                     for tlv in tlvs {
                         serialized_payload.extend(tlv.serialize());
                     }
-                }
 
                 let sdu = SDU {
                     source_al_mac_address: self.local_al_mac,
@@ -980,10 +976,7 @@ impl CMDUHandler {
                         message_id,
                         fragment: 0,
                         flags: 0x80,
-                        #[cfg(feature = "size_based_fragmentation")]
                         payload: serialized_payload,
-                        #[cfg(not(feature = "size_based_fragmentation"))]
-                        payload: tlvs.to_vec(),
                     }
                     .serialize(),
                 };
@@ -995,7 +988,7 @@ impl CMDUHandler {
                 );
             }
         } else {
-            trace!("Cannot find device for {} toplogy_db", source_mac);
+            trace!("Cannot find device for {} topology_db", source_mac);
         }
         Ok(())
     }
@@ -1009,54 +1002,12 @@ mod tests {
     use crate::interface_manager::get_forwarding_interface_name;
     use crate::interface_manager::get_local_al_mac;
     use tokio::sync::Mutex;
+    use crate::cmdu_reassembler::CmduReassemblyError;
 
+    // Verify CMDU fragmentation and push_fragment function
     #[tokio::test]
-    #[should_panic]
-    async fn test_handle_cmdu_function_for_oversized_cmdu() {
-        let interface_name = "eth0".to_string();
-        let forwarding_interface =
-            if let Some(iface) = get_forwarding_interface_name(interface_name.clone()) {
-                tracing::info!("Forwarding interface: {}", iface);
-                iface
-            } else {
-                tracing::debug!("No Ethernet interface found for forwarding, using default.");
-                "eth_default".to_string() // Default interface name if none found
-            };
-
-        let mutex_tx = Arc::new(Mutex::new(()));
-        let sender: Arc<EthernetSender> =
-            Arc::new(EthernetSender::new(&forwarding_interface, Arc::clone(&mutex_tx)).await);
-        let message_id_generator = get_message_id_generator().await;
-
-        let al_mac = if let Some(mac) = get_local_al_mac(interface_name.clone()) {
-            tracing::info!("AL MAC address: {}", mac);
-            mac
-        } else {
-            tracing::debug!("No AL MAC ADDRESS calculated, using default.");
-            MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x00) // Default AL MAC if not found
-        };
-
-        let cmdu_handler = CMDUHandler::new(
-            Arc::clone(&sender),
-            Arc::clone(&message_id_generator),
-            al_mac,
-            forwarding_interface.clone(),
-        )
-        .await;
-
-        // Prepare an oversized CMDU exceeding MTU by one byte
-        let cmdu = make_dummy_cmdu(vec![1500 - 8 - 3 + 1]);
-        let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
-        let destination_mac = MacAddr::new(0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc);
-
-        // This should panic in handle_cmdu() as the CMDU size is prepared to have 1501 bytes
-        cmdu_handler
-            .handle_cmdu(&cmdu, source_mac, destination_mac)
-            .await;
-    }
-
-    #[tokio::test]
-    async fn test_push_fragment() {
+    async fn test_fragmentation_and_push_fragment_function() {
+        // Prepare CMDU with several different TLVs
         let cmdu = make_dummy_cmdu(vec![
             100 - 8 - 3,
             200 - 3,
@@ -1075,14 +1026,35 @@ mod tests {
             100 - 3,
             1500 - 3 - 8,
         ]);
+
+        // Prepare source MAC address
         let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
+
+        // Do the CMDU fragmentation
         let fragments = cmdu.clone().fragment(1500);
+
+        // Prepare a CmduReassembler instance
         let cmdu_reasm = CmduReassembler::new().await;
 
         let mut reassembled: Option<CMDU> = None;
+
+        // Verify every CMDU fragment after fragmentation
         for (i, fragment) in fragments.iter().enumerate() {
-            assert!(fragment.total_size() >= 8 + 3, "Empty CMDU payload in fragment {0}. Fragment {0} should be at least 8+3 bytes (CMDU header + endOfMessageTlv) but is {1} bytes long",
-                i, fragment.total_size());
+            // Verify that the size of CMDU meets minimum size requirements
+            if fragment.is_last_fragment() {
+                // Differentiate between last-first and the last-but-not-first CMDU fragments
+                if i == 0 {
+                    // First and at the same time last CMDU fragment (the only fragment in CMDU chain) in case of size based fragmentation should have the minimal size of CMDU header + TLV header without any TLV payload
+                    assert!(fragment.total_size() >= 8 + 3, "Fragment {0} should be at least 8+3 bytes but is {1} bytes long",
+                        i, fragment.total_size());
+                } else {
+                    // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
+                    assert!(fragment.total_size() >= 8 + 1, "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
+                        i, fragment.total_size());
+                }
+            }
+
+            // Verify that the current CMDU fragment size meets the maximum allowed size of 1500 bytes
             assert!(
                 fragment.total_size() <= 1500,
                 "Fragment {} should have maximum 1500 bytes but is {} bytes long",
@@ -1090,6 +1062,7 @@ mod tests {
                 fragment.total_size()
             );
 
+            // Add current CMDU fragment to the list of already reassembled fragments
             match cmdu_reasm.push_fragment(source_mac, fragment.clone()).await {
                 Some(Ok(full_cmdu)) => {
                     debug!("CMDU completely reassembled");
@@ -1104,6 +1077,7 @@ mod tests {
             }
         }
 
+        // Expect success comparing payload of fragmented and then reassembled CMDU with the original one
         assert_eq!(
             reassembled.unwrap().payload,
             cmdu.payload,
@@ -1111,9 +1085,9 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "size_based_fragmentation")]
     #[tokio::test]
     async fn test_custom_fragments() {
+        // Prepare contents of 1st part of CMDU
         let cmdu_frag_0: Vec<u8> = vec![
             0, 0, 0, 7, 10, 0, 0, 0, 1, 0, 6, 2, 66, 192, 168, 100, 3, 13, 0, 1, 0, 14, 0, 1, 0,
             128, 0, 2, 1, 1, 129, 0, 2, 1, 0, 179, 0, 1, 3, 11, 0, 42, 0, 16, 24, 1, 0, 36, 1, 160,
@@ -1195,8 +1169,11 @@ mod tests {
             186, 219, 225, 68, 80, 122, 201, 218, 92, 27, 43, 62, 24, 96, 90, 207, 108, 47, 210, 9,
             154, 211, 46, 55, 178,
         ];
+
+        // Parse 1st part of CMDU
         let cmdu_part_1 = CMDU::parse(cmdu_frag_0.as_slice()).unwrap().1;
 
+        // Prepare contents of 2nd part of CMDU
         let cmdu_frag_1: Vec<u8> = vec![
             0, 0, 0, 7, 10, 0, 1, 128, 166, 69, 239, 84, 199, 3, 231, 246, 87, 92, 116, 30, 172,
             212, 47, 94, 202, 91, 30, 102, 59, 183, 203, 11, 143, 240, 107, 191, 226, 57, 76, 25,
@@ -1205,18 +1182,39 @@ mod tests {
             231, 211, 217, 225, 249, 166, 46, 19, 137, 19, 121, 17, 254, 27, 220, 190, 234, 133,
             15, 0, 0, 0,
         ];
+
+        // Parse 2nd part of CMDU
         let cmdu_part_2 = CMDU::parse(cmdu_frag_1.as_slice()).unwrap().1;
 
+        // Prepare example MAC address
         let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
 
+        // Combine both CMDU parts into vector
         let fragments: Vec<CMDU> = vec![cmdu_part_1, cmdu_part_2];
 
+        // Prepare instance of CmduReassembler
         let cmdu_reasm = CmduReassembler::new().await;
 
+        // Make instance of CMDU for reassembling CMDU fragments into one, final CMDU
         let mut reassembled: Option<CMDU> = None;
+
+        // Iterate on all the CMDU fragments, check them and reassembly the original CMDU
         for (i, fragment) in fragments.iter().enumerate() {
-            assert!(fragment.total_size() >= 8 + 3, "Empty CMDU payload in fragment {0}. Fragment {0} should be at least 8+3 bytes (CMDU header + endOfMessageTlv) but is {1} bytes long",
-                i, fragment.total_size());
+            // Verify that the size of CMDU meets minimum size requirements
+            if fragment.is_last_fragment() {
+                // Differentiate between last-first and the last-but-not-first CMDU fragments
+                if i == 0 {
+                    // First and at the same time last CMDU fragment (the only fragment in CMDU chain) in case of size based fragmentation should have the minimal size of CMDU header + TLV header without any TLV payload
+                    assert!(fragment.total_size() >= 8 + 3, "Fragment {0} should be at least 8+3 bytes but is {1} bytes long",
+                        i, fragment.total_size());
+                } else {
+                    // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
+                    assert!(fragment.total_size() >= 8 + 1, "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
+                        i, fragment.total_size());
+                }
+            }
+
+            // Verify that the current CMDU fragment size meets the maximum allowed size of 1500 bytes
             assert!(
                 fragment.total_size() <= 1500,
                 "Fragment {} should have maximum 1500 bytes but is {} bytes long",
@@ -1224,6 +1222,7 @@ mod tests {
                 fragment.total_size()
             );
 
+            // Reassembly current CMDU fragment with previously reassembled ones
             match cmdu_reasm.push_fragment(source_mac, fragment.clone()).await {
                 Some(Ok(full_cmdu)) => {
                     debug!("CMDU completely reassembled");
@@ -1237,6 +1236,92 @@ mod tests {
                 }
             }
         }
+        // Expect success of reassembling CMDU from CMDU fragments
         assert!(reassembled.is_some());
+    }
+
+    // Verify detection of oversized CMDU
+    #[tokio::test]
+    #[should_panic]
+    async fn test_handle_cmdu_function_for_oversized_cmdu() {
+        // Prepare forwarding interface
+        let interface_name = "eth0".to_string();
+        let forwarding_interface =
+            if let Some(iface) = get_forwarding_interface_name(interface_name.clone()) {
+                tracing::info!("Forwarding interface: {}", iface);
+                iface
+            } else {
+                tracing::debug!("No Ethernet interface found for forwarding, using default.");
+                "eth_default".to_string() // Default interface name if none found
+            };
+
+        // Prepare sender
+        let mutex_tx = Arc::new(Mutex::new(()));
+        let sender: Arc<EthernetSender> =
+            Arc::new(EthernetSender::new(&forwarding_interface, Arc::clone(&mutex_tx)).await);
+
+        // Prepare MessageIdGenerator instance
+        let message_id_generator = get_message_id_generator().await;
+
+        // Prepare AL MAC
+        let al_mac = if let Some(mac) = get_local_al_mac(interface_name.clone()) {
+            tracing::info!("AL MAC address: {}", mac);
+            mac
+        } else {
+            tracing::debug!("No AL MAC ADDRESS calculated, using default.");
+            MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x00) // Default AL MAC if not found
+        };
+
+        // Prepare CMDUHandler
+        let cmdu_handler = CMDUHandler::new(
+            Arc::clone(&sender),
+            Arc::clone(&message_id_generator),
+            al_mac,
+            forwarding_interface.clone(),
+        )
+        .await;
+
+        // Prepare an oversized CMDU exceeding MTU by one byte
+        let cmdu = make_dummy_cmdu(vec![1500 - 8 - 3 + 1]);
+
+        // Prepare both MAC addresses: source and destination one
+        let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
+        let destination_mac = MacAddr::new(0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc);
+
+        // Expect panic in handle_cmdu() as the CMDU size is prepared to have 1501 bytes
+        cmdu_handler
+            .handle_cmdu(&cmdu, source_mac, destination_mac)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_recognition_of_duplicate_fragment() {
+        let mut cmdu0 = make_dummy_cmdu(vec![10, 20]);
+        let mut cmdu1 = make_dummy_cmdu(vec![30, 40]);
+        let mut cmdu2 = make_dummy_cmdu(vec![50, 60]);
+
+        cmdu0.fragment = 0;
+        cmdu1.fragment = 1;
+        cmdu2.fragment = 1;         // duplicated fragment No. 1
+        cmdu2.flags = 0x80;         // set last fragment flag
+
+        let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
+        let fragments = vec![cmdu0, cmdu1, cmdu2];
+        let cmdu_reasm = CmduReassembler::new().await;
+
+        for fragment in fragments.iter() {
+            match cmdu_reasm.push_fragment(source_mac, fragment.clone()).await {
+                Some(Ok(_)) => {
+                    panic!("DuplicatedFragment error expected but CMDU is completely reassembled");
+                }
+                Some(Err(e)) => {
+                    assert_eq!(e, CmduReassemblyError::DuplicatedFragment);
+                    error!("Error reassembling CMDU: {:?}", e);
+                }
+                None => {
+                    trace!("Fragment stored. Waiting for more...");
+                }
+            }
+        }
     }
 }

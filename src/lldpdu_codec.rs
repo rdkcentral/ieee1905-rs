@@ -269,6 +269,7 @@ mod tests {
     use crate::lldpdu_codec::LLDPTLVType;
     use crate::tlv_lldpdu_codec::TLV;
 
+    // Verify the correctness of serialization and parsing
     #[test]
     fn test_lldpdu_serialization_and_parsing() {
         let chassis_id = TLV {
@@ -327,6 +328,7 @@ mod tests {
         assert_eq!(parsed_lldpdu.payload[4], end_of_lldpdu);
     }
 
+    // Verify serialization and parsing of organizationally specific (unknown) TLV
     #[test]
     fn test_lldpdu_with_unknown_tlv() {
         let unknown_tlv = TLV {
@@ -353,6 +355,7 @@ mod tests {
         assert_eq!(parsed.payload[1], end_of_lldpdu);
     }
 
+    // Verify Chassis ID serialization and parsing
     #[test]
     fn test_chassis_id_serialization_and_parsing() {
         let chassis_id_original = ChassisId {
@@ -371,6 +374,7 @@ mod tests {
         assert!(error_parse.is_err());
     }
 
+    // Verify Port ID serialization and parsing
     #[test]
     fn test_port_id_serialization_and_parsing() {
         let port_id_original = PortId {
@@ -389,6 +393,7 @@ mod tests {
         assert!(error_parse.is_err());
     }
 
+    // Verify TTL serialization and parsing
     #[test]
     fn test_time_to_live_serialization_and_parsing() {
         let time_to_live_original = TimeToLiveTLV {
@@ -405,5 +410,4 @@ mod tests {
         let parse_error = TimeToLiveTLV::parse(&time_to_live_bytes, 3);
         assert!(parse_error.is_err());
     }
-
 }

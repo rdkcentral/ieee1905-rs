@@ -208,131 +208,210 @@ impl AlTopologyChange {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    #[test]
-    #[should_panic]
-    fn test_parse_too_short_registration_request() {
-        assert!(AlServiceRegistrationRequest::parse(&[1]).is_ok());
-    }
 
+    // Verify parsing valid registration request
     #[test]
     fn test_parse_proper_registration_request() {
+        // Expect successes parsing valid registration request
         assert!(AlServiceRegistrationRequest::parse(&[1, 1]).is_ok());
         assert_eq!(AlServiceRegistrationRequest::parse(&[1, 1]).unwrap().1.service_operation, ServiceOperation::Enable);
         assert_eq!(AlServiceRegistrationRequest::parse(&[1, 1]).unwrap().1.service_type, ServiceType::EasyMeshAgent);
     }
 
+    // Verify the correctness of parsing valid ServiceOperation codes
     #[test]
     fn test_parse_proper_service_operation() {
+        // Expect successes parsing valid data
+        assert!(ServiceOperation::parse(&[1]).is_ok());
         assert!(ServiceOperation::parse(&[2]).is_ok());
     }
 
-    #[test]
-    #[should_panic]
-    fn test_try_to_parse_inappropriate_service_operation() {
-        assert!(ServiceOperation::parse(&[0]).is_ok());
-    }
-
+    // Verify the correctness of parsing valid ServiceType codes
     #[test]
     fn test_parse_proper_service_type() {
+        // Expect successes
+        assert!(ServiceType::parse(&[1]).is_ok());
         assert!(ServiceType::parse(&[2]).is_ok());
     }
 
-    #[test]
-    #[should_panic]
-    fn test_try_to_parse_inappropriate_service_type() {
-        assert!(ServiceType::parse(&[0]).is_ok());
-    }
-
+    // Verify parsing valid RegistrationResult
     #[test]
     fn test_parse_proper_registration_result() {
+        // Expect successes parsing valid registration result
         assert!(RegistrationResult::parse(&[0]).is_ok());
+        assert!(RegistrationResult::parse(&[1]).is_ok());
         assert!(RegistrationResult::parse(&[2]).is_ok());
         assert!(RegistrationResult::parse(&[3]).is_ok());
+        assert!(RegistrationResult::parse(&[4]).is_ok());
         assert_eq!(RegistrationResult::parse(&[0]).unwrap().1, RegistrationResult::Unknown);
+        assert_eq!(RegistrationResult::parse(&[1]).unwrap().1, RegistrationResult::Success);
+        assert_eq!(RegistrationResult::parse(&[2]).unwrap().1, RegistrationResult::NoRangesAvailable);
+        assert_eq!(RegistrationResult::parse(&[3]).unwrap().1, RegistrationResult::ServiceNotSupported);
+        assert_eq!(RegistrationResult::parse(&[4]).unwrap().1, RegistrationResult::OperationNotSupported);
     }
 
-    #[test]
-    #[should_panic]
-    fn test_try_to_parse_inappropriate_registration_result() {
-        assert!(RegistrationResult::parse(&[5]).is_ok());
-    }
-
-    #[test]
-    fn test_check_consumption_of_registration_result_parser() {
-        // Check if size of returned not used data is correct
-        assert_eq!(RegistrationResult::parse(&[4]).unwrap().0.len(), 0);
-        assert_eq!(RegistrationResult::parse(&[4, 5]).unwrap().0.len(), 1);
-        // Check if not consumed part is properly returned, untouched and unparsed by parser at all
-        assert_eq!(RegistrationResult::parse(&[4, 5, 6, 7]).unwrap().0, &[5, 6, 7]);
-    }
-
-    #[test]
-    fn test_check_consumption_of_registration_request_parser() {
-        // Check if size of returned not used data is correct
-        assert_eq!(AlServiceRegistrationRequest::parse(&[1, 2]).unwrap().0.len(), 0);
-        assert_eq!(AlServiceRegistrationRequest::parse(&[1, 2, 3]).unwrap().0.len(), 1);
-        // Check if not consumed part is properly returned, untouched and unparsed by parser at all
-        assert_eq!(AlServiceRegistrationRequest::parse(&[1, 2, 3, 4, 5]).unwrap().0, &[3, 4, 5]);
-    }
-
+    // Verify serializing and parsing of AlServiceRegistrationResponse
     #[test]
     fn test_registration_response_parse_and_serialize() {
+        // Make MAC address from example data
         let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
+
+        // Prepare vector for AlServiceRegistrationResponse contents
         let mut registration_response_data: Vec<u8> = mac;
+
+        // Prepare starting message_id value
         let start: Vec<u8> = vec![0x00, 0x01];
+
+        // Prepare ending message_id value
         let end: Vec<u8> = vec![0x00, 0x10];
+
+        // Prepare Success as RegistrationResult
         let result = RegistrationResult::Success.serialize();
 
+        // Combine all parts of AlServiceRegistrationResponse together
         registration_response_data.append(&mut start.clone());
         registration_response_data.append(&mut end.clone());
         registration_response_data.push(result);
 
+        // Do the parsing of AlServiceRegistrationResponse
         let parsed = AlServiceRegistrationResponse::parse(&registration_response_data[..]).unwrap().1;
 
+        // Expect success comparing serialized and then parsed data with original ones
         assert_eq!(parsed.serialize(), registration_response_data);
     }
 
+    // Verify serializing and parsing of AlServiceRegistrationRequest
     #[test]
     fn test_registration_request_parse_and_serialize() {
+        // Prepare Enable as ServiceOperation
         let service_operation = ServiceOperation::Enable.serialize();
+
+        // Prepare EasyMeshAgent as ServiceType
         let service_type = ServiceType::EasyMeshAgent.serialize();
 
+        // Prepare AlServiceRegistrationRequest contents
         let registration_request: Vec<u8> = vec![service_operation, service_type];
+
+        // Do the parsing of AlServiceRegistrationRequest
         let parsed = AlServiceRegistrationRequest::parse(&registration_request[..]).unwrap().1;
 
+        // Expect success comparing serialized and then parsed data with original ones
         assert_eq!(parsed.serialize(), registration_request);
     }
 
+    // Verify parsing and serializing of Add type of AlTopologyChange
     #[test]
     fn test_topology_change_parse_and_serialize_add() {
+        // Prepare MAC address from example data
         let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
-        let topology_type = TopologyChangeType::Add.serialize();
-        let mut topology_change_data: Vec<u8> = mac;
 
+        // Prepare Add as TopologyChangeType
+        let topology_type = TopologyChangeType::Add.serialize();
+
+        // Prepare the whole AlTopologyChange contents
+        let mut topology_change_data: Vec<u8> = mac;
         topology_change_data.push(topology_type);
 
+        // Do the parsing of AlTopologyChange
         let parsed = AlTopologyChange::parse(&topology_change_data).unwrap().1;
 
+        // Expect success comparing serialized and then parsed data with original ones
         assert_eq!(topology_change_data, parsed.serialize());
     }
 
+    // Verify parsing and serializing of Delete type of AlTopologyChange
     #[test]
     fn test_topology_change_parse_and_serialize_delete() {
+        // Prepare MAC address from example data
         let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
-        let topology_type = TopologyChangeType::Delete.serialize();
-        let mut topology_change_data: Vec<u8> = mac;
 
+        // Prepare Delete as TopologyChangeType
+        let topology_type = TopologyChangeType::Delete.serialize();
+
+        // Prepare the whole AlTopologyChange contents
+        let mut topology_change_data: Vec<u8> = mac;
         topology_change_data.push(topology_type);
 
+        // Do the parsing of AlTopologyChange
         let parsed = AlTopologyChange::parse(&topology_change_data).unwrap().1;
 
+        // Expect success comparing serialized and then parsed data with original ones
         assert_eq!(topology_change_data, parsed.serialize());
     }
 
+    // Verify trying to parse invalid TopologyChangeType code
     #[test]
     fn test_topology_change_type_parse_invalid() {
+        // Prepare invalid code 5 of TopologyChangeType
         let bind: Vec<u8> = vec![5];
+
+        // Try to parse invalid value of 5
         let topology_type = TopologyChangeType::parse(&bind);
+
+        // Expect error trying to parse invalid value of 5
         assert!(topology_type.is_err());
+    }
+
+    // Verify recognition and signalling of too short registration request
+    #[test]
+    #[should_panic]
+    fn test_parse_too_short_registration_request() {
+        // Expect panic trying to parse one byte request as registration request needs 2 bytes
+        assert!(AlServiceRegistrationRequest::parse(&[1]).is_ok());
+    }
+
+    // Verify recognition and signalling trying to parse invalid ServiceOperation code
+    #[test]
+    #[should_panic]
+    fn test_try_to_parse_inappropriate_service_operation() {
+        // Expect panic trying to parse invalid data
+        assert!(ServiceOperation::parse(&[0]).is_ok());
+    }
+
+    // Verify recognition and signalling trying to parse invalid ServiceType code
+    #[test]
+    #[should_panic]
+    fn test_try_to_parse_inappropriate_service_type() {
+        // Expect panic trying to parse invalid data as 0 is not valid ServiceType code
+        assert!(ServiceType::parse(&[0]).is_ok());
+    }
+
+    // Try to parse some value that is out of range of allowed in enum RegistrationResult
+    #[test]
+    fn test_try_to_parse_inappropriate_registration_result() {
+        // The value of 5 is not allowed (not covered in RegistrationResult enum) so expect ErrorKind::Tag error
+        if let Err(NomErr::Failure(nom::error::Error { code, .. })) = RegistrationResult::parse(&[5]) {
+            assert_eq!(code, ErrorKind::Tag);
+        }
+    }
+
+    // Verify the correctness of parsing and returning not parsed data of RegistrationResult
+    #[test]
+    fn test_check_consumption_of_registration_result_parser() {
+        // Expect none of returned data because of parsing single valid value of 4
+        assert_eq!(RegistrationResult::parse(&[4]).unwrap().0.len(), 0);
+
+        // Expect '5' of returned data because of parsing valid value 4 and additional ignored value of 5
+        assert_eq!(RegistrationResult::parse(&[4, 5]).unwrap().0.len(), 1);
+        assert_eq!(RegistrationResult::parse(&[4, 5]).unwrap().0, &[5]);
+
+        // Check if not consumed part is properly returned, untouched and unparsed by parser at all
+        // Expect returning slice of &[5, 6, 7] values because of parsing: &[4, 5, 6, 7]
+        assert_eq!(RegistrationResult::parse(&[4, 5, 6, 7]).unwrap().0, &[5, 6, 7]);
+    }
+
+    // Verify the correctness of parsing and returning not parsed data of AlServiceRegistrationRequest
+    #[test]
+    fn test_check_consumption_of_registration_request_parser() {
+        // Expect none of returned data because of parsing valid values: &[1, 2]
+        assert_eq!(AlServiceRegistrationRequest::parse(&[1, 2]).unwrap().0.len(), 0);
+
+        // Expect '3' of returned data because of parsing valid: &[1, 2] and ignored value of 3
+        assert_eq!(AlServiceRegistrationRequest::parse(&[1, 2, 3]).unwrap().0.len(), 1);
+        assert_eq!(AlServiceRegistrationRequest::parse(&[1, 2, 3]).unwrap().0, &[3]);
+
+        // Check if not consumed part is properly returned, untouched and unparsed by parser at all
+        // Expect success returning slice of &[3, 4, 5] values because of parsing: &[1, 2, 3, 4, 5]
+        assert_eq!(AlServiceRegistrationRequest::parse(&[1, 2, 3, 4, 5]).unwrap().0, &[3, 4, 5]);
     }
 }

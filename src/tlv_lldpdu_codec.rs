@@ -110,6 +110,7 @@ impl TLV {
 mod tests {
     use super::TLV;
 
+    // Verify the correctness of parsing valid data from a slice
     #[test]
     fn test_parse_with_value() {
         let input = &[0x02, 0x07, b'A', b'B', b'C', b'D', b'E', b'F', b'G'];
@@ -130,13 +131,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_parse_invalid_tlv_len() {
-        let input = &[0x02, 0x09, b'A', b'B', b'C', b'D', b'E', b'F', b'G'];
-        let result = TLV::parse(input);
-        assert!(result.is_err());
-    }
-
+    // Verify serialization of TLV with valid payload
     #[test]
     fn test_serialize_with_value() {
         let tlv = TLV {
@@ -145,11 +140,15 @@ mod tests {
             tlv_value: Some(vec![0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47]),
         };
         let serialized = tlv.serialize();
+
+        // Expect success in serialization process
         assert_eq!(
             serialized,
             vec![0x02, 0x07, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47]
         );
     }
+
+    // Verify serialization of TLV without any payload
     #[test]
     fn test_serialize_without_value() {
         let tlv = TLV {
@@ -158,7 +157,36 @@ mod tests {
             tlv_value: None,
         };
         let serialized = tlv.serialize();
+
+        // Expect success in serialization process
         assert_eq!(serialized, vec![0x02, 0x00]);
     }
+
+    // Try to parse TLV with invalid tlv_length value bigger than the real size of provided data
+    #[test]
+    fn test_parse_invalid_tlv_len_bigger_than_real_one() {
+        // tlv_type = 0x01:  tlv_type is made of 7 most significant bits of value from input[0] == 0x02
+        // tlv_length = 0x09 while there are only 7 bytes of payload
+        let input = &[0x02, 0x09, b'A', b'B', b'C', b'D', b'E', b'F', b'G'];
+        let result = TLV::parse(input);
+
+        // Expect error as a result of parsing because not enough data passed in payload
+        assert!(result.is_err());
+    }
+
+    // Try to parse TLV with invalid tlv_length value smaller than the real size of provided data
+    #[test]
+    fn test_parse_invalid_tlv_len_smaller_than_real_one() {
+        // tlv_type = 0x01:  tlv_type is made of 7 most significant bits of value from input[0] == 0x02
+        // tlv_length = 0x06 while there are 8 bytes of payload
+        let input = &[0x02, 0x06, b'A', b'B', b'C', b'D', b'E', b'F', b'G', b'H'];
+        let result = TLV::parse(input);
+        println!("Parse result: {:?}", result);
+
+        // Expect success as a result of parsing as parser tooks only the number of bytes stored in tlv_length and returns the rest
+        assert!(result.is_ok());
+
+        // Expect that parser returns redundant (not needed) data: &['G', 'H']
+        assert_eq!(result.unwrap().0, &[b'G', b'H']);
+    }
 }
-//TODO add a unit test for the case where the length is smaller than the real data and the other way around

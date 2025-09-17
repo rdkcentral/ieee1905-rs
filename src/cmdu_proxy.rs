@@ -75,14 +75,10 @@ pub async fn cmdu_topology_discovery_transmission(
                 tlv_value: None,
             };
 
-            #[cfg(feature = "size_based_fragmentation")]
             let mut serialized_payload: Vec<u8> = vec![];
-            #[cfg(feature = "size_based_fragmentation")]
-            {
                 serialized_payload.extend(al_mac_tlv.serialize() );
                 serialized_payload.extend( mac_address_tlv.serialize() );
                 serialized_payload.extend( end_of_message_tlv.serialize() );
-            }
 
             // Construct CMDU
             let cmdu_topology_discovery = CMDU {
@@ -92,14 +88,7 @@ pub async fn cmdu_topology_discovery_transmission(
                 message_id,
                 fragment: 0,
                 flags: 0x80,
-                #[cfg(feature = "size_based_fragmentation")]
                 payload: serialized_payload,
-                #[cfg(not(feature = "size_based_fragmentation"))]
-                payload: vec![
-                    al_mac_tlv.clone(),
-                    mac_address_tlv.clone(),
-                    end_of_message_tlv.clone(),
-                ],
             };
             //TODO only size based
 
@@ -187,14 +176,9 @@ pub async fn cmdu_topology_query_transmission(
             tlv_length: 0,
             tlv_value: None,
         };
-        //TODO only size based fragmentation
-        #[cfg(feature = "size_based_fragmentation")]
         let mut serialized_payload: Vec<u8> = vec![];
-        #[cfg(feature = "size_based_fragmentation")]
-        {
             serialized_payload.extend(al_mac_tlv.serialize() );
             serialized_payload.extend( end_of_message_tlv.serialize() );
-        }
         // Construct CMDU
         let cmdu_topology_query = CMDU {
             message_version: 1,
@@ -203,10 +187,7 @@ pub async fn cmdu_topology_query_transmission(
             message_id,
             fragment: 0,
             flags: 0x80,
-            #[cfg(feature = "size_based_fragmentation")]
             payload: serialized_payload,
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![al_mac_tlv, end_of_message_tlv],
         };
 
         let serialized_cmdu = cmdu_topology_query.serialize();
@@ -291,7 +272,7 @@ pub async fn cmdu_topology_response_transmission(
                     "Node AL_MAC={} has no forwarding MAC address, using default IEEE 1905 multicast",
                     remote_al_mac_address
                 );
-                MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13) // we put all zeros 
+                MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13) // we put all zeros
             }
         };
 
@@ -399,15 +380,11 @@ pub async fn cmdu_topology_response_transmission(
             tlv_value: None,
         };
 
-        #[cfg(feature = "size_based_fragmentation")]
         let mut serialized_payload: Vec<u8> = vec![];
-        #[cfg(feature = "size_based_fragmentation")]
-        {
             serialized_payload.extend(al_mac_tlv.serialize() );
             serialized_payload.extend( device_information_tlv.serialize() );
             serialized_payload.extend( ieee_neighbors_tlv.serialize() );
             serialized_payload.extend( end_of_message_tlv.serialize() );
-        }
 
         // Construct the CMDU
         let cmdu_topology_response = CMDU {
@@ -417,15 +394,7 @@ pub async fn cmdu_topology_response_transmission(
             message_id,
             fragment: 0,
             flags: 0x80, // Not fragmented
-            #[cfg(feature = "size_based_fragmentation")]
             payload: serialized_payload,
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![
-                al_mac_tlv,
-                device_information_tlv,
-                ieee_neighbors_tlv,
-                end_of_message_tlv,
-            ],
         };
 
         // Serialize CMDU
@@ -518,13 +487,9 @@ pub async fn cmdu_topology_notification_transmission(
         };
 
 
-        #[cfg(feature = "size_based_fragmentation")]
         let mut serialized_payload: Vec<u8> = vec![];
-        #[cfg(feature = "size_based_fragmentation")]
-        {
             serialized_payload.extend(al_mac_tlv.serialize() );
             serialized_payload.extend( end_of_message_tlv.serialize() );
-        }
 
         // Construct the Topology Notification CMDU
         let cmdu_topology_notification = CMDU {
@@ -534,10 +499,7 @@ pub async fn cmdu_topology_notification_transmission(
             message_id,
             fragment: 0,
             flags: 0x80, // Not fragmented
-            #[cfg(feature = "size_based_fragmentation")]
             payload: serialized_payload,
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![al_mac_tlv, end_of_message_tlv],
         };
 
         // Serialize CMDU
