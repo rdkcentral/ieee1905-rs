@@ -1004,60 +1004,6 @@ mod tests {
     use tokio::sync::Mutex;
     use crate::cmdu_reassembler::CmduReassemblyError;
 
-    // Verify detection of oversized CMDU
-    #[tokio::test]
-    #[should_panic]
-    async fn test_handle_cmdu_function_for_oversized_cmdu() {
-        // Prepare forwarding interface
-        let interface_name = "eth0".to_string();
-        let forwarding_interface =
-            if let Some(iface) = get_forwarding_interface_name(interface_name.clone()) {
-                tracing::info!("Forwarding interface: {}", iface);
-                iface
-            } else {
-                tracing::debug!("No Ethernet interface found for forwarding, using default.");
-                "eth_default".to_string() // Default interface name if none found
-            };
-
-        // Prepare sender
-        let mutex_tx = Arc::new(Mutex::new(()));
-        let sender: Arc<EthernetSender> =
-            Arc::new(EthernetSender::new(&forwarding_interface, Arc::clone(&mutex_tx)).await);
-
-        // Prepare MessageIdGenerator instance
-        let message_id_generator = get_message_id_generator().await;
-
-        // Prepare AL MAC
-        let al_mac = if let Some(mac) = get_local_al_mac(interface_name.clone()) {
-            tracing::info!("AL MAC address: {}", mac);
-            mac
-        } else {
-            tracing::debug!("No AL MAC ADDRESS calculated, using default.");
-            MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x00) // Default AL MAC if not found
-        };
-
-        // Prepare CMDUHandler
-        let cmdu_handler = CMDUHandler::new(
-            Arc::clone(&sender),
-            Arc::clone(&message_id_generator),
-            al_mac,
-            forwarding_interface.clone(),
-        )
-        .await;
-
-        // Prepare an oversized CMDU exceeding MTU by one byte
-        let cmdu = make_dummy_cmdu(vec![1500 - 8 - 3 + 1]);
-
-        // Prepare both MAC addresses: source and destination one
-        let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
-        let destination_mac = MacAddr::new(0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc);
-
-        // Expect panic in handle_cmdu() as the CMDU size is prepared to have 1501 bytes
-        cmdu_handler
-            .handle_cmdu(&cmdu, source_mac, destination_mac)
-            .await;
-    }
-
     // Verify CMDU fragmentation and push_fragment function
     #[tokio::test]
     async fn test_fragmentation_and_push_fragment_function() {
@@ -1292,6 +1238,60 @@ mod tests {
         }
         // Expect success of reassembling CMDU from CMDU fragments
         assert!(reassembled.is_some());
+    }
+
+    // Verify detection of oversized CMDU
+    #[tokio::test]
+    #[should_panic]
+    async fn test_handle_cmdu_function_for_oversized_cmdu() {
+        // Prepare forwarding interface
+        let interface_name = "eth0".to_string();
+        let forwarding_interface =
+            if let Some(iface) = get_forwarding_interface_name(interface_name.clone()) {
+                tracing::info!("Forwarding interface: {}", iface);
+                iface
+            } else {
+                tracing::debug!("No Ethernet interface found for forwarding, using default.");
+                "eth_default".to_string() // Default interface name if none found
+            };
+
+        // Prepare sender
+        let mutex_tx = Arc::new(Mutex::new(()));
+        let sender: Arc<EthernetSender> =
+            Arc::new(EthernetSender::new(&forwarding_interface, Arc::clone(&mutex_tx)).await);
+
+        // Prepare MessageIdGenerator instance
+        let message_id_generator = get_message_id_generator().await;
+
+        // Prepare AL MAC
+        let al_mac = if let Some(mac) = get_local_al_mac(interface_name.clone()) {
+            tracing::info!("AL MAC address: {}", mac);
+            mac
+        } else {
+            tracing::debug!("No AL MAC ADDRESS calculated, using default.");
+            MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x00) // Default AL MAC if not found
+        };
+
+        // Prepare CMDUHandler
+        let cmdu_handler = CMDUHandler::new(
+            Arc::clone(&sender),
+            Arc::clone(&message_id_generator),
+            al_mac,
+            forwarding_interface.clone(),
+        )
+        .await;
+
+        // Prepare an oversized CMDU exceeding MTU by one byte
+        let cmdu = make_dummy_cmdu(vec![1500 - 8 - 3 + 1]);
+
+        // Prepare both MAC addresses: source and destination one
+        let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
+        let destination_mac = MacAddr::new(0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc);
+
+        // Expect panic in handle_cmdu() as the CMDU size is prepared to have 1501 bytes
+        cmdu_handler
+            .handle_cmdu(&cmdu, source_mac, destination_mac)
+            .await;
     }
 
     #[tokio::test]
