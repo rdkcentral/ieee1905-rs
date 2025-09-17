@@ -202,13 +202,18 @@ IEEE1905 has been specified to work in multiple topologies but it is specially u
         As part of the IEEE1905 implementation we will provide the capability to protect the network from having more than one registrar (controller), this will avoid role collisions and split brain scenarios, we will model this feature as follows:
         
         1. We will update the local topology based on the value of the role received during al_sap registration process.
-        2. When local entity registers as EasyMeshController, we will check that there is no other entity acting as controller in the network based on the content of the topology map and in case there is already one we will return an error as "Already a controller in the network"
+        2. The role will be transfered across all the topology as part of the topology response and when more than one registrar is deteceted in the network we will use the tiebreaker function taking in account that remote wins when FALSE and local wins when TRUE:
+            2.1 If an HLE tries to register through al_sap as registrar but remote wins we returns error during registration Already a controller in the network.
+            2.2 If an HLE tries to register through al_sap as register and local wins, we swap the registrar and trigger the notification.
+            2.3 When we receive Topology_response and the current registrar wins we dont update the database (collision avoidance).
+            2.4 When we receive Topology_response and the new registrar wins we update the database and trigger thenotification (collision avoidance).
         3. When local entity registers as EasyMeshController this entity will be the only one granted to send AP-AUTOCONFIG-RESPONSE CMDUs,
-        4. EasyMeshController will not send AP-AUTOCONFIG-SEARCH during the time it is registered as Registrar.
-        5. EasyMeshAgent will not send AP-AUTOCONFIG-RESPONSE during the time it is registered as Agent.
-        6. When there is an entity registered as controller in the topology map if we receive an AP-AUTOCONFIG-RESPONSE from other entity it will be discarded.
-        7. We there is no controller registered via AL_SAP, for instance in case of third party controller, this functionalicty will not be applicable.
+        4. Registrar will not send AP-AUTOCONFIG-SEARCH during the time it is registered as Registrar.
+        5. Registrant will not send AP-AUTOCONFIG-RESPONSE during the time it is registered as Registrant.
+        6. AP-AUTOCONFIG-RESPONSE from other entity it will be discarded if the entity has been not been identified as registrar.
+        7. We there is no Registrar registered in the topology map, for instance in case of third party controller, we will not filter AP-AUTO-CONFIG-RESPONSES but as soon as a registrar appears in the topology map the feature will take effect.
         
+        ![ARCH](docs/architecture/call_flows/registrar_protection.jpg)
 
 
     8.  Path Performance monitoring.
