@@ -1143,6 +1143,355 @@ pub mod tests {
         }
     }
 
+    // Verify the correctness of working to_u8 and from_u8 functions from MessageVersion enum
+    #[test]
+    fn test_message_version_check_version_correctness() {
+        // Expect successes
+        assert_eq!(
+            MessageVersion::Version2013.to_u8(),
+            MessageVersion::from_u8(0).unwrap().to_u8()
+        );
+        assert_eq!(
+            MessageVersion::Version2014.to_u8(),
+            MessageVersion::from_u8(1).unwrap().to_u8()
+        );
+        assert_eq!(
+            MessageVersion::Version2020.to_u8(),
+            MessageVersion::from_u8(2).unwrap().to_u8()
+        );
+        assert_eq!(
+            MessageVersion::Version2025.to_u8(),
+            MessageVersion::from_u8(3).unwrap().to_u8()
+        );
+        assert_eq!(None, MessageVersion::from_u8(4));
+    }
+
+    // Verify the correctness of conversion from u16 to CMDUType enum
+    #[test]
+    fn test_cmdu_type_check_from_u16() {
+        // Expect successes
+        assert_eq!(CMDUType::from_u16(0), CMDUType::TopologyDiscovery);
+        assert_eq!(CMDUType::from_u16(1), CMDUType::TopologyNotification);
+        assert_eq!(CMDUType::from_u16(2), CMDUType::TopologyQuery);
+        assert_eq!(CMDUType::from_u16(3), CMDUType::TopologyResponse);
+        assert_eq!(CMDUType::from_u16(4), CMDUType::Unknown(4));
+        assert_eq!(CMDUType::from_u16(5), CMDUType::LinkMetricQuery);
+        assert_eq!(CMDUType::from_u16(6), CMDUType::LinkMetricResponse);
+        assert_eq!(CMDUType::from_u16(7), CMDUType::ApAutoConfigSearch);
+        assert_eq!(CMDUType::from_u16(8), CMDUType::ApAutoConfigResponse);
+    }
+
+    // Verify function for getting message version of CMDU
+    #[test]
+    fn test_cmdu_type_get_message_version() {
+        // Create a dummy CMDU with message_version field set to 0x1
+        let cmdu = make_dummy_cmdu(vec![100]);
+
+        // Expect success getting message version of CMDU
+        assert_eq!(cmdu.get_message_version(), MessageVersion::from_u8(1));
+    }
+
+    // Verify the correctness of conversion to u16 from CMDUType
+    #[test]
+    fn test_cmdu_type_check_to_u16() {
+        // Expect successes
+        assert_eq!(CMDUType::TopologyDiscovery.to_u16(), 0);
+        assert_eq!(CMDUType::TopologyNotification.to_u16(), 1);
+        assert_eq!(CMDUType::TopologyQuery.to_u16(), 2);
+        assert_eq!(CMDUType::TopologyResponse.to_u16(), 3);
+        assert_eq!(CMDUType::Unknown(4).to_u16(), 4);
+        assert_eq!(CMDUType::LinkMetricQuery.to_u16(), 5);
+        assert_eq!(CMDUType::LinkMetricResponse.to_u16(), 6);
+        assert_eq!(CMDUType::ApAutoConfigSearch.to_u16(), 7);
+        assert_eq!(CMDUType::ApAutoConfigResponse.to_u16(), 8);
+    }
+
+    // Verify the correctness of conversion from u8 to IEEE1905TLVType
+    #[test]
+    fn test_ieee1905_tlv_type_check_from_u8() {
+        // Expect successes
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x00),
+            IEEE1905TLVType::EndOfMessage
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x01),
+            IEEE1905TLVType::AlMacAddress
+        );
+        assert_eq!(IEEE1905TLVType::from_u8(0x02), IEEE1905TLVType::MacAddress);
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x03),
+            IEEE1905TLVType::DeviceInformation
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x04),
+            IEEE1905TLVType::DeviceBridgingCapability
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x05),
+            IEEE1905TLVType::Unknown(0x05)
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x06),
+            IEEE1905TLVType::NonIeee1905NeighborDevices
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x07),
+            IEEE1905TLVType::Ieee1905NeighborDevices
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x0b),
+            IEEE1905TLVType::VendorSpecificInfo
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x0d),
+            IEEE1905TLVType::SearchedRole
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x0f),
+            IEEE1905TLVType::SupportedRole
+        );
+    }
+
+    // Verify the correctness of conversion from IEEE1905TLVType enum to u8
+    #[test]
+    fn test_ieee1905_tlv_type_check_to_u8() {
+        // Expect successes
+        assert_eq!(IEEE1905TLVType::EndOfMessage.to_u8(), 0x00);
+        assert_eq!(IEEE1905TLVType::AlMacAddress.to_u8(), 0x01);
+        assert_eq!(IEEE1905TLVType::MacAddress.to_u8(), 0x02);
+        assert_eq!(IEEE1905TLVType::DeviceInformation.to_u8(), 0x03);
+        assert_eq!(IEEE1905TLVType::DeviceBridgingCapability.to_u8(), 0x04);
+        assert_eq!(IEEE1905TLVType::Unknown(0x05).to_u8(), 0x05);
+        assert_eq!(IEEE1905TLVType::NonIeee1905NeighborDevices.to_u8(), 0x06);
+        assert_eq!(IEEE1905TLVType::Ieee1905NeighborDevices.to_u8(), 0x07);
+        assert_eq!(IEEE1905TLVType::VendorSpecificInfo.to_u8(), 0x0b);
+        assert_eq!(IEEE1905TLVType::SearchedRole.to_u8(), 0x0d);
+        assert_eq!(IEEE1905TLVType::SupportedRole.to_u8(), 0x0f);
+    }
+
+    // Verify changing version by using set_message_version function
+    #[test]
+    fn test_message_version_change() {
+        let mut cmd = CMDU {
+            message_version: MessageVersion::Version2013.to_u8(),
+            reserved: 0,
+            message_type: 0x0001,
+            message_id: 42,
+            fragment: 0,
+            flags: 0x80,  // Single not fragmented CMDU - set lastFragmentIndicator flag
+            payload: vec![],
+        };
+
+        assert_eq!(cmd.message_version, 0x00);
+
+        // Change message version to Version2020
+        cmd.set_message_version(MessageVersion::Version2020);
+
+        // Expect success in changing message version to Version2020
+        assert_eq!(cmd.message_version, 0x02);
+    }
+
+    // Verify the correctness of calculation of total_size field
+    #[test]
+    fn test_total_size() {
+        // Small CMDU with TLVs that fits in one fragment
+        let cmdu = make_dummy_cmdu(vec![100, 200, 300]); // 600 bytes
+
+        assert_eq!(cmdu.total_size(), cmdu.serialize().len());
+    }
+
+    // Verify CMDU fragmentation and reassembly
+    #[test]
+    fn test_fragmentation_and_reassembly() {
+        // TLVs that will force at least 2 fragments
+        let cmdu = make_dummy_cmdu(vec![600, 600, 400]); // ~1600 bytes total
+
+        // Fragment CMDU
+        let fragments = cmdu.clone().fragment(1500);
+        assert!(fragments.len() >= 2, "Should create at least 2 fragments");
+
+        // Check fragments continuity and flags
+        for (i, frag) in fragments.iter().enumerate() {
+            assert_eq!(frag.fragment, i as u8, "Fragment index should be correct");
+        }
+
+        let last = fragments.last().unwrap();
+        assert!(
+            last.flags & 0x80 != 0,
+            "Last fragment must have EndOfMessage flag"
+        );
+
+        // Reassemble
+        let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
+
+        // Compare with original
+        assert_eq!(reassembled.message_type, cmdu.message_type);
+        assert_eq!(reassembled.message_id, cmdu.message_id);
+        assert_eq!(
+            reassembled.payload, cmdu.payload,
+            "Reassembled payload should match original"
+        );
+    }
+
+    // Verify that no CMDU fragmentation will be used for small TLVs fitting one fragment
+    #[test]
+    fn test_fragment_no_fragmentation() {
+        // Small CMDU with 3 TLVSs that fits in one fragment
+        let cmdu = make_dummy_cmdu(vec![100, 200, 300]); // 600 bytes
+
+        let fragments = cmdu.clone().fragment(1500);
+        assert_eq!(fragments.len(), 1, "Only one fragment should be created");
+        let frag = &fragments[0];
+
+        assert_eq!(frag.fragment, 0);
+        assert!(
+            frag.flags & 0x80 != 0,
+            "Single fragment must have EndOfMessage flag"
+        );
+
+        // Reassemble
+        let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
+
+        // Compare with original
+        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
+    }
+
+    // Verify the correctness of fragmentation and reassembly of CMDU with big TLVs
+    #[test]
+    fn test_fragmentation_check_fragments_size() {
+        let cmdu = make_dummy_cmdu(vec![1500 - 8 - 3, 500, 900, 1500 - 8 - 3]);
+
+        // Fragment CMDU
+        let fragments = cmdu.clone().fragment(1500);
+        assert!(fragments.len() >= 3, "Should create at least 3 fragments");
+
+        // Check size of every fragment. Every CMDU fragment (including CMDU header) should have length in range of 11..1500 bytes
+        for (i, frag) in fragments.iter().enumerate() {
+            if frag.is_last_fragment() {
+                // Differentiate between last-first and the last-but-not-first CMDU fragments
+                if i == 0 {
+                    // First and at the same time last CMDU fragment (the only fragment in CMDU chain) in case of size based fragmentation should have minimal size of CMDU header + TLV header without any TLV payload
+                    assert!(frag.total_size() >= 8 + 3, "Fragment {0} should be at least 8+3 bytes but is {1} bytes long",
+                        i, frag.total_size());
+                } else {
+                    // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
+                    assert!(frag.total_size() >= 8 + 1, "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
+                        i, frag.total_size());
+                }
+            }
+            assert!(
+                frag.total_size() <= 1500,
+                "Fragment {} should have maximum 1500 bytes but is {} bytes long",
+                i,
+                frag.total_size()
+            );
+            assert_eq!(frag.fragment, i as u8, "Fragment index should be correct");
+        }
+
+        // Check if the "last fragment" flag is set in last fragment
+        assert!(fragments.last().unwrap().flags & 0x80 != 0, "Last fragment must have lastFragmentIndicator flag set");
+
+        // Reassembling CMDU fragments
+        let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
+
+        // Compare payloads of original CMDU and reassembled one
+        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
+    }
+
+    // Verify the correctness of fragmentation and reassembly of CMDU with one TLV exceeding MTU
+    #[test]
+    fn test_a_few_fragments_with_last_one_exceeding_mtu() {
+        // CMDU with one TLV exceeding MTU size
+        // 1500 bytes of TLV payload + 3 bytes of TLV header exceeds maximal fragment size of 1500 bytes
+        let cmdu = make_dummy_cmdu(vec![400, 500, 1500]); // 2400 bytes of TLVs payload
+
+        // Try to do the fragmentation of CMDU
+        // It should not panic in fragment() as size based fragmentation allows TLV payload bigger than MTU
+        let fragments = cmdu.clone().fragment(1500);
+
+        // Reassembly
+        let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
+
+        // Compare payloads of original CMDU and reassembled one
+        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
+    }
+
+    // Verify the correctness of fragmentation and reassembly of CMDU fitting exactly CMDU size
+    #[test]
+    fn test_single_cmdu_fragment_with_exact_size_of_mtu() {
+        // Create single CMDU that fits exactly in one fragment
+        let cmdu = make_dummy_cmdu(vec![1500 - 8 - 3]); // Whole CMDU (with CMDU header) has 1500 bytes
+
+        // Do the fragmentation on CMDU
+        let fragments = cmdu.clone().fragment(1500);
+        assert_eq!(fragments.len(), 1, "Should create exactly 1 fragment");
+
+        // Check if total size of single CMDU (first and at the same time last) meets requirement of minimal size of the fragment
+        assert!(
+            fragments[0].total_size() >= 8 + 3,
+            "Empty CMDU payload. CMDU fragment should be at least 8+3 bytes (CMDU header + endOfMessageTlv) but is {:?} bytes long",
+            fragments[0].total_size());
+
+        // Check if total size of CMDU meets requirement of maximal size of the fragment
+        assert!(
+            fragments[0].total_size() <= 1500,
+            "CMDU fragment should have maximum 1500 bytes but is {:?} bytes long",
+            fragments[0].total_size());
+
+        // Reassembly
+        let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
+
+        // Compare payloads of original CMDU and reassembled one
+        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
+    }
+
+    // Verify fragmentation of CMDU with payload bigger than 1500 bytes
+    #[test]
+    fn test_fragmentation() {
+        // Prepare big CMDU with TLV chain exceeding 1500 bytes
+        let mut huge_cmdu = make_dummy_cmdu(vec![500, 500, 500, 500]);
+
+        // Set LastFragmentIndicator flag on this CMDU
+        huge_cmdu.flags = 0x80;
+
+        // Do the fragmentation
+        let fragmented_cmdus = huge_cmdu.fragment(1500);
+
+        // Count number of CMDU fragments
+        let no_of_fragments = fragmented_cmdus.len();
+
+        // Expect exactly 2 CMDU fragments
+        assert!(no_of_fragments == 2);
+
+        assert!(!fragmented_cmdus.first().unwrap().is_last_fragment());
+        assert!(fragmented_cmdus.last().unwrap().is_last_fragment());
+    }
+
+    // Check recognition and signalling of fragmented CMDU
+    #[test]
+    fn test_check_fragmented_cmdu() {
+        let end_of_message_tlv = TLV {
+            tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
+            tlv_length: 0,
+            tlv_value: None,
+        };
+
+        let whole_payload = end_of_message_tlv.serialize();
+
+        // Make fragmented CMDU with bit 7 unset in flags field
+        let cmdu = CMDU {
+            message_version: 0x01,
+            reserved: 0x00,
+            message_type: CMDUType::Unknown(0x08).to_u16(),
+            message_id: 0x1234,
+            fragment: 0x01,
+            flags: 0x00,           // Bit 7 must not be set to be recognized as fragmented CMDU
+            payload: whole_payload,
+        };
+        assert!(cmdu.is_fragmented());
+    }
+
     // Verify serializing and parsing IEEE 1905 neighbor device
     #[test]
     fn test_ieee1905_neighbor_device_parse_and_serialize() {
@@ -1226,45 +1575,6 @@ pub mod tests {
             serialized, raw_bytes,
             "Serialized output did not match input"
         );
-    }
-
-    // Try to parse invalid vendor specific info element (not enough data for OUI)
-    #[test]
-    fn test_vendor_specific_info_parse_invalid_length() {
-        // Only 2 bytes of OUI provided (invalid). Should be 3 bytes.
-        let input = vec![0x01, 0x02];
-        let input_length = input.len() as u16;
-
-        // Expect failure as the OUI is too short (2 bytes instead of 3)
-        let result = VendorSpecificInfo::parse(&input, input_length);
-        assert!(
-            result.is_err(),
-            "Expected parsing to fail due to insufficient length"
-        );
-    }
-
-    // Check recognition and signalling of fragmented CMDU
-    #[test]
-    fn test_check_fragmented_cmdu() {
-        let end_of_message_tlv = TLV {
-            tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
-            tlv_length: 0,
-            tlv_value: None,
-        };
-
-        let whole_payload = end_of_message_tlv.serialize();
-
-        // Make fragmented CMDU with bit 7 unset in flags field
-        let cmdu = CMDU {
-            message_version: 0x01,
-            reserved: 0x00,
-            message_type: CMDUType::Unknown(0x08).to_u16(),
-            message_id: 0x1234,
-            fragment: 0x01,
-            flags: 0x00,           // Bit 7 must not be set to be recognized as fragmented CMDU
-            payload: whole_payload,
-        };
-        assert!(cmdu.is_fragmented());
     }
 
     // Verify serializing and parsing topology discovery CMDU
@@ -1514,62 +1824,6 @@ pub mod tests {
         assert_eq!(cmdu_autoconfig_response, parsed_cmdus);
     }
 
-    // Try to serialize and parse AP autoconfig search CMDU with invalid role
-    #[test]
-    fn test_ap_autoconfig_search_with_invalid_role_should_fail() {
-        use nom::error::ErrorKind;
-        use nom::Err;
-
-        let searched_role_value = SearchedRole { role: 0x01 };
-        let searched_role_tlv = TLV {
-            tlv_type: IEEE1905TLVType::SearchedRole.to_u8(),
-            tlv_length: 1,
-            tlv_value: Some(searched_role_value.serialize()),
-        };
-
-        let end_of_message_tlv = TLV {
-            tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
-            tlv_length: 0,
-            tlv_value: None,
-        };
-        let mut serialized_payload: Vec<u8> = vec![];
-        serialized_payload.extend(searched_role_tlv.clone().serialize());
-        serialized_payload.extend(end_of_message_tlv.clone().serialize());
-        let cmdu = CMDU {
-            message_version: 1,
-            reserved: 0,
-            message_type: CMDUType::ApAutoConfigSearch.to_u16(),
-            message_id: 43,
-            fragment: 0,
-            flags: 0x80, // Single not fragmented CMDU - set lastFragmentIndicator flag
-            payload: serialized_payload,
-        };
-
-        let serialized = cmdu.serialize();
-        let parsed = CMDU::parse(&serialized).unwrap().1;
-
-        let tlvs = parsed.get_tlvs();
-        let searched_tlv = tlvs
-            .iter()
-            .find(|tlv| tlv.tlv_type == IEEE1905TLVType::SearchedRole.to_u8())
-            .expect("SearchedRole TLV not found");
-
-        let value = searched_tlv
-            .tlv_value
-            .as_ref()
-            .expect("SearchedRole TLV has no value");
-
-        let result = SearchedRole::parse(value, searched_tlv.tlv_length);
-
-        match result {
-            Err(Err::Failure(e)) => assert_eq!(e.code, ErrorKind::Verify),
-            Ok(_) => panic!(
-                "Expected failure due to invalid role value (not 0x00), but parsing succeeded."
-            ),
-            Err(e) => panic!("Expected Failure(Verify), but got different error: {:?}", e),
-        }
-    }
-
     // Verify serializing and parsing AP autoconfig search CMDU with proper role
     #[test]
     fn test_ap_autoconfig_search_with_proper_role() {
@@ -1617,23 +1871,6 @@ pub mod tests {
         assert!(result.is_ok());
     }
 
-    // Try to parse invalid role
-    #[test]
-    fn test_supported_role_invalid_role() {
-        let role = SupportedRole { role: 0x01 };
-        let serialized = role.serialize();
-        let parsed = SupportedRole::parse(&serialized[..], serialized.len() as u16);
-
-        // Expect ErrorKind::Verify because role 0x01 is not valid
-        match parsed {
-            Err(nom::Err::Failure(e)) => assert_eq!(e.code, ErrorKind::Verify),
-            Ok(_) => panic!(
-                "Expected failure due to invalid role value (not 0x00), but parsing succeeded."
-            ),
-            Err(e) => panic!("Expected Failure(Verify), but got different error: {:?}", e),
-        }
-    }
-
     // Verify serializing and parsing valid role
     #[test]
     fn test_supported_role_parse_and_serialize() {
@@ -1644,225 +1881,6 @@ pub mod tests {
 
         // Expect that parsing succeed
         assert_eq!(role, parsed.unwrap().1);
-    }
-
-    // Try to serialize and parse unknown CMDU type
-    #[test]
-    fn test_unknown_cmdus() {
-        let unknown_tlvs: Vec<TLV> = (0..6)
-            .map(|i| TLV {
-                tlv_type: 0xA0 + i, // Arbitrary unknown TLV types
-                tlv_length: 4,
-                tlv_value: Some(vec![i, (i + 1), (i + 2), (i + 3)]),
-            })
-            .collect();
-
-        let end_of_message_tlv = TLV {
-            tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
-            tlv_length: 0,
-            tlv_value: None,
-        };
-
-        let mut serialized_payload: Vec<u8> = vec![];
-        for tlv in unknown_tlvs {
-            serialized_payload.extend(tlv.serialize());
-        }
-        serialized_payload.extend(end_of_message_tlv.clone().serialize());
-
-        // Create CMDU of unknown type
-        let cmdu_unknown = CMDU {
-            message_version: 1,
-            reserved: 0,
-            message_type: 0xFFFF, // Unknown CMDUType
-            message_id: 999,
-            fragment: 0,
-            flags: 0x80, // Single not fragmented CMDU - set lastFragmentIndicator flag
-            payload: serialized_payload,
-        };
-
-        let serialized_unknown = cmdu_unknown.serialize();
-        let parsed_unknown = CMDU::parse(&serialized_unknown).unwrap().1;
-
-        assert_eq!(cmdu_unknown, parsed_unknown);
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_unknown_tlv() {
-        let end_of_message_tlv = TLV {
-            tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
-            tlv_length: 1, // Set wrong length as 1 but should be 0 as tlv_value == None below
-            tlv_value: None,
-        };
-
-        let cmdu_topology_query = CMDU {
-            message_version: 1,
-            reserved: 0,
-            message_type: CMDUType::TopologyQuery.to_u16(),
-            message_id: 789,
-            fragment: 0,
-            flags: 0x80, // Not fragmented
-            payload: end_of_message_tlv.clone().serialize(),
-        };
-
-        let serialized_query = cmdu_topology_query.serialize();
-        let parsed_query = CMDU::parse(&serialized_query).unwrap().1;
-
-        assert_eq!(cmdu_topology_query, parsed_query);
-    }
-
-    // Verify CMDU fragmentation and reassembly
-    #[test]
-    fn test_fragmentation_and_reassembly() {
-        // TLVs that will force at least 2 fragments
-        let cmdu = make_dummy_cmdu(vec![600, 600, 400]); // ~1600 bytes total
-
-        // Fragment CMDU
-        let fragments = cmdu.clone().fragment(1500);
-        assert!(fragments.len() >= 2, "Should create at least 2 fragments");
-
-        // Check fragments continuity and flags
-        for (i, frag) in fragments.iter().enumerate() {
-            assert_eq!(frag.fragment, i as u8, "Fragment index should be correct");
-        }
-
-        let last = fragments.last().unwrap();
-        assert!(
-            last.flags & 0x80 != 0,
-            "Last fragment must have EndOfMessage flag"
-        );
-
-        // Reassemble
-        let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
-
-        // Compare with original
-        assert_eq!(reassembled.message_type, cmdu.message_type);
-        assert_eq!(reassembled.message_id, cmdu.message_id);
-        assert_eq!(
-            reassembled.payload, cmdu.payload,
-            "Reassembled payload should match original"
-        );
-    }
-
-    // Verify that no CMDU fragmentation will be used for small TLVs fitting one fragment
-    #[test]
-    fn test_fragment_no_fragmentation() {
-        // Small CMDU with 3 TLVSs that fits in one fragment
-        let cmdu = make_dummy_cmdu(vec![100, 200, 300]); // 600 bytes
-
-        let fragments = cmdu.clone().fragment(1500);
-        assert_eq!(fragments.len(), 1, "Only one fragment should be created");
-        let frag = &fragments[0];
-
-        assert_eq!(frag.fragment, 0);
-        assert!(
-            frag.flags & 0x80 != 0,
-            "Single fragment must have EndOfMessage flag"
-        );
-
-        // Reassemble
-        let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
-
-        // Compare with original
-        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
-    }
-
-    // Verify the correctness of fragmentation and reassembly of CMDU with big TLVs
-    #[test]
-    fn test_fragmentation_check_fragments_size() {
-        let cmdu = make_dummy_cmdu(vec![1500 - 8 - 3, 500, 900, 1500 - 8 - 3]);
-
-        // Fragment CMDU
-        let fragments = cmdu.clone().fragment(1500);
-        assert!(fragments.len() >= 3, "Should create at least 3 fragments");
-
-        // Check size of every fragment. Every CMDU fragment (including CMDU header) should have length in range of 11..1500 bytes
-        for (i, frag) in fragments.iter().enumerate() {
-            if frag.is_last_fragment() {
-                // Differentiate between last-first and the last-but-not-first CMDU fragments
-                if i == 0 {
-                    // First and at the same time last CMDU fragment (the only fragment in CMDU chain) in case of size based fragmentation should have minimal size of CMDU header + TLV header without any TLV payload
-                    assert!(frag.total_size() >= 8 + 3, "Fragment {0} should be at least 8+3 bytes but is {1} bytes long",
-                        i, frag.total_size());
-                } else {
-                    // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
-                    assert!(frag.total_size() >= 8 + 1, "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
-                        i, frag.total_size());
-                }
-            }
-            assert!(
-                frag.total_size() <= 1500,
-                "Fragment {} should have maximum 1500 bytes but is {} bytes long",
-                i,
-                frag.total_size()
-            );
-            assert_eq!(frag.fragment, i as u8, "Fragment index should be correct");
-        }
-
-        // Check if the "last fragment" flag is set in last fragment
-        assert!(fragments.last().unwrap().flags & 0x80 != 0, "Last fragment must have lastFragmentIndicator flag set");
-
-        // Reassembling CMDU fragments
-        let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
-
-        // Compare payloads of original CMDU and reassembled one
-        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
-    }
-
-    // Verify the correctness of calculation of total_size field
-    #[test]
-    fn test_total_size() {
-        // Small CMDU with TLVs that fits in one fragment
-        let cmdu = make_dummy_cmdu(vec![100, 200, 300]); // 600 bytes
-
-        assert_eq!(cmdu.total_size(), cmdu.serialize().len());
-    }
-
-    // Verify the correctness of fragmentation and reassembly of CMDU with one TLV exceeding MTU
-    #[test]
-    fn test_a_few_fragments_with_last_one_exceeding_mtu() {
-        // CMDU with one TLV exceeding MTU size
-        // 1500 bytes of TLV payload + 3 bytes of TLV header exceeds maximal fragment size of 1500 bytes
-        let cmdu = make_dummy_cmdu(vec![400, 500, 1500]); // 2400 bytes of TLVs payload
-
-        // Try to do the fragmentation of CMDU
-        // It should not panic in fragment() as size based fragmentation allows TLV payload bigger than MTU
-        let fragments = cmdu.clone().fragment(1500);
-
-        // Reassembly
-        let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
-
-        // Compare payloads of original CMDU and reassembled one
-        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
-    }
-
-    // Verify the correctness of fragmentation and reassembly of CMDU fitting exactly CMDU size
-    #[test]
-    fn test_single_cmdu_fragment_with_exact_size_of_mtu() {
-        // Create single CMDU that fits exactly in one fragment
-        let cmdu = make_dummy_cmdu(vec![1500 - 8 - 3]); // Whole CMDU (with CMDU header) has 1500 bytes
-
-        // Do the fragmentation on CMDU
-        let fragments = cmdu.clone().fragment(1500);
-        assert_eq!(fragments.len(), 1, "Should create exactly 1 fragment");
-
-        // Check if total size of single CMDU (first and at the same time last) meets requirement of minimal size of the fragment
-        assert!(
-            fragments[0].total_size() >= 8 + 3,
-            "Empty CMDU payload. CMDU fragment should be at least 8+3 bytes (CMDU header + endOfMessageTlv) but is {:?} bytes long",
-            fragments[0].total_size());
-
-        // Check if total size of CMDU meets requirement of maximal size of the fragment
-        assert!(
-            fragments[0].total_size() <= 1500,
-            "CMDU fragment should have maximum 1500 bytes but is {:?} bytes long",
-            fragments[0].total_size());
-
-        // Reassembly
-        let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
-
-        // Compare payloads of original CMDU and reassembled one
-        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
     }
 
     // Verify serializing and parsing CMDU with empty TLV list
@@ -1879,144 +1897,6 @@ pub mod tests {
 
         // Compare original CMDU with the one processed by serializer and parser
         assert_eq!(cmdu, parsed.unwrap().1);
-    }
-
-    // Verify fragmentation and reassembly on CMDU with size of 1501 bytes
-    #[test]
-    fn test_single_cmdu_fragment_with_size_of_mtu_plus_one() {
-        // Single CMDU that exceeds MTU (1500 bytes) by one byte
-        let cmdu = make_dummy_cmdu(vec![1500 - 8 - 3 + 1]); // Whole CMDU (with CMDU header) has 1501 bytes
-
-        // Do the fragmentation on CMDU
-        let fragments = cmdu.clone().fragment(1500);
-
-        for (i, frag) in fragments.iter().enumerate() {
-            if frag.is_last_fragment() {
-                // Differentiate between last-first and the last-but-not-first CMDU fragments
-                if i == 0 {
-                    // First and at the same time last CMDU fragment (the only fragment in CMDU chain) in case of size based fragmentation should have minimal size of CMDU header + TLV header without any TLV payload
-                    assert!(frag.total_size() >= 8 + 3, "Fragment {0} should be at least 8+3 bytes but is {1} bytes long",
-                        i, frag.total_size());
-                } else {
-                    // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
-                    assert!(frag.total_size() >= 8 + 1, "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
-                        i, frag.total_size());
-                }
-            }
-            assert!(
-                frag.total_size() <= 1500,
-                "Fragment {} should have maximum 1500 bytes but is {} bytes long",
-                i,
-                frag.total_size()
-            );
-            assert_eq!(frag.fragment, i as u8, "Fragment index should be correct");
-        }
-
-        // Check if the "last fragment" flag is set in last fragment
-        assert!(fragments.last().unwrap().flags & 0x80 != 0, "Last fragment must have LastFragmentIndicator flag set");
-
-        // Reassembling CMDU fragments
-        let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
-
-        // Compare payloads of original CMDU and reassembled one
-        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
-    }
-
-    // Verify changing version by using set_message_version function
-    #[test]
-    fn test_message_version_change() {
-        let mut cmd = CMDU {
-            message_version: MessageVersion::Version2013.to_u8(),
-            reserved: 0,
-            message_type: 0x0001,
-            message_id: 42,
-            fragment: 0,
-            flags: 0x80,  // Single not fragmented CMDU - set lastFragmentIndicator flag
-            payload: vec![],
-        };
-
-        assert_eq!(cmd.message_version, 0x00);
-
-        // Change message version to Version2020
-        cmd.set_message_version(MessageVersion::Version2020);
-
-        // Expect success in changing message version to Version2020
-        assert_eq!(cmd.message_version, 0x02);
-    }
-
-    // Verify recognizing and signalling of "empty fragments" condition
-    #[test]
-    fn test_empty_fragment_list() {
-        let fragments: Vec<CMDU> = Vec::new();
-
-        // Trying to reassemble empty fragment should return EmptyFragments error
-        let reassembled = CMDU::reassemble(fragments).expect_err("Reassembly shouldn't succeed on empty fragment list");
-
-        // Expect EmptyFragments error
-        assert_eq!(reassembled, CmduReassemblyError::EmptyFragments);
-    }
-
-    // Verify recognizing and signalling of "inconsistent metadata" condition
-    #[test]
-    fn test_inconsistent_data() {
-        let cmdu1 = make_dummy_cmdu(vec![100, 200, 300]);
-        let mut cmdu2 = make_dummy_cmdu(vec![400, 500, 600]);
-
-        // Override message_id with a value different than default 0x1234 to make CMDU fragments chain inconsistent
-        cmdu2.message_id = 0x6789;
-
-        // Make a chain of CMDUs
-        let fragments: Vec<CMDU> = vec![cmdu1, cmdu2];
-
-        // Trying to reassemble inconsistent CMDU chain should return error: InconsistentMetadata
-        let reassembled = CMDU::reassemble(fragments).expect_err("Reassembly shouldn't succeed on inconsistent CMDUs");
-
-        // Expect InconsistentMetadata error
-        assert_eq!(reassembled, CmduReassemblyError::InconsistentMetadata);
-    }
-
-    // Verify lack of CMDU fragment in CMDU chain
-    #[test]
-    fn test_missing_fragments() {
-        let mut cmdu1 = make_dummy_cmdu(vec![100, 200, 300]);
-        let mut cmdu2 = make_dummy_cmdu(vec![400, 500, 600]);
-
-        // Override fragment_id with a not consecutive values
-        cmdu1.fragment = 0x0;
-
-        // Enforce fragment No. 2 to simulate missing fragment No. 1
-        cmdu2.fragment = 0x2;
-
-        // Make CMDU chain
-        let fragments: Vec<CMDU> = vec![cmdu1, cmdu2];
-        let reassembled = CMDU::reassemble(fragments)
-            .expect_err("Reassembly shouldn't succeed on missed fragment");
-
-        assert_eq!(reassembled, CmduReassemblyError::MissingFragments);
-    }
-
-    // Check detection and signalling of missing last fragment in CMDU fragments chain
-    #[test]
-    fn test_missing_end_of_message() {
-        let mut cmdu1 = make_dummy_cmdu(vec![100, 200, 300]);
-        let mut cmdu2 = make_dummy_cmdu(vec![400, 500, 600]);
-
-        // Override fragment_id with consecutive values
-        cmdu1.fragment = 0x0;
-        cmdu2.fragment = 0x1;
-
-        // Override flags field with value with bit 7 (lastFragmentIndicator) cleared to simulate missing last fragment
-        cmdu1.flags = 0x0;
-        cmdu2.flags = 0x0;
-
-        // Make CMDU chain
-        let fragments: Vec<CMDU> = vec![cmdu1, cmdu2];
-
-        // Trying to parse CMDU chain should result in error: MissingLastFragment
-        let reassembled = CMDU::reassemble(fragments).expect_err("Reassembly shouldn't succeed on missed LastFragment flag");
-
-        // Expect MissingLastFragment error
-        assert_eq!(reassembled, CmduReassemblyError::MissingLastFragment);
     }
 
     // Verify parsing and serializing cycle on LocalInterface data
@@ -2039,23 +1919,6 @@ pub mod tests {
 
         // Expect success comparing serialized data and original
         assert_eq!(local_interface.serialize(), data);
-    }
-
-    // Try to parse slice with not enough of data for LocalInterface
-    #[test]
-    fn test_local_interface_parse_too_small_data() {
-        // Prepare slice with not enough data to parse (7 bytes only)
-        let data = &[1, 2, 3, 4, 5, 6, 7];
-
-        // Expect ErrorKind::Eof error trying to parse provided too small slice of data
-        match LocalInterface::parse(data) {
-            Err(NomErr::Failure(err)) => {
-                assert_eq!(err.code, ErrorKind::Eof)
-            }
-            Ok(_) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => {
-                panic!("ErrorKind::Eof should be returned");
-            }
-        }
     }
 
     // Verify parsing and serializing of DeviceInformation data
@@ -2081,35 +1944,6 @@ pub mod tests {
         }
     }
 
-    // Try to parse DeviceInformation data with redundant, not needed dummy byte: 0xFF
-    #[test]
-    fn test_device_information_try_to_parse_too_many_data() {
-        let mut local_interface_data: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02, 0x00, 0x01, 0x00];
-
-        // Compose DeviceInformation from: MAC address + number of local interfaces + list of local interfaces
-        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
-        let mut device_information_data: Vec<u8> = mac;
-
-        // Set number of local interfaces to 1
-        device_information_data.push(0x1);
-
-        // Append LocalInterface data
-        device_information_data.append(&mut local_interface_data);
-
-        // Add dummy, not needed byte 0xFF
-        device_information_data.push(0xff);
-
-        let len = device_information_data.len() as u16;
-
-        // Expect LenghtValue error trying to parse the DeviceInformation data because of one dummy, not needed byte: 0xFF
-        match DeviceInformation::parse(device_information_data.as_slice(), len) {
-            Err(NomErr::Failure(err)) => {
-                assert_eq!(err.code, ErrorKind::LengthValue);
-            }
-            Ok((_, _)) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => panic!("Failure::LengthValue should be returned")
-        };
-    }
-
     // Verify serializing and parsing valid BridgingTuple data
     #[test]
     fn test_bridging_tuple_parse_and_serialize() {
@@ -2130,24 +1964,6 @@ pub mod tests {
             Err(nom::Err::Incomplete(_)) | Err(NomErr::Failure(_)) | Err(nom::Err::Error(_)) =>
                 panic!("Parsing of serialized data should succeed, but it didn't"),
         };
-    }
-
-    // Verify trying to parse not complete (too short) BridgingTuple data
-    #[test]
-    fn test_bridging_tuple_not_enough_data() {
-        // One MAC address counter + trimmed MAC address to 5 bytes
-        let data = &[0x01, 0x02, 0x42, 0xc0, 0xa8, 0x64];
-
-        // Try to parse not enough data for BridgingTuple
-        let bridging_tuple = BridgingTuple::parse(data);
-
-        // Expect ErrorKind::Eof error after trying to parse not complete BridgingTuple data
-        match bridging_tuple {
-            Err(NomErr::Failure(err)) => {
-                assert_eq!(err.code, ErrorKind::Eof);
-            }
-            Ok(_) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => panic!("ErrorKind::Eof should be returned")
-        }
     }
 
     // Verify serializing and parsing DeviceBridgingCapability data
@@ -2230,6 +2046,234 @@ pub mod tests {
         assert_eq!(parsed.serialize(), neighbor_devices);
     }
 
+    // Verify parsing and serializing AL MAC address
+    #[test]
+    fn test_al_mac_address_parse_and_serialize() {
+        // Prepare example local MAC address
+        let al_mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
+
+        // Parse provided example data as AL MAC address
+        let parsed = AlMacAddress::parse(&al_mac[..], al_mac.len() as u16).unwrap().1;
+
+        // Expect success comparing parsed and then serialized AL MAC address with original one
+        assert_eq!(parsed.serialize(), al_mac);
+    }
+
+    // Verify parsing and serializing MAC address
+    #[test]
+    fn test_mac_address_parse_and_serialize() {
+        // Prepare example vector with valid MAC address
+        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
+
+        // Do the parsing as MacAddress
+        let parsed = MacAddress::parse(&mac[..], mac.len() as u16).unwrap().1;
+
+        // Expect success comparing parsed and then serialized MAC address with original one
+        assert_eq!(parsed.serialize(), mac);
+    }
+
+    // Verify parsing incomplete data (only 5 bytes from 6 required for MAC address) as AlMacAddress
+    #[test]
+    #[should_panic]
+    fn test_mac_address_try_to_parse_not_enough_data() {
+        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64];
+        let _ = MacAddress::parse(&mac[..], mac.len() as u16).unwrap().1;
+    }
+
+    // Unit tests using malformed data
+
+    // Try to parse invalid vendor specific info element (not enough data for OUI)
+    #[test]
+    fn test_vendor_specific_info_parse_invalid_length() {
+        // Only 2 bytes of OUI provided (invalid). Should be 3 bytes.
+        let input = vec![0x01, 0x02];
+        let input_length = input.len() as u16;
+
+        // Expect failure as the OUI is too short (2 bytes instead of 3)
+        let result = VendorSpecificInfo::parse(&input, input_length);
+        assert!(
+            result.is_err(),
+            "Expected parsing to fail due to insufficient length"
+        );
+    }
+
+    // Try to serialize and parse AP autoconfig search CMDU with invalid role
+    #[test]
+    fn test_ap_autoconfig_search_with_invalid_role_should_fail() {
+        use nom::error::ErrorKind;
+        use nom::Err;
+
+        let searched_role_value = SearchedRole { role: 0x01 };
+        let searched_role_tlv = TLV {
+            tlv_type: IEEE1905TLVType::SearchedRole.to_u8(),
+            tlv_length: 1,
+            tlv_value: Some(searched_role_value.serialize()),
+        };
+
+        let end_of_message_tlv = TLV {
+            tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
+            tlv_length: 0,
+            tlv_value: None,
+        };
+        let mut serialized_payload: Vec<u8> = vec![];
+        serialized_payload.extend(searched_role_tlv.clone().serialize());
+        serialized_payload.extend(end_of_message_tlv.clone().serialize());
+        let cmdu = CMDU {
+            message_version: 1,
+            reserved: 0,
+            message_type: CMDUType::ApAutoConfigSearch.to_u16(),
+            message_id: 43,
+            fragment: 0,
+            flags: 0x80, // Single not fragmented CMDU - set lastFragmentIndicator flag
+            payload: serialized_payload,
+        };
+
+        let serialized = cmdu.serialize();
+        let parsed = CMDU::parse(&serialized).unwrap().1;
+
+        let tlvs = parsed.get_tlvs();
+        let searched_tlv = tlvs
+            .iter()
+            .find(|tlv| tlv.tlv_type == IEEE1905TLVType::SearchedRole.to_u8())
+            .expect("SearchedRole TLV not found");
+
+        let value = searched_tlv
+            .tlv_value
+            .as_ref()
+            .expect("SearchedRole TLV has no value");
+
+        let result = SearchedRole::parse(value, searched_tlv.tlv_length);
+
+        match result {
+            Err(Err::Failure(e)) => assert_eq!(e.code, ErrorKind::Verify),
+            Ok(_) => panic!(
+                "Expected failure due to invalid role value (not 0x00), but parsing succeeded."
+            ),
+            Err(e) => panic!("Expected Failure(Verify), but got different error: {:?}", e),
+        }
+    }
+
+    // Try to parse invalid role
+    #[test]
+    fn test_supported_role_invalid_role() {
+        let role = SupportedRole { role: 0x01 };
+        let serialized = role.serialize();
+        let parsed = SupportedRole::parse(&serialized[..], serialized.len() as u16);
+
+        // Expect ErrorKind::Verify because role 0x01 is not valid
+        match parsed {
+            Err(nom::Err::Failure(e)) => assert_eq!(e.code, ErrorKind::Verify),
+            Ok(_) => panic!(
+                "Expected failure due to invalid role value (not 0x00), but parsing succeeded."
+            ),
+            Err(e) => panic!("Expected Failure(Verify), but got different error: {:?}", e),
+        }
+    }
+
+    // Try to serialize and parse unknown CMDU type
+    #[test]
+    fn test_unknown_cmdus() {
+        let unknown_tlvs: Vec<TLV> = (0..6)
+            .map(|i| TLV {
+                tlv_type: 0xA0 + i, // Arbitrary unknown TLV types
+                tlv_length: 4,
+                tlv_value: Some(vec![i, (i + 1), (i + 2), (i + 3)]),
+            })
+            .collect();
+
+        let end_of_message_tlv = TLV {
+            tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
+            tlv_length: 0,
+            tlv_value: None,
+        };
+
+        let mut serialized_payload: Vec<u8> = vec![];
+        for tlv in unknown_tlvs {
+            serialized_payload.extend(tlv.serialize());
+        }
+        serialized_payload.extend(end_of_message_tlv.clone().serialize());
+
+        // Create CMDU of unknown type
+        let cmdu_unknown = CMDU {
+            message_version: 1,
+            reserved: 0,
+            message_type: 0xFFFF, // Unknown CMDUType
+            message_id: 999,
+            fragment: 0,
+            flags: 0x80, // Single not fragmented CMDU - set lastFragmentIndicator flag
+            payload: serialized_payload,
+        };
+
+        let serialized_unknown = cmdu_unknown.serialize();
+        let parsed_unknown = CMDU::parse(&serialized_unknown).unwrap().1;
+
+        assert_eq!(cmdu_unknown, parsed_unknown);
+    }
+
+    // Try to parse slice with not enough of data for LocalInterface
+    #[test]
+    fn test_local_interface_parse_too_small_data() {
+        // Prepare slice with not enough data to parse (7 bytes only)
+        let data = &[1, 2, 3, 4, 5, 6, 7];
+
+        // Expect ErrorKind::Eof error trying to parse provided too small slice of data
+        match LocalInterface::parse(data) {
+            Err(NomErr::Failure(err)) => {
+                assert_eq!(err.code, ErrorKind::Eof)
+            }
+            Ok(_) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => {
+                panic!("ErrorKind::Eof should be returned");
+            }
+        }
+    }
+
+    // Try to parse DeviceInformation data with redundant, not needed dummy byte: 0xFF
+    #[test]
+    fn test_device_information_try_to_parse_too_many_data() {
+        let mut local_interface_data: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02, 0x00, 0x01, 0x00];
+
+        // Compose DeviceInformation from: MAC address + number of local interfaces + list of local interfaces
+        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
+        let mut device_information_data: Vec<u8> = mac;
+
+        // Set number of local interfaces to 1
+        device_information_data.push(0x1);
+
+        // Append LocalInterface data
+        device_information_data.append(&mut local_interface_data);
+
+        // Add dummy, not needed byte 0xFF
+        device_information_data.push(0xff);
+
+        let len = device_information_data.len() as u16;
+
+        // Expect LenghtValue error trying to parse the DeviceInformation data because of one dummy, not needed byte: 0xFF
+        match DeviceInformation::parse(device_information_data.as_slice(), len) {
+            Err(NomErr::Failure(err)) => {
+                assert_eq!(err.code, ErrorKind::LengthValue);
+            }
+            Ok((_, _)) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => panic!("Failure::LengthValue should be returned")
+        };
+    }
+
+    // Verify trying to parse not complete (too short) BridgingTuple data
+    #[test]
+    fn test_bridging_tuple_not_enough_data() {
+        // One MAC address counter + trimmed MAC address to 5 bytes
+        let data = &[0x01, 0x02, 0x42, 0xc0, 0xa8, 0x64];
+
+        // Try to parse not enough data for BridgingTuple
+        let bridging_tuple = BridgingTuple::parse(data);
+
+        // Expect ErrorKind::Eof error after trying to parse not complete BridgingTuple data
+        match bridging_tuple {
+            Err(NomErr::Failure(err)) => {
+                assert_eq!(err.code, ErrorKind::Eof);
+            }
+            Ok(_) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => panic!("ErrorKind::Eof should be returned")
+        }
+    }
+
     // Verify parsing incomplete data (only 5 bytes from 6 required for local MAC address) as NonIeee1905NeighborDevices
     #[test]
     fn test_non_ieee1905_neighbor_devices_not_enough_data_5_bytes() {
@@ -2275,19 +2319,6 @@ pub mod tests {
         }
     }
 
-    // Verify parsing and serializing AL MAC address
-    #[test]
-    fn test_al_mac_address_parse_and_serialize() {
-        // Prepare example local MAC address
-        let al_mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
-
-        // Parse provided example data as AL MAC address
-        let parsed = AlMacAddress::parse(&al_mac[..], al_mac.len() as u16).unwrap().1;
-
-        // Expect success comparing parsed and then serialized AL MAC address with original one
-        assert_eq!(parsed.serialize(), al_mac);
-    }
-
     // Verify parsing incomplete data (only 5 bytes from 6 required for MAC address) as AlMacAddress
     #[test]
     #[should_panic]
@@ -2316,27 +2347,6 @@ pub mod tests {
         assert_eq!(rest, &[0x11]);
     }
 
-    // Verify parsing and serializing MAC address
-    #[test]
-    fn test_mac_address_parse_and_serialize() {
-        // Prepare example vector with valid MAC address
-        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
-
-        // Do the parsing as MacAddress
-        let parsed = MacAddress::parse(&mac[..], mac.len() as u16).unwrap().1;
-
-        // Expect success comparing parsed and then serialized MAC address with original one
-        assert_eq!(parsed.serialize(), mac);
-    }
-
-    // Verify parsing incomplete data (only 5 bytes from 6 required for MAC address) as AlMacAddress
-    #[test]
-    #[should_panic]
-    fn test_mac_address_try_to_parse_not_enough_data() {
-        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64];
-        let _ = MacAddress::parse(&mac[..], mac.len() as u16).unwrap().1;
-    }
-
     // Verify returning redundant data after parsing MacAddress
     #[test]
     fn test_mac_address_try_to_parse_too_much_data() {
@@ -2352,155 +2362,6 @@ pub mod tests {
 
         // Expect slice with 0x11 value as redundant data after parsing
         assert_eq!(rest, &[0x11]);
-    }
-
-    // Verify the correctness of working to_u8 and from_u8 functions from MessageVersion enum
-    #[test]
-    fn test_message_version_check_version_correctness() {
-        // Expect successes
-        assert_eq!(
-            MessageVersion::Version2013.to_u8(),
-            MessageVersion::from_u8(0).unwrap().to_u8()
-        );
-        assert_eq!(
-            MessageVersion::Version2014.to_u8(),
-            MessageVersion::from_u8(1).unwrap().to_u8()
-        );
-        assert_eq!(
-            MessageVersion::Version2020.to_u8(),
-            MessageVersion::from_u8(2).unwrap().to_u8()
-        );
-        assert_eq!(
-            MessageVersion::Version2025.to_u8(),
-            MessageVersion::from_u8(3).unwrap().to_u8()
-        );
-        assert_eq!(None, MessageVersion::from_u8(4));
-    }
-
-    // Verify the correctness of conversion from u16 to CMDUType enum
-    #[test]
-    fn test_cmdu_type_check_from_u16() {
-        // Expect successes
-        assert_eq!(CMDUType::from_u16(0), CMDUType::TopologyDiscovery);
-        assert_eq!(CMDUType::from_u16(1), CMDUType::TopologyNotification);
-        assert_eq!(CMDUType::from_u16(2), CMDUType::TopologyQuery);
-        assert_eq!(CMDUType::from_u16(3), CMDUType::TopologyResponse);
-        assert_eq!(CMDUType::from_u16(4), CMDUType::Unknown(4));
-        assert_eq!(CMDUType::from_u16(5), CMDUType::LinkMetricQuery);
-        assert_eq!(CMDUType::from_u16(6), CMDUType::LinkMetricResponse);
-        assert_eq!(CMDUType::from_u16(7), CMDUType::ApAutoConfigSearch);
-        assert_eq!(CMDUType::from_u16(8), CMDUType::ApAutoConfigResponse);
-    }
-
-    // Verify function for getting message version of CMDU
-    #[test]
-    fn test_cmdu_type_get_message_version() {
-        // Create a dummy CMDU with message_version field set to 0x1
-        let cmdu = make_dummy_cmdu(vec![100]);
-
-        // Expect success getting message version of CMDU
-        assert_eq!(cmdu.get_message_version(), MessageVersion::from_u8(1));
-    }
-
-    // Verify the correctness of conversion to u16 from CMDUType
-    #[test]
-    fn test_cmdu_type_check_to_u16() {
-        // Expect successes
-        assert_eq!(CMDUType::TopologyDiscovery.to_u16(), 0);
-        assert_eq!(CMDUType::TopologyNotification.to_u16(), 1);
-        assert_eq!(CMDUType::TopologyQuery.to_u16(), 2);
-        assert_eq!(CMDUType::TopologyResponse.to_u16(), 3);
-        assert_eq!(CMDUType::Unknown(4).to_u16(), 4);
-        assert_eq!(CMDUType::LinkMetricQuery.to_u16(), 5);
-        assert_eq!(CMDUType::LinkMetricResponse.to_u16(), 6);
-        assert_eq!(CMDUType::ApAutoConfigSearch.to_u16(), 7);
-        assert_eq!(CMDUType::ApAutoConfigResponse.to_u16(), 8);
-    }
-
-    // Verify the correctness of conversion from u8 to IEEE1905TLVType
-    #[test]
-    fn test_ieee1905_tlv_type_check_from_u8() {
-        // Expect successes
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x00),
-            IEEE1905TLVType::EndOfMessage
-        );
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x01),
-            IEEE1905TLVType::AlMacAddress
-        );
-        assert_eq!(IEEE1905TLVType::from_u8(0x02), IEEE1905TLVType::MacAddress);
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x03),
-            IEEE1905TLVType::DeviceInformation
-        );
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x04),
-            IEEE1905TLVType::DeviceBridgingCapability
-        );
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x05),
-            IEEE1905TLVType::Unknown(0x05)
-        );
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x06),
-            IEEE1905TLVType::NonIeee1905NeighborDevices
-        );
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x07),
-            IEEE1905TLVType::Ieee1905NeighborDevices
-        );
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x0b),
-            IEEE1905TLVType::VendorSpecificInfo
-        );
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x0d),
-            IEEE1905TLVType::SearchedRole
-        );
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x0f),
-            IEEE1905TLVType::SupportedRole
-        );
-    }
-
-    // Verify the correctness of conversion from IEEE1905TLVType enum to u8
-    #[test]
-    fn test_ieee1905_tlv_type_check_to_u8() {
-        // Expect successes
-        assert_eq!(IEEE1905TLVType::EndOfMessage.to_u8(), 0x00);
-        assert_eq!(IEEE1905TLVType::AlMacAddress.to_u8(), 0x01);
-        assert_eq!(IEEE1905TLVType::MacAddress.to_u8(), 0x02);
-        assert_eq!(IEEE1905TLVType::DeviceInformation.to_u8(), 0x03);
-        assert_eq!(IEEE1905TLVType::DeviceBridgingCapability.to_u8(), 0x04);
-        assert_eq!(IEEE1905TLVType::Unknown(0x05).to_u8(), 0x05);
-        assert_eq!(IEEE1905TLVType::NonIeee1905NeighborDevices.to_u8(), 0x06);
-        assert_eq!(IEEE1905TLVType::Ieee1905NeighborDevices.to_u8(), 0x07);
-        assert_eq!(IEEE1905TLVType::VendorSpecificInfo.to_u8(), 0x0b);
-        assert_eq!(IEEE1905TLVType::SearchedRole.to_u8(), 0x0d);
-        assert_eq!(IEEE1905TLVType::SupportedRole.to_u8(), 0x0f);
-    }
-
-    // Verify fragmentation of CMDU with payload bigger than 1500 bytes
-    #[test]
-    fn test_fragmentation() {
-        // Prepare big CMDU with TLV chain exceeding 1500 bytes
-        let mut huge_cmdu = make_dummy_cmdu(vec![500, 500, 500, 500]);
-
-        // Set LastFragmentIndicator flag on this CMDU
-        huge_cmdu.flags = 0x80;
-
-        // Do the fragmentation
-        let fragmented_cmdus = huge_cmdu.fragment(1500);
-
-        // Count number of CMDU fragments
-        let no_of_fragments = fragmented_cmdus.len();
-
-        // Expect exactly 2 CMDU fragments
-        assert!(no_of_fragments == 2);
-
-        assert!(!fragmented_cmdus.first().unwrap().is_last_fragment());
-        assert!(fragmented_cmdus.last().unwrap().is_last_fragment());
     }
 
     // Verify detection and signalling of mismatch between declared tlv_length and the real length of TLV's payload
@@ -2529,6 +2390,146 @@ pub mod tests {
         let _tlvs = cmdu_parsed.get_tlvs();
     }
 
+    // Verify fragmentation and reassembly on CMDU with size of 1501 bytes
+    #[test]
+    fn test_single_cmdu_fragment_with_size_of_mtu_plus_one() {
+        // Single CMDU that exceeds MTU (1500 bytes) by one byte
+        let cmdu = make_dummy_cmdu(vec![1500 - 8 - 3 + 1]); // Whole CMDU (with CMDU header) has 1501 bytes
+
+        // Do the fragmentation on CMDU
+        let fragments = cmdu.clone().fragment(1500);
+
+        for (i, frag) in fragments.iter().enumerate() {
+            if frag.is_last_fragment() {
+                // Differentiate between last-first and the last-but-not-first CMDU fragments
+                if i == 0 {
+                    // First and at the same time last CMDU fragment (the only fragment in CMDU chain) in case of size based fragmentation should have minimal size of CMDU header + TLV header without any TLV payload
+                    assert!(frag.total_size() >= 8 + 3, "Fragment {0} should be at least 8+3 bytes but is {1} bytes long",
+                        i, frag.total_size());
+                } else {
+                    // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
+                    assert!(frag.total_size() >= 8 + 1, "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
+                        i, frag.total_size());
+                }
+            }
+            assert!(
+                frag.total_size() <= 1500,
+                "Fragment {} should have maximum 1500 bytes but is {} bytes long",
+                i,
+                frag.total_size()
+            );
+            assert_eq!(frag.fragment, i as u8, "Fragment index should be correct");
+        }
+
+        // Check if the "last fragment" flag is set in last fragment
+        assert!(fragments.last().unwrap().flags & 0x80 != 0, "Last fragment must have LastFragmentIndicator flag set");
+
+        // Reassembling CMDU fragments
+        let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
+
+        // Compare payloads of original CMDU and reassembled one
+        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
+    }
+
+    // Verify recognizing and signalling of "empty fragments" condition
+    #[test]
+    fn test_empty_fragment_list() {
+        let fragments: Vec<CMDU> = Vec::new();
+
+        // Trying to reassemble empty fragment should return EmptyFragments error
+        let reassembled = CMDU::reassemble(fragments).expect_err("Reassembly shouldn't succeed on empty fragment list");
+
+        // Expect EmptyFragments error
+        assert_eq!(reassembled, CmduReassemblyError::EmptyFragments);
+    }
+
+    // Verify recognizing and signalling of "inconsistent metadata" condition
+    #[test]
+    fn test_inconsistent_data() {
+        let cmdu1 = make_dummy_cmdu(vec![100, 200, 300]);
+        let mut cmdu2 = make_dummy_cmdu(vec![400, 500, 600]);
+
+        // Override message_id with a value different than default 0x1234 to make CMDU fragments chain inconsistent
+        cmdu2.message_id = 0x6789;
+
+        // Make a chain of CMDUs
+        let fragments: Vec<CMDU> = vec![cmdu1, cmdu2];
+
+        // Trying to reassemble inconsistent CMDU chain should return error: InconsistentMetadata
+        let reassembled = CMDU::reassemble(fragments).expect_err("Reassembly shouldn't succeed on inconsistent CMDUs");
+
+        // Expect InconsistentMetadata error
+        assert_eq!(reassembled, CmduReassemblyError::InconsistentMetadata);
+    }
+
+    // Verify lack of CMDU fragment in CMDU chain
+    #[test]
+    fn test_missing_fragments() {
+        let mut cmdu1 = make_dummy_cmdu(vec![100, 200, 300]);
+        let mut cmdu2 = make_dummy_cmdu(vec![400, 500, 600]);
+
+        // Override fragment_id with a not consecutive values
+        cmdu1.fragment = 0x0;
+
+        // Enforce fragment No. 2 to simulate missing fragment No. 1
+        cmdu2.fragment = 0x2;
+
+        // Make CMDU chain
+        let fragments: Vec<CMDU> = vec![cmdu1, cmdu2];
+        let reassembled = CMDU::reassemble(fragments)
+            .expect_err("Reassembly shouldn't succeed on missed fragment");
+
+        assert_eq!(reassembled, CmduReassemblyError::MissingFragments);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_unknown_tlv() {
+        let end_of_message_tlv = TLV {
+            tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
+            tlv_length: 1, // Set wrong length as 1 but should be 0 as tlv_value == None below
+            tlv_value: None,
+        };
+
+        let cmdu_topology_query = CMDU {
+            message_version: 1,
+            reserved: 0,
+            message_type: CMDUType::TopologyQuery.to_u16(),
+            message_id: 789,
+            fragment: 0,
+            flags: 0x80, // Not fragmented
+            payload: end_of_message_tlv.clone().serialize(),
+        };
+
+        let serialized_query = cmdu_topology_query.serialize();
+        let parsed_query = CMDU::parse(&serialized_query).unwrap().1;
+
+        assert_eq!(cmdu_topology_query, parsed_query);
+    }
+
+    // Check detection and signalling of missing last fragment in CMDU fragments chain
+    #[test]
+    fn test_missing_end_of_message() {
+        let mut cmdu1 = make_dummy_cmdu(vec![100, 200, 300]);
+        let mut cmdu2 = make_dummy_cmdu(vec![400, 500, 600]);
+
+        // Override fragment_id with consecutive values
+        cmdu1.fragment = 0x0;
+        cmdu2.fragment = 0x1;
+
+        // Override flags field with value with bit 7 (lastFragmentIndicator) cleared to simulate missing last fragment
+        cmdu1.flags = 0x0;
+        cmdu2.flags = 0x0;
+
+        // Make CMDU chain
+        let fragments: Vec<CMDU> = vec![cmdu1, cmdu2];
+
+        // Trying to parse CMDU chain should result in error: MissingLastFragment
+        let reassembled = CMDU::reassemble(fragments).expect_err("Reassembly shouldn't succeed on missed LastFragment flag");
+
+        // Expect MissingLastFragment error
+        assert_eq!(reassembled, CmduReassemblyError::MissingLastFragment);
+    }
 
     // Test sequence of CMDU fragments that arrived out of order.
     #[test]
@@ -2596,4 +2597,3 @@ pub mod tests {
         assert_eq!(CmduReassemblyError::MissingFragments, reassembled.unwrap_err());
     }
 }
-//TODO organize the unittest first we verify TLV use cases, content, serialization and parsing, plus error scenarios for malformed
