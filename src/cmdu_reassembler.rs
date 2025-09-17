@@ -162,10 +162,7 @@ pub mod tests {
             message_id: 0x1122,
             fragment: 0,
             flags: 0x00,     // last fragment flag is not set intentionally as this is not last fragment
-            #[cfg(feature = "size_based_fragmentation")]
             payload: tlv.serialize(),
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![tlv],
         };
 
         let cmdu_reasm = CmduReassembler::new().await;
@@ -209,10 +206,7 @@ pub mod tests {
             message_id: 0x1122,
             fragment: 0,
             flags: 0x00,
-            #[cfg(feature = "size_based_fragmentation")]
             payload: tlv1.serialize(),
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![tlv1],
         };
 
         let cmdu2 = CMDU {
@@ -222,10 +216,7 @@ pub mod tests {
             message_id: 0x1122,
             fragment: 1,
             flags: 0x00,
-            #[cfg(feature = "size_based_fragmentation")]
             payload: tlv2.serialize(),
-            #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![tlv2],
         };
 
         let cmdu_reasm = CmduReassembler::new().await;
