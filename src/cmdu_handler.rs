@@ -696,6 +696,7 @@ impl CMDUHandler {
                                     mac: iface.mac_address,
                                     media_type: iface.media_type,
                                     bridging_flag: false,
+                                    lldp_compatible: false,
                                     bridging_tuple: None,
                                     vlan: None,
                                     metric: None,
