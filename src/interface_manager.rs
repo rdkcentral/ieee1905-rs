@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::process::Command;
 use std::str;
+use netdev::interface::InterfaceType;
 
 // Internal modules
 use crate::topology_manager::Ieee1905InterfaceData;
@@ -158,48 +159,44 @@ fn parse_mac(mac_str: &str) -> Result<MacAddr, ()> {
 
 /// Retrieves a list of interfaces with additional metadata.
 pub fn get_interfaces() -> Vec<Ieee1905InterfaceData> {
-    let mut interfaces = Vec::new();
-
     let netdev_interfaces = netdev::get_interfaces();
-
     let pnet_interfaces = datalink::interfaces();
 
-    for iface in pnet_interfaces {
-        if let Some(mac) = iface.mac {
-            let interface_name = iface.name.clone();
+    pnet_interfaces.into_iter()
+        .filter_map(|iface| {
+            let mac = iface.mac?;
+            let net_iface = netdev_interfaces.iter().find(|n| n.name == iface.name)?;
 
-            // Find corresponding netdev interface
-            if let Some(net_iface) = netdev_interfaces.iter().find(|n| n.name == interface_name) {
+            // Determine media type
+            let media_type = if net_iface.if_type == InterfaceType::Ethernet {
+                0x01 // Ethernet
+            } else if net_iface.name.starts_with("wl") || net_iface.name.starts_with("wlan") {
+                0x02 // Wi-Fi
+            } else {
+                return None; // Skip non-Ethernet/Wi-Fi interfaces
+            };
 
-                // Determine media type
-                let media_type = if net_iface.name.starts_with("eth") {
-                    0x01 // Ethernet
-                } else if net_iface.name.starts_with("wl") || net_iface.name.starts_with("wlan") {
-                    0x02 // Wi-Fi
-                } else {
-                    continue; // Skip non-Ethernet/Wi-Fi interfaces
-                };
+            let metric = if media_type == 0x01 { Some(10) } else { Some(100) };
 
-                let metric = if media_type == 0x01 { Some(10) } else { Some(100) };
+            let bridging_flag = is_bridge_member(&net_iface.name);
+            let bridging_tuple = if bridging_flag { Some(0) } else { None };
+            let vlan = get_vlan_id(&net_iface.name);
+            //let non_ieee1905_neighbors = Some(get_neighbor_macs(&interface_name));
+            let non_ieee1905_neighbors = None;
+            let ieee1905_neighbors = None;
+            let lldp_compatible = net_iface.is_physical() && net_iface.if_type == InterfaceType::Ethernet;
 
-                let bridging_flag = is_bridge_member(&net_iface.name);
-                let bridging_tuple = if bridging_flag { Some(0) } else { None };
-                let vlan = get_vlan_id(&net_iface.name);
-                //let non_ieee1905_neighbors = Some(get_neighbor_macs(&interface_name));
-                let non_ieee1905_neighbors = None;
-                let ieee1905_neighbors = None;
-                interfaces.push(Ieee1905InterfaceData {
-                    mac,
-                    media_type,
-                    bridging_flag,
-                    bridging_tuple,
-                    vlan,
-                    metric,
-                    non_ieee1905_neighbors,
-                    ieee1905_neighbors,
-                });
-            }
-        }
-    }
-    interfaces
+            Some(Ieee1905InterfaceData {
+                mac,
+                media_type,
+                bridging_flag,
+                lldp_compatible,
+                bridging_tuple,
+                vlan,
+                metric,
+                non_ieee1905_neighbors,
+                ieee1905_neighbors,
+            })
+        })
+        .collect()
 }

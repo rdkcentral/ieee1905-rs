@@ -91,35 +91,15 @@ pub struct Ieee1905InterfaceData {
     pub mac: MacAddr,
     pub media_type: u16,
     pub bridging_flag: bool,
+    pub lldp_compatible: bool,
     pub bridging_tuple: Option<u8>,
     pub vlan: Option<u8>,
     pub metric: Option<u16>,
     pub non_ieee1905_neighbors: Option<Vec<MacAddr>>,
     pub ieee1905_neighbors: Option<Vec<IEEE1905Neighbor>>,
 }
-impl Ieee1905InterfaceData {
-    pub fn new(
-        mac: MacAddr,
-        media_type: u16,
-        bridging_flag: bool,
-        bridging_tuple: Option<u8>,
-        vlan: Option<u8>,
-        metric: Option<u16>,
-        non_ieee1905_neighbors: Option<Vec<MacAddr>>,
-        ieee1905_neighbors: Option<Vec<IEEE1905Neighbor>>,
-    ) -> Self {
-        Self {
-            mac,
-            media_type,
-            bridging_flag,
-            bridging_tuple,
-            vlan,
-            metric,
-            non_ieee1905_neighbors,
-            ieee1905_neighbors,
-        }
-    }
 
+impl Ieee1905InterfaceData {
     pub fn update(
         &mut self,
         new_bridging_flag: Option<bool>,
