@@ -1,9 +1,5 @@
 # IEEE1905.1 RDK-B component
 
-## Delivery Planning
-
-![ARCH](docs/planning/delivery_diagram/delivery.jpg)
-
 ## IEEE1905.1 Overview
 
 IEEE 1905.1 is a standard developed by the Institute of Electrical and Electronics Engineers (IEEE) for providing a uniform method for devices to communicate and interoperate within a home network environment. It defines a protocol that enables devices from different manufacturers to seamlessly communicate and share resources, regardless of their underlying technologies.
