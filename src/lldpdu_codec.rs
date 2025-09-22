@@ -132,7 +132,7 @@ impl ChassisId {
     }
 }
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortId {
     pub port_id_subtype: u8,
     pub port_id: MacAddr,

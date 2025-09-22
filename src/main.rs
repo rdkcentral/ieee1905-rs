@@ -211,7 +211,6 @@ async fn main() -> Result<()> {
 
         //we initilize here the values for LLDP input parameters
         let chassis_id = al_mac;
-        let port_id = forwarding_mac;
 
         tracing::debug!("Topology Database initialized with AL MAC: {:?}", al_mac);
 
@@ -287,12 +286,10 @@ async fn main() -> Result<()> {
 
         // Subscription of observers
 
-        receiver.subscribe(lldp_observer).await;
-
         receiver.subscribe(cmdu_observer).await;
 
         tracing::info!(
-            "LLDP and CMDU observers subscribed with local MAC: {}",
+            "CMDU observers subscribed with local MAC: {}",
             al_mac
         );
 
@@ -303,19 +300,19 @@ async fn main() -> Result<()> {
         let tasker = Tasker::new();
         receiver.run(&forwarding_interface_rx, tasker.clone()).await;
 
-        // Sart of discovery proccess
+        // Sart of the discovery process
 
-        let discovery_interface_lldp = forwarding_interface.clone();
+        let lldp_tasks = &mut Vec::new();
+        for interface in get_physical_ethernet_interfaces() {
+            tracing::debug!("Starting LLDP Discovery on {}/{}", interface.name, interface.mac);
 
-        lldp_discovery(
-            discovery_interface_lldp,
-            Arc::clone(&sender),
-            chassis_id,
-            port_id,
-        )
-        .await;
+            let lldp_receiver = Arc::new(EthernetReceiver::new());
+            lldp_receiver.subscribe(lldp_observer.clone()).await;
+            lldp_receiver.run(&interface.name, tasker.clone()).await;
 
-        tracing::debug!("Starting LLDP Discovery on {}", forwarding_interface);
+            let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx)).await;
+            lldp_tasks.push(lldp_discovery(lldp_sender, chassis_id, interface.mac, interface.name));
+        }
 
         let discovery_interface_ieee1905 = forwarding_interface.clone();
 

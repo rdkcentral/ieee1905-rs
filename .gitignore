@@ -4,6 +4,9 @@
 # Ignore Visual Studio Code workspace settings
 *.code-workspace
 
+# Ignore RustRover workspace settings
+.idea/
+
 #ingnore Testing files
 Testing/
 

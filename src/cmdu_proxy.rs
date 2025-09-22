@@ -359,9 +359,9 @@ pub async fn cmdu_topology_response_transmission(
 
                 // set neighbor_flags based on metadata
                 }
-                let neighbor_flags = match neighbor_node.metadata.lldp_neighbor {
-                    Some(true) => 0b1000_0000,
-                    _ => 0b0000_0000,
+                let neighbor_flags = match neighbor_node.metadata.lldp_neighbor.is_some() {
+                    true => 0b1000_0000,
+                    false => 0b0000_0000,
                 };
 
                 list.push(IEEE1905Neighbor {
