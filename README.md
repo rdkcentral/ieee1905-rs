@@ -411,11 +411,12 @@ The topology map provides all the information collected through Topology CMDUs e
 			|	|	    |── STATE: TOPOLOGY_STATE
 			|	|	    |── LAST_SEEN: 10
 			|	|	    |── MESSAGE_ID_LAST_PACKET: 12
-            		|	|   	    |── PATH_METRICS
+			|	|		|── LLDP-DISCOVERED
+            |	|   	|── PATH_METRICS
 			|	|	    |	|── RTT
 			|	|	    |	|── JITTER
-            		|   	|           |	|── THROUGHPUT
-			|	|	    |	└── LOSS
+            |	|		|	|── THROUGHPUT
+			|	|	    |	└── LOST PACKETS
 			|	|	    └── LocalInterfaceList
 			|	|	    	|── INTERFACE_MAC_ADDRESS: BB:AA:AA:A01
 			|	|	    	|	|── MEDIA_TYPE: (0x0001)
@@ -424,7 +425,7 @@ The topology map provides all the information collected through Topology CMDUs e
 			|	|	    	|	└── NonIEEE1905NeighborList
 			|	|	    	|		|── (AA:BB:CC:A0)]
 			|	|	    	|		|── (AA:BB:CC:A1)]
-			|	|		|		└── (AA:BB:CC:A2)]
+			|	|			|		└── (AA:BB:CC:A2)]
 			|	|	    	└──INTERFACE_MAC_ADDRESS: BB:AA:AE:A01
 			|	|			    |── MEDIA_TYPE: (0x0001)
 			|	|			    |── BRIDGE_FLAG: TRUE
