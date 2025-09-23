@@ -129,36 +129,6 @@ impl EthernetFrameObserver for LLDPObserver {
                                 }
                             }
                         }
-                        // TODO: with treat warnings as errors
-                        //       port_id is assigned but not used
-                        //       maybe dead or incomplete logic.
-                        //       - Port ID should be equal to forwarding MAC.
-                        // LLDPTLVType::PortId => {
-                        //     if let Some(value) = &tlv.tlv_value {
-                        //         match PortId::parse(value, tlv.tlv_length) {
-                        //             Ok((_, parsed_port_id)) => {
-                        //                 port_id = Some(parsed_port_id.port_id);
-                        //                 info!(
-                        //                     interface_mac = ?interface_mac,
-                        //                     "Parsed Port ID: {:?}",
-                        //                     parsed_port_id.port_id
-                        //                 );
-                        //             }
-                        //             Err(NomErr::Failure(e)) => {
-                        //                 warn!(
-                        //                     interface_mac = ?interface_mac,
-                        //                     "Failed to parse Port ID TLV: {:?}", e
-                        //                 );
-                        //             }
-                        //             Err(_) => {
-                        //                 warn!(
-                        //                     interface_mac = ?interface_mac,
-                        //                     "Unexpected error while parsing Port ID TLV"
-                        //                 );
-                        //             }
-                        //         }
-                        //     }
-                        // }
                         _ => {
                             debug!(
                                 interface_mac = ?interface_mac,
