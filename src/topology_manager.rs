@@ -784,7 +784,7 @@ impl TopologyDatabase {
                         .metadata
                         .lldp_neighbor
                         .as_ref()
-                        .map(|l| format!("{l:?}"))
+                        .map(|l| l.port_id.to_string())
                         .unwrap_or_else(|| "-".to_string());
 
                     let interface_mac = node
@@ -835,7 +835,7 @@ impl TopologyDatabase {
                         Constraint::Length(25),
                         Constraint::Length(15),
                         Constraint::Length(20),
-                        Constraint::Length(10),
+                        Constraint::Length(20),
                         Constraint::Length(20),
                         Constraint::Length(15),
                     ])
