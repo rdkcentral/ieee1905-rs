@@ -411,7 +411,7 @@ The topology map provides all the information collected through Topology CMDUs e
 			|	|	    |── STATE: TOPOLOGY_STATE
 			|	|	    |── LAST_SEEN: 10
 			|	|	    |── MESSAGE_ID_LAST_PACKET: 12
-			|	|		|── LLDP-DISCOVERED
+			|	|		|── LLDP-INFO
             |	|   	|── PATH_METRICS
 			|	|	    |	|── RTT
 			|	|	    |	|── JITTER
