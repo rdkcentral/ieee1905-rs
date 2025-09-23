@@ -302,16 +302,15 @@ async fn main() -> Result<()> {
 
         // Sart of the discovery process
 
-        let lldp_tasks = &mut Vec::new();
         for interface in get_physical_ethernet_interfaces() {
-            tracing::debug!("Starting LLDP Discovery on {}/{}", interface.name, interface.mac);
+            tracing::info!("Starting LLDP Discovery on {}/{}", interface.name, interface.mac);
 
-            let lldp_receiver = Arc::new(EthernetReceiver::new());
+            let lldp_receiver = EthernetReceiver::new();
             lldp_receiver.subscribe(lldp_observer.clone()).await;
             lldp_receiver.run(&interface.name, tasker.clone()).await;
 
             let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx)).await;
-            lldp_tasks.push(lldp_discovery(lldp_sender, chassis_id, interface.mac, interface.name));
+            lldp_discovery(lldp_sender, chassis_id, interface.mac, interface.name).await;
         }
 
         let discovery_interface_ieee1905 = forwarding_interface.clone();

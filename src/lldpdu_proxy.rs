@@ -22,17 +22,17 @@ use pnet::datalink::MacAddr;
 use crate::lldpdu::{LLDPDU, LLDPTLVType, TLV, ChassisId, PortId, TimeToLiveTLV};
 use crate::ethernet_subject_transmission::EthernetSender;
 use tokio::task;
-use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, info, error}; // Import tracing
+use tracing::{debug, info, error};
+use crate::task_registry::TASK_REGISTRY;
 
 /// Launches the discovery process for L2 devices using LLDP.
-pub fn lldp_discovery(
+pub async fn lldp_discovery(
     sender: EthernetSender,
     chassis_id: MacAddr,
     port_id: MacAddr,
     port_name: String,
-) -> LldpDiscoveryTask {
+) {
     let task_handle = task::spawn(async move {
         sleep(Duration::from_secs(10)).await;
         loop {
@@ -105,18 +105,5 @@ pub fn lldp_discovery(
             sleep(Duration::from_secs(10)).await;
         }
     });
-
-    LldpDiscoveryTask {
-        handle: task_handle,
-    }
-}
-
-pub struct LldpDiscoveryTask {
-    handle: JoinHandle<()>,
-}
-
-impl Drop for LldpDiscoveryTask {
-    fn drop(&mut self) {
-        self.handle.abort();
-    }
+    TASK_REGISTRY.lock().await.push(task_handle);
 }

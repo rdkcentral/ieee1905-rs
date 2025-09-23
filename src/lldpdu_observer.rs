@@ -177,7 +177,7 @@ impl EthernetFrameObserver for LLDPObserver {
                 };
 
                 // Check if the neighbor chassis ID is different from the local chassis ID to prevent loops
-                if neighbor_chassis_id != self.local_chassis_id {
+                if neighbor_chassis_id == self.local_chassis_id {
                     // Log when a loop is detected
                     return tracing::trace!(
                         "Loop detected: neighbor_chassis_id ({:?}) is equal to local_chassis_id ({:?})",
