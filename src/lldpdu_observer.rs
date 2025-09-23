@@ -26,7 +26,7 @@ use tracing::{debug, error, info, warn};
 
 // Internal modules
 use crate::ethernet_subject_reception::EthernetFrameObserver;
-use crate::lldpdu::{LLDPDU, LLDPTLVType, ChassisId};
+use crate::lldpdu::{LLDPDU, LLDPTLVType, ChassisId, PortId};
 use crate::topology_manager::{TopologyDatabase, UpdateType};
 
 #[derive(Clone)]
@@ -62,7 +62,8 @@ impl EthernetFrameObserver for LLDPObserver {
                 );
 
                 let mut chassis_id: Option<MacAddr> = None;
-                
+                let mut port_id: Option<PortId> = None;
+
 
                 // Iterate through TLVs in the LLDPDU payload
                 for (index, tlv) in lldpdu.payload.iter().enumerate() {
@@ -102,36 +103,32 @@ impl EthernetFrameObserver for LLDPObserver {
                                 }
                             }
                         }
-                        // TODO: with treat warnings as errors
-                        //       port_id is assigned but not used
-                        //       maybe dead or incomplete logic.
-                        //       - Port ID should be equal to forwarding MAC.
-                        // LLDPTLVType::PortId => {
-                        //     if let Some(value) = &tlv.tlv_value {
-                        //         match PortId::parse(value, tlv.tlv_length) {
-                        //             Ok((_, parsed_port_id)) => {
-                        //                 port_id = Some(parsed_port_id.port_id);
-                        //                 info!(
-                        //                     interface_mac = ?interface_mac,
-                        //                     "Parsed Port ID: {:?}",
-                        //                     parsed_port_id.port_id
-                        //                 );
-                        //             }
-                        //             Err(NomErr::Failure(e)) => {
-                        //                 warn!(
-                        //                     interface_mac = ?interface_mac,
-                        //                     "Failed to parse Port ID TLV: {:?}", e
-                        //                 );
-                        //             }
-                        //             Err(_) => {
-                        //                 warn!(
-                        //                     interface_mac = ?interface_mac,
-                        //                     "Unexpected error while parsing Port ID TLV"
-                        //                 );
-                        //             }
-                        //         }
-                        //     }
-                        // }
+                        LLDPTLVType::PortId => {
+                            if let Some(value) = &tlv.tlv_value {
+                                match PortId::parse(value, tlv.tlv_length) {
+                                    Ok((_, parsed_port_id)) => {
+                                        info!(
+                                            interface_mac = ?interface_mac,
+                                            "Parsed Port ID: {:?}",
+                                            parsed_port_id.port_id,
+                                        );
+                                        port_id = Some(parsed_port_id);
+                                    }
+                                    Err(NomErr::Failure(e)) => {
+                                        warn!(
+                                            interface_mac = ?interface_mac,
+                                            "Failed to parse Port ID TLV: {:?}", e
+                                        );
+                                    }
+                                    Err(_) => {
+                                        warn!(
+                                            interface_mac = ?interface_mac,
+                                            "Unexpected error while parsing Port ID TLV"
+                                        );
+                                    }
+                                }
+                            }
+                        }
                         _ => {
                             debug!(
                                 interface_mac = ?interface_mac,
@@ -141,39 +138,44 @@ impl EthernetFrameObserver for LLDPObserver {
                     }
                 }
 
-                // If a valid chassis_id was found, update the topology database
-                if let Some(neighbor_chassis_id) = chassis_id {
-                    // Check if the neighbor chassis ID is different from the local chassis ID to prevent loops
-                    if neighbor_chassis_id != self.local_chassis_id {
-                        debug!(
-                            interface_mac = ?interface_mac,
-                            "Updating topology database for chassis MAC: {:?}",
-                            neighbor_chassis_id
-                        );
+                // If a valid chassis_id and port_id were found, update the topology database
+                let Some(neighbor_chassis_id) = chassis_id else {
+                    return;
+                };
+                let Some(port_id) = port_id else {
+                    return;
+                };
 
-                        let topology_db = TopologyDatabase::get_instance(self.local_chassis_id, self.interface_name.clone()).await;
+                // Check if the neighbor chassis ID is different from the local chassis ID to prevent loops
+                if neighbor_chassis_id == self.local_chassis_id {
+                    // Log when a loop is detected
+                    return tracing::trace!(
+                        "Loop detected: neighbor_chassis_id ({:?}) is equal to local_chassis_id ({:?})",
+                        neighbor_chassis_id, self.local_chassis_id
+                    );
+                }
 
-                        // If a valid port_id is found, update the topology
-                        if let Some(node) = topology_db.get_device(neighbor_chassis_id).await {
-                            tracing::info!("Device found: {:?}", node);
+                // Check if the neighbor chassis ID is different from the local chassis ID to prevent loops
+                debug!(
+                    interface_mac = ?interface_mac,
+                    "Updating topology database for chassis MAC: {:?}",
+                    neighbor_chassis_id
+                );
 
-                            topology_db.update_ieee1905_topology(
-                                                node.device_data.clone(),
-                                                UpdateType::LldpUpdate,
-                                                None,
-                                                Some(true),
-                                            )
-                                            .await;
-                        } else {
-                            tracing::warn!("Device with AL-MAC {} not found!", neighbor_chassis_id);
-                        }
-                    } else {
-                        // Log when a loop is detected
-                        tracing::trace!(
-                            "Loop detected: neighbor_chassis_id ({:?}) is equal to local_chassis_id ({:?})",
-                            neighbor_chassis_id, self.local_chassis_id
-                        );
-                    }
+                let topology_db = TopologyDatabase::get_instance(self.local_chassis_id, self.interface_name.clone()).await;
+
+                // If a valid port_id is found, update the topology
+                if let Some(node) = topology_db.get_device(neighbor_chassis_id).await {
+                    tracing::info!("Device found: {:?}", node);
+
+                    topology_db.update_ieee1905_topology(
+                        node.device_data.clone(),
+                        UpdateType::LldpUpdate,
+                        None,
+                        Some(port_id),
+                    ).await;
+                } else {
+                    tracing::warn!("Device with AL-MAC {} not found!", neighbor_chassis_id);
                 }
             }
             Err(e) => {

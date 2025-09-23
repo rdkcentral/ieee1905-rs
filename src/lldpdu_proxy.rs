@@ -21,23 +21,22 @@
 use pnet::datalink::MacAddr;
 use crate::lldpdu::{LLDPDU, LLDPTLVType, TLV, ChassisId, PortId, TimeToLiveTLV};
 use crate::ethernet_subject_transmission::EthernetSender;
-use std::sync::Arc;
 use tokio::task;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, info, error}; // Import tracing
+use tracing::{debug, info, error};
 use crate::task_registry::TASK_REGISTRY;
 
 /// Launches the discovery process for L2 devices using LLDP.
 pub async fn lldp_discovery(
-    interface: String,
-    sender: Arc<EthernetSender>,
+    sender: EthernetSender,
     chassis_id: MacAddr,
     port_id: MacAddr,
+    port_name: String,
 ) {
     let task_handle = task::spawn(async move {
         sleep(Duration::from_secs(10)).await;
         loop {
-            info!("Starting LLDP discovery process on interface: {}", interface);
+            info!("Starting LLDP discovery process on interface: {port_name}");
 
             let chassis_id_struct = ChassisId {
                 chassis_id_type: 4, // 4 = MAC Address type in LLDP
@@ -98,7 +97,7 @@ pub async fn lldp_discovery(
             let ethertype = 0x88CC; // EtherType for LLDP
 
             match sender.send_frame(destination_mac, source_mac, ethertype, &serialized_lldpdu).await {
-                Ok(()) => info!("LLDPDU sent successfully through {}", interface),
+                Ok(()) => info!("LLDPDU sent successfully through {port_name}"),
                 Err(e) => error!("Failed to send LLDPDU: {}", e),
             }
 

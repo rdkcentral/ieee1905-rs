@@ -49,6 +49,7 @@ use crate::{
     interface_manager::{get_forwarding_interface_mac, get_interfaces},
     //task_registry::TASK_REGISTRY,
 };
+use crate::lldpdu::PortId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateLocal {
@@ -155,7 +156,7 @@ pub struct Ieee1905NodeInfo {
     pub last_update: UpdateType,
     pub last_seen: Instant,
     pub message_id: Option<u16>,
-    pub lldp_neighbor: Option<bool>,
+    pub lldp_neighbor: Option<PortId>,
     pub node_state_local: Option<StateLocal>,
     pub node_state_remote: Option<StateRemote>,
 }
@@ -165,7 +166,7 @@ impl Ieee1905NodeInfo {
     pub fn new(
         last_update: UpdateType,
         message_id: Option<u16>,
-        lldp_neighbor: Option<bool>,
+        lldp_neighbor: Option<PortId>,
         node_state_local: Option<StateLocal>,
         node_state_remote: Option<StateRemote>,
     ) -> Self {
@@ -184,7 +185,7 @@ impl Ieee1905NodeInfo {
         &mut self,
         new_state: Option<UpdateType>,
         new_message_id: Option<u16>,
-        new_lldp_neighbor: Option<bool>,
+        new_lldp_neighbor: Option<PortId>,
         new_node_state_local: Option<StateLocal>,
         new_node_state_remote: Option<StateRemote>,
     ) {
@@ -494,7 +495,7 @@ impl TopologyDatabase {
         device_data: Ieee1905DeviceData,
         operation: UpdateType,
         msg_id: Option<u16>,
-        lldp_neighbor: Option<bool>,
+        lldp_neighbor: Option<PortId>,
     ) -> TransmissionEvent {
         let al_mac = device_data.al_mac;
         let event;
@@ -627,11 +628,11 @@ impl TopologyDatabase {
                             node.metadata.update(
                                 Some(operation),
                                 msg_id,
-                                lldp_neighbor,
+                                lldp_neighbor.clone(),
                                 None,
                                 None,
                             );
-                            tracing::debug!(al_mac = ?al_mac, lldp_neighbor = ?lldp_neighbor, "Updated LLDP neighbor status");
+                            debug!(al_mac = ?al_mac, lldp_neighbor = ?lldp_neighbor, "Updated LLDP neighbor status");
                             TransmissionEvent::None
                             //If needed we can indicate here a notification event to update topology data base in al neighbors but for now it is not needed
                             //initial DB snapshot covers current uses cases for RDK-B but we can update this part if needed in the future
@@ -680,7 +681,7 @@ impl TopologyDatabase {
                             last_update: operation,
                             last_seen: Instant::now(),
                             message_id: msg_id,
-                            lldp_neighbor: Some(false),
+                            lldp_neighbor,
                             node_state_local: None,
                             node_state_remote: None,
                         },
@@ -782,7 +783,8 @@ impl TopologyDatabase {
                     let lldp = node
                         .metadata
                         .lldp_neighbor
-                        .map(|l| l.to_string())
+                        .as_ref()
+                        .map(|l| l.port_id.to_string())
                         .unwrap_or_else(|| "-".to_string());
 
                     let interface_mac = node
@@ -833,7 +835,7 @@ impl TopologyDatabase {
                         Constraint::Length(25),
                         Constraint::Length(15),
                         Constraint::Length(20),
-                        Constraint::Length(10),
+                        Constraint::Length(20),
                         Constraint::Length(20),
                         Constraint::Length(15),
                     ])

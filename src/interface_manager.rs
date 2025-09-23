@@ -26,11 +26,14 @@ use std::collections::HashSet;
 use std::fs;
 use std::process::Command;
 use std::str;
-
+use netdev::interface::InterfaceType;
 // Internal modules
 use crate::topology_manager::Ieee1905InterfaceData;
 
-
+pub struct InterfaceInfo {
+    pub name: String,
+    pub mac: MacAddr,
+}
 
 pub fn get_local_al_mac(interface_name: String) -> Option<MacAddr> {
     // Fetch all network interfaces
@@ -73,6 +76,22 @@ pub fn get_forwarding_interface_name(interface_name: String) -> Option<String> {
         .iter()
         .find(|iface| iface.name.starts_with(&interface_name))
         .map(|iface| iface.name.clone()) // Extract and return interface name
+}
+
+/// Retrieves a list of all physical ethernet interfaces.
+pub fn get_physical_ethernet_interfaces() -> Vec<InterfaceInfo> {
+    let interfaces = netdev::get_interfaces();
+    interfaces.into_iter()
+        .filter_map(|interface| {
+            if interface.if_type != InterfaceType::Ethernet || !interface.is_physical() {
+                return None;
+            }
+            Some(InterfaceInfo {
+                name: interface.name,
+                mac: interface.mac_addr?.octets().into(),
+            })
+        })
+        .collect()
 }
 
 /// **Gets the MAC address of a given network interface**
@@ -172,12 +191,10 @@ pub fn get_interfaces() -> Vec<Ieee1905InterfaceData> {
             if let Some(net_iface) = netdev_interfaces.iter().find(|n| n.name == interface_name) {
 
                 // Determine media type
-                let media_type = if net_iface.name.starts_with("eth") {
-                    0x01 // Ethernet
-                } else if net_iface.name.starts_with("wl") || net_iface.name.starts_with("wlan") {
-                    0x02 // Wi-Fi
-                } else {
-                    continue; // Skip non-Ethernet/Wi-Fi interfaces
+                let media_type = match net_iface.if_type {
+                    InterfaceType::Ethernet => 0x01,        // Ethernet
+                    InterfaceType::Wireless80211 => 0x02,   // Wi-Fi
+                    _ => continue,                          // Skip non-Ethernet/Wi-Fi interfaces
                 };
 
                 let metric = if media_type == 0x01 { Some(10) } else { Some(100) };
