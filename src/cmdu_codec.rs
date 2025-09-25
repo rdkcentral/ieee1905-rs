@@ -914,11 +914,20 @@ impl CMDU {
     pub fn get_tlvs(self) -> Vec<TLV> {
         let mut tlvs: Vec<TLV> = vec![];
         let mut remaining_input = self.payload.as_slice();
-        //let mut has_reached_end = false;
-        while !remaining_input.is_empty(){
+        let mut has_reached_end = false;
+        while !remaining_input.is_empty() && !has_reached_end {
                 match TLV::parse(remaining_input) {
                 Ok(tlv) => {
                     tracing::trace!("Parsed TLV {:?}", tlv.1);
+                    // The minimum Ethernet frame length (over the wire) is 60 bytes
+                    // For very small frames like Topology Discovery, it is likely
+                    // there will be zero padding after the content of the frame
+                    if tlv.1.tlv_type == IEEE1905TLVType::EndOfMessage.to_u8()
+                        && tlv.1.tlv_length == 0
+                        && tlv.1.tlv_value.is_none()
+                    {
+                        has_reached_end = true;
+                    }
                     tlvs.push(tlv.1);
                     remaining_input = tlv.0;
                 }
@@ -1575,6 +1584,47 @@ pub mod tests {
             serialized, raw_bytes,
             "Serialized output did not match input"
         );
+    }
+
+    #[test]
+    fn test_cmdus_parsing_with_padding() {
+        let al_mac_tlv = TLV {
+            tlv_type: IEEE1905TLVType::AlMacAddress.to_u8(),
+            tlv_length: 6,
+            tlv_value: Some(vec![0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E]),
+        };
+        let end_of_message_tlv = TLV {
+            tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
+            tlv_length: 0,
+            tlv_value: None,
+        };
+
+        let mut payload = Vec::new();
+        payload.extend(al_mac_tlv.clone().serialize());
+        payload.extend(end_of_message_tlv.clone().serialize());
+
+        // Construct the CMDU
+        let cmdu_topology_discovery = CMDU {
+            message_version: 1,
+            reserved: 0,
+            message_type: CMDUType::TopologyDiscovery.to_u16(),
+            message_id: 123,
+            fragment: 0,
+            flags: 0x80, // Single not fragmented CMDU - set lastFragmentIndicator flag
+            payload,
+        };
+
+        // Serialize the CMDU
+        let mut serialized_discovery = cmdu_topology_discovery.serialize();
+
+        // Add padding to the end of the serialized CMDU
+        serialized_discovery.extend([0; 13]);
+
+        // Parse the serialized CMDU
+        let parsed_discovery = CMDU::parse(&serialized_discovery).unwrap().1;
+
+        // Assert that the parsed CMDU matches the original
+        assert_eq!(cmdu_topology_discovery.get_tlvs(), parsed_discovery.get_tlvs());
     }
 
     // Verify serializing and parsing topology discovery CMDU
