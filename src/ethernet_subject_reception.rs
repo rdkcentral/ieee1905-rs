@@ -27,6 +27,7 @@ use pnet::util::MacAddr;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use anyhow::{anyhow, bail};
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::{self, yield_now};
 use tokio_tasker::Tasker;
@@ -123,18 +124,18 @@ impl EthernetReceiver {
 
 
     /// **Start receiving Ethernet frames**
-    pub async fn run(&self, interface_name: &str, tasker: Tasker) {
+    pub async fn run(&self, interface_name: &str, tasker: Tasker) -> anyhow::Result<()> {
         info!("Starting EthernetReceiver on interface: {}", interface_name);
 
         let interfaces = datalink::interfaces();
         let interface = interfaces
             .into_iter()
             .find(|iface| iface.name == interface_name)
-            .expect("ERROR: Interface not found");
+            .ok_or_else(|| anyhow!("Interface not found: {interface_name}"))?;
 
-        let interface_mac = interface.mac.unwrap_or_else(|| {
-            panic!("ERROR: Failed to retrieve MAC address for interface {interface_name}")
-        });
+        let interface_mac = interface.mac.ok_or_else(|| {
+            anyhow!("Failed to retrieve MAC address for interface {interface_name}")
+        })?;
 
         info!("Listening on interface: {} (MAC: {})", interface_name, interface_mac);
         // Since we spawn a blocking task, we need to have an opportunity
@@ -142,8 +143,8 @@ impl EthernetReceiver {
         let config = Config { read_timeout: Some(Duration::from_secs(1)), ..Default::default() };
         let (_tx, rx) = match datalink::channel(&interface, config) {
             Ok(Ethernet(tx, rx)) => (tx, rx),
-            Ok(_) => panic!("ERROR: Unsupported channel type"),
-            Err(e) => panic!("ERROR: Failed to create datalink channel: {e}"),
+            Ok(_) => bail!("Unsupported channel type"),
+            Err(e) => bail!("Failed to create datalink channel: {e}"),
         };
 
         let tx_channel = self.rx_channel.clone();
@@ -186,6 +187,8 @@ impl EthernetReceiver {
                         }
                     }
                 });
+        
+        Ok(())
     }
 }
 

@@ -268,19 +268,21 @@ impl CMDUHandler {
     /// Handles a parsed CMDU, logs details, and extracts TLVs.
     async fn dispatch_cmdu(&self, cmdu: CMDU, source_mac: MacAddr, destination_mac: MacAddr) {
         tracing::trace!("Dispatch CMDU {cmdu:?}");
-        match MessageVersion::from_u8(cmdu.message_version).unwrap() {
-            MessageVersion::Version2013 => {
+        match MessageVersion::from_u8(cmdu.message_version) {
+            Some(MessageVersion::Version2013) => {
                 tracing::trace!("Handling message version 2013");
                 //process_cmdus
                 self.process_cmdus(cmdu, source_mac, destination_mac)
                     .await;
             }
-            _ => {
+            Some(_) => {
                 tracing::trace!("Handling message version different than 2013");
                 //process_sdus
                 self.process_sdus(cmdu, source_mac, destination_mac)
                     .await;
             }
+            // TODO should we handle unknown versions?
+            _ => trace!("Unknown message version: {:02x}", cmdu.message_version),
         }
     }
 

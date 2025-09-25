@@ -17,7 +17,6 @@
  * limitations under the License.
 */
 use std::process::exit;
-use eyre::Result;
 use futures::{SinkExt, StreamExt};
 use tokio::net::UnixStream;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
@@ -86,7 +85,7 @@ async fn send_echoed_packet(socket: &mut Framed<&mut UnixStream, LengthDelimited
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     // Modify this filter for your tracing during run time
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("trace")); //add 'tokio=trace' to debug the runtime
 

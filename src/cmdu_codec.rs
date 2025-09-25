@@ -916,7 +916,7 @@ impl CMDU {
         let mut remaining_input = self.payload.as_slice();
         let mut has_reached_end = false;
         while !remaining_input.is_empty() && !has_reached_end {
-                match TLV::parse(remaining_input) {
+            match TLV::parse(remaining_input) {
                 Ok(tlv) => {
                     tracing::trace!("Parsed TLV {:?}", tlv.1);
                     // The minimum Ethernet frame length (over the wire) is 60 bytes
@@ -940,7 +940,8 @@ impl CMDU {
                         .collect::<Vec<String>>()
                         .join(" ");
                     tracing::trace!("Remaining {}", hex_string);
-                    panic!("Failed to parse TLV: {e:?}. Unparseable data: <{hex_string:?}>");
+                    
+                    break // TODO should we allow partially parsed TLV's?
                 }
             }
         }
@@ -1078,8 +1079,7 @@ impl CMDU {
         }
 
         // Verify LastFragment flag on the last fragment
-        let last = fragments.last().unwrap();
-        if last.flags & 0x80 == 0 {
+        if fragments.last().is_none_or(|e| e.flags & 0x80 == 0) {
             return Err(CmduReassemblyError::MissingLastFragment);
         }
 

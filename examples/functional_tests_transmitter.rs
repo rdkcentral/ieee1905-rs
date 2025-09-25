@@ -18,7 +18,6 @@
 */
 
 use bytes::Bytes;
-use eyre::Result;
 use futures::{SinkExt, StreamExt};
 use ieee1905::cmdu_codec::*;
 use ieee1905::registration_codec::{
@@ -424,7 +423,7 @@ fn prepare_payload_with_huge_tlv(r: &AlServiceRegistrationResponse, multicast: b
 }
 
 
-async fn test1() -> Result<()> {
+async fn test1() -> anyhow::Result<()> {
     // Modify this filter for your tracing during run time
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("trace")); //add 'tokio=trace' to debug the runtime
 
@@ -638,7 +637,7 @@ async fn send_huge_data(
     Ok(sdu_autoconfig_search)
 }
 
-async fn read_data(framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>) -> Result<SDU> {
+async fn read_data(framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>) -> anyhow::Result<SDU> {
     println!("Waiting for any data");
 
     let mut assembled_payload = Vec::new();
@@ -717,7 +716,7 @@ async fn read_data(framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCo
 }
 
 // Read complete SDU with CMDU and TLVs and compare CMDU payload
-async fn read_and_compare_data(framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>, data_to_compare: &Vec<u8>) -> Result<()> {
+async fn read_and_compare_data(framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>, data_to_compare: &Vec<u8>) -> anyhow::Result<()> {
     let sdu_wrapped = read_data(framed_data_socket).await;
     match sdu_wrapped {
         Ok(sdu) => {
@@ -1192,7 +1191,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let connect = args.connect.clone();
     let test = args.test_num.clone();
