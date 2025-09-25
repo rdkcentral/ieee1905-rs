@@ -289,11 +289,11 @@ async fn main() -> anyhow::Result<()> {
 
         // Launch of receiver, take in account logic for Rx is sperated from Logic for Tx, so we clone the forwarding_interface
         let tasker = Tasker::new();
-        let _cmdu_receiver_task = receiver.run(&forwarding_interface)?;
+        let mut cmdu_receiver_task = receiver.run(&forwarding_interface)?;
 
         // Sart of the discovery process
 
-        let lldp_receiver_tasks = &mut Vec::new();
+        let mut lldp_receiver_tasks = Vec::new();
         for interface in get_physical_ethernet_interfaces() {
             tracing::info!("Starting LLDP Discovery on {}/{}", interface.name, interface.mac);
 
@@ -351,10 +351,18 @@ async fn main() -> anyhow::Result<()> {
             for handle in &drained_handles {
                 handle.abort();
             }
+            for task in lldp_receiver_tasks.iter_mut() {
+                task.abort_all();
+            }
+            cmdu_receiver_task.abort_all();
             tracing::trace!("Tasks aborted. Waiting for them to finish");
             for handle in drained_handles {
                 let _ = handle.await;
             }
+            for mut task in lldp_receiver_tasks {
+                task.shutdown().await;
+            }
+            cmdu_receiver_task.shutdown().await;
             tracing::info!("All tasks aborted and finished.");
             continue;
         }
