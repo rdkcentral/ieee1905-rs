@@ -29,7 +29,6 @@ use nom::{
 
 use pnet::datalink::MacAddr;
 use std::fmt::Debug;
-
 // Internal modules
 use crate::cmdu_reassembler::CmduReassemblyError;
 use crate::tlv_cmdu_codec::TLV;
@@ -911,7 +910,7 @@ pub struct CMDU {
     pub payload: Vec<u8>,
 }
 impl CMDU {
-    pub fn get_tlvs(self) -> Vec<TLV> {
+    pub fn get_tlvs(&self) -> anyhow::Result<Vec<TLV>> {
         let mut tlvs: Vec<TLV> = vec![];
         let mut remaining_input = self.payload.as_slice();
         let mut has_reached_end = false;
@@ -940,12 +939,12 @@ impl CMDU {
                         .collect::<Vec<String>>()
                         .join(" ");
                     tracing::trace!("Remaining {}", hex_string);
-                    
-                    break // TODO should we allow partially parsed TLV's?
+
+                    return Err(anyhow::anyhow!("Failed to parse TLV: {e}"));
                 }
             }
         }
-        tlvs
+        Ok(tlvs)
     }
     //Force message version to be used for CMDUs received via HLE SDUs
     pub fn set_message_version(&mut self, version: MessageVersion) {
@@ -981,8 +980,11 @@ impl CMDU {
             payload: input.into(),
         };
         if flags & 0x80 != 0 && fragment == 0 {
+            let Ok(tlvs) = cmdu.get_tlvs() else {
+                return Err(NomErr::Failure(Error::new(input, ErrorKind::Tag)));
+            };
             // We can check if TLV's can be parsed and last TLV is really EoF
-            if let Some(last_tlv) = cmdu.clone().get_tlvs().last() {
+            if let Some(last_tlv) = tlvs.last() {
                 if last_tlv.tlv_type != IEEE1905TLVType::EndOfMessage.to_u8()
                     || last_tlv.tlv_length != 0
                     || last_tlv.tlv_value.is_some()
@@ -1624,7 +1626,7 @@ pub mod tests {
         let parsed_discovery = CMDU::parse(&serialized_discovery).unwrap().1;
 
         // Assert that the parsed CMDU matches the original
-        assert_eq!(cmdu_topology_discovery.get_tlvs(), parsed_discovery.get_tlvs());
+        assert_eq!(cmdu_topology_discovery.get_tlvs().unwrap(), parsed_discovery.get_tlvs().unwrap());
     }
 
     // Verify serializing and parsing topology discovery CMDU
@@ -1905,7 +1907,7 @@ pub mod tests {
         let serialized = cmdu.serialize();
         let parsed = CMDU::parse(&serialized).unwrap().1;
 
-        let tlvs = parsed.get_tlvs();
+        let tlvs = parsed.get_tlvs().unwrap();
         let searched_tlv = tlvs
             .iter()
             .find(|tlv| tlv.tlv_type == IEEE1905TLVType::SearchedRole.to_u8())
@@ -2181,7 +2183,7 @@ pub mod tests {
         let serialized = cmdu.serialize();
         let parsed = CMDU::parse(&serialized).unwrap().1;
 
-        let tlvs = parsed.get_tlvs();
+        let tlvs = parsed.get_tlvs().unwrap();
         let searched_tlv = tlvs
             .iter()
             .find(|tlv| tlv.tlv_type == IEEE1905TLVType::SearchedRole.to_u8())
@@ -2416,7 +2418,6 @@ pub mod tests {
 
     // Verify detection and signalling of mismatch between declared tlv_length and the real length of TLV's payload
     #[test]
-    #[should_panic]
     fn test_get_tlvs_too_short_data() {
         // Make CMDU with two small TLVs
         let cmdu = make_dummy_cmdu(vec![100, 200]);
@@ -2437,7 +2438,7 @@ pub mod tests {
         let (_, cmdu_parsed) = CMDU::parse(cmdu_payload_extended.as_slice()).unwrap();
 
         // Expect panic as the bad_tlv_length.tlv_length (100) doesn't match the real TLV payload length (1)
-        let _tlvs = cmdu_parsed.get_tlvs();
+        assert!(cmdu_parsed.get_tlvs().is_err());
     }
 
     // Verify fragmentation and reassembly on CMDU with size of 1501 bytes
@@ -2533,7 +2534,6 @@ pub mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn test_unknown_tlv() {
         let end_of_message_tlv = TLV {
             tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
@@ -2552,9 +2552,9 @@ pub mod tests {
         };
 
         let serialized_query = cmdu_topology_query.serialize();
-        let parsed_query = CMDU::parse(&serialized_query).unwrap().1;
+        let parsed_query_result = CMDU::parse(&serialized_query);
 
-        assert_eq!(cmdu_topology_query, parsed_query);
+        assert!(parsed_query_result.is_err());
     }
 
     // Check detection and signalling of missing last fragment in CMDU fragments chain

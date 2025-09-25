@@ -31,6 +31,8 @@ use pnet::datalink::MacAddr;
 // Standard library
 use crate::cmdu_codec::*;
 use std::fmt::Debug;
+use nom::error::{Error, ErrorKind};
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct SDU {
     pub source_al_mac_address: MacAddr,      // Source MAC address
@@ -77,7 +79,10 @@ impl SDU {
         if is_fragment == 0 && is_last_fragment == 1 {
             match CMDU::parse(&payload) {
                 Ok((_, parsed_cmd)) => {
-                    if let Some(last_tlv) = parsed_cmd.get_tlvs().last() {
+                    let Ok(tlvs) = parsed_cmd.get_tlvs() else {
+                        return Err(nom::Err::Failure(Error::new(input, ErrorKind::Tag)));
+                    };
+                    if let Some(last_tlv) = tlvs.last() {
                         if last_tlv.tlv_type != IEEE1905TLVType::EndOfMessage.to_u8()
                             || last_tlv.tlv_length != 0
                             || last_tlv.tlv_value.is_some()
@@ -620,7 +625,8 @@ mod tests {
 
         // Expect ErrorKind::Tag error trying to parse TLV chain with additional redundant TLV after EndOfMessage TLV
         match SDU::parse(&sdu_bytes) {
-            Err(NomErr::Error(_)) | Err(NomErr::Incomplete(_)) | Ok(_) => {
+            Ok(_) => { /* everything after EOM is considered padding */ }
+            Err(NomErr::Error(_)) | Err(NomErr::Incomplete(_)) => {
                 panic!("ErrorKind::Tag should be returned on additional TLV after EndOfMessage TLV in CMDU");
             }
             Err(NomErr::Failure(e)) => {
