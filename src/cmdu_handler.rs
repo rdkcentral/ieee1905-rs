@@ -275,14 +275,12 @@ impl CMDUHandler {
                 self.process_cmdus(cmdu, source_mac, destination_mac)
                     .await;
             }
-            Some(_) => {
+            _ => {
                 tracing::trace!("Handling message version different than 2013");
                 //process_sdus
                 self.process_sdus(cmdu, source_mac, destination_mac)
                     .await;
             }
-            // TODO should we handle unknown versions?
-            _ => trace!("Unknown message version: {:02x}", cmdu.message_version),
         }
     }
 
