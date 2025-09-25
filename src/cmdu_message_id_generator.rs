@@ -39,17 +39,15 @@ impl MessageIdGenerator {
 
     /// Get the next message ID, cycling back to 0x0001 after 0xFFFF.
     pub fn next_id(&self) -> u16 {
-        loop {
-            // Update the counter using modulo 2^16 but not 0 (atomics always wrap)
-            let id = self.counter.fetch_add(1, Ordering::Relaxed);
-            if id == 0 {
-                continue;
-            }
-
-            // Log the generated ID
-            debug!("Generated Message ID: {id:#06X}");
-            break id;
+        // Update the counter using modulo 2^16 but not 0 (atomics always wrap)
+        let mut id = self.counter.fetch_add(1, Ordering::Relaxed);
+        while id == 0 {
+            id = self.counter.fetch_add(1, Ordering::Relaxed);
         }
+
+        // Log the generated ID
+        debug!("Generated Message ID: {id:#06X}");
+        id
     }
 }
 
