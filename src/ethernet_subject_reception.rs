@@ -18,99 +18,97 @@
 */
 
 #![deny(warnings)]
+
 // External crates
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use pnet::datalink::{self, Channel::Ethernet, Config};
 use pnet::packet::ethernet::EthernetPacket;
 use pnet::packet::Packet;
 use pnet::util::MacAddr;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use anyhow::{anyhow, bail};
-use tokio::sync::{mpsc, Mutex};
-use tokio::task::{self, yield_now};
-use tokio_tasker::Tasker;
+use tokio::sync::mpsc::Sender;
+use tokio::task::{yield_now, JoinSet};
 use tracing::{debug, error, info, warn};
-use crate::task_registry::TASK_REGISTRY;
 
 /// Observer trait for handling specific Ethernet frame types
 #[async_trait]
-pub trait EthernetFrameObserver: Send + Sync {
-    async fn on_frame(&self, interface_mac: MacAddr, frame: &[u8], source_mac: MacAddr, destination_mac: MacAddr);
+pub trait EthernetFrameObserver: Send + Sync + 'static {
+    async fn on_frame(
+        &self,
+        interface_mac: MacAddr,
+        frame: &[u8],
+        source_mac: MacAddr,
+        destination_mac: MacAddr,
+    );
     fn get_ethertype(&self) -> u16;
 }
-type MacAddrHashMap = HashMap<u16, Vec<mpsc::Sender<(MacAddr, Vec<u8>, MacAddr, MacAddr)>>>;
-type ChannelType = (MacAddr, u16, Vec<u8>, MacAddr, MacAddr);
+
 /// Subject that receives Ethernet frames and notifies subscribed observers
+#[derive(Default)]
 pub struct EthernetReceiver {
-    observers: Arc<Mutex<MacAddrHashMap>>,
-    rx_channel: mpsc::Sender<ChannelType>,
+    join_set: JoinSet<()>,
+    observers: HashMap<u16, Sender<EthernetMessage>>,
 }
 
+struct EthernetMessage {
+    interface_mac: MacAddr,
+    ether_type: u16,
+    payload: Vec<u8>,
+    source_mac: MacAddr,
+    destination_mac: MacAddr,
+}
 
 impl EthernetReceiver {
     /// **Create a new `EthernetReceiver`**
     pub fn new() -> Self {
-        let (tx, mut rx): (mpsc::Sender<ChannelType>, mpsc::Receiver<ChannelType>) = mpsc::channel(100);
-
-        let observers: Arc<Mutex<MacAddrHashMap>>
-            = Arc::new(Mutex::new(HashMap::new()));
-
-        let observers_clone = Arc::clone(&observers);
-
-        // Spawn an async task to notify observers
-        task::spawn(async move {
-            while let Some((interface_mac, ethertype, frame, source_mac, destination_mac)) = rx.recv().await {
-                let obs = observers_clone.lock().await;
-
-                if let Some(observer_list) = obs.get(&ethertype) {
-                    for observer_tx in observer_list {
-                        if observer_tx.send((interface_mac, frame.clone(), source_mac, destination_mac)).await.is_err() {
-                            error!("Failed to notify observer for EtherType: 0x{:04X}", ethertype);
-                        } else {
-                            debug!("Notified observer for EtherType: 0x{:04X}", ethertype);
-                        }
-                    }
-                }
-            }
-        });
-
-        Self {
-            observers,
-            rx_channel: tx,
-        }
+        Self::default()
     }
 
-   /// **Subscribe an observer**, avoiding duplicate subscriptions for the same `EtherType`
-    pub async fn subscribe<O: EthernetFrameObserver + 'static>(&self, observer: Arc<O>) {
-        let ethertype = observer.get_ethertype();
-        debug!("Trying to subscribe observer for EtherType: 0x{:04X}", ethertype);
-
-        let mut obs = self.observers.lock().await;
+    /// **Subscribe an observer**, avoiding duplicate subscriptions for the same `EtherType`
+    pub fn subscribe(&mut self, observer: Arc<impl EthernetFrameObserver>) {
+        let ether_type = observer.get_ethertype();
+        debug!("Trying to subscribe observer for EtherType: 0x{ether_type:04X}");
 
         // Si ya hay un canal para ese ethertype, no duplicamos suscripciones
-        if obs.contains_key(&ethertype) {
-            warn!("Observer for EtherType 0x{:04X} is already subscribed — skipping duplicate", ethertype);
-            return;
-        }
+        let observer_entry = match self.observers.entry(ether_type) {
+            Entry::Occupied(_) => {
+                warn!("Observer for EtherType 0x{ether_type:04X} is already subscribed — skipping duplicate");
+                return;
+            }
+            Entry::Vacant(e) => e,
+        };
 
-        let (tx, mut rx) = mpsc::channel(1000);
-        obs.insert(ethertype, vec![tx]);
+        let (observer_tx, mut observer_rx) = tokio::sync::mpsc::channel(1000);
+        observer_entry.insert(observer_tx);
 
-        // Spawn async task to process received frames
-        let observer_clone = Arc::clone(&observer);
-        let task_handle = task::spawn(async move {
-            debug!("Observer task started for EtherType: 0x{:04X}", ethertype);
-            while let Some((interface_mac, frame, source_mac, destination_mac)) = rx.recv().await {
+        self.join_set.spawn(async move {
+            debug!("Observer task started for EtherType: 0x{:04X}", ether_type);
+
+            while let Some(message) = observer_rx.recv().await {
                 debug!(
-                    interface_mac = ?interface_mac,
-                    source_mac = ?source_mac,
-                    destination_mac = ?destination_mac,
-                    frame_length = frame.len(),
+                    interface_mac = ?message.interface_mac,
+                    source_mac = ?message.source_mac,
+                    destination_mac = ?message.destination_mac,
+                    frame_length = message.payload.len(),
                     "Observer received frame"
                 );
-                observer_clone.on_frame(interface_mac, &frame, source_mac, destination_mac).await;
+
+                observer
+                    .on_frame(
+                        message.interface_mac,
+                        &message.payload,
+                        message.source_mac,
+                        message.destination_mac,
+                    )
+                    .await;
+
+                // TODO this looks like a "magic delay" workaround and
+                //  should be properly fixed on the reassembler side
+
                 // To avoid situation when cmdu part with flag end
                 // is processed before first one
                 // yield will casue that reassembler is triggered for with
@@ -118,13 +116,10 @@ impl EthernetReceiver {
                 yield_now().await;
             }
         });
-        TASK_REGISTRY.lock().await.push(task_handle);
     }
 
-
-
     /// **Start receiving Ethernet frames**
-    pub async fn run(&self, interface_name: &str, tasker: Tasker) -> anyhow::Result<()> {
+    pub fn run(mut self, interface_name: &str) -> anyhow::Result<JoinSet<()>> {
         info!("Starting EthernetReceiver on interface: {}", interface_name);
 
         let interfaces = datalink::interfaces();
@@ -137,63 +132,74 @@ impl EthernetReceiver {
             anyhow!("Failed to retrieve MAC address for interface {interface_name}")
         })?;
 
-        info!("Listening on interface: {} (MAC: {})", interface_name, interface_mac);
+        info!("Listening on interface: {interface_name} (MAC: {interface_mac})");
         // Since we spawn a blocking task, we need to have an opportunity
         // to act on shutdown signal, that's why 1 sec. timeout is used.
-        let config = Config { read_timeout: Some(Duration::from_secs(1)), ..Default::default() };
-        let (_tx, rx) = match datalink::channel(&interface, config) {
-            Ok(Ethernet(tx, rx)) => (tx, rx),
+        let config = Config {
+            read_timeout: Some(Duration::from_secs(1)),
+            ..Default::default()
+        };
+
+        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(128);
+        let mut datalink_rx = match datalink::channel(&interface, config) {
+            Ok(Ethernet(_, rx)) => rx,
             Ok(_) => bail!("Unsupported channel type"),
             Err(e) => bail!("Failed to create datalink channel: {e}"),
         };
 
-        let tx_channel = self.rx_channel.clone();
-
-                task::spawn_blocking(move || {
-                    info!("Listening for Ethernet frames...");
-                    let mut rx = rx;
-
-                    loop {
-                        if tasker.stopper().is_stopped() {
-                            debug!("Stopping loop due tu tasker signal");
-                            tasker.finish();
-                            break;
-                        }
-                        match rx.next() {
-                            Ok(packet) => {
-                                if let Some(eth_packet) = EthernetPacket::new(packet) {
-                                    let ethertype = eth_packet.get_ethertype().0;
-                                    let payload = eth_packet.payload().to_vec();
-                                    let source_mac = eth_packet.get_source();
-                                    let destination_mac = eth_packet.get_destination();
-
-                                    debug!(
-                                        ethertype = format!("0x{:04X}", ethertype),
-                                        source_mac = ?source_mac,
-                                        destination_mac = ?destination_mac,
-                                        packet_length = eth_packet.packet().len(),
-                                        "Received Ethernet frame"
-                                    );
-
-                            // Notify observers with interface MAC included
-                            if tx_channel.blocking_send((interface_mac, ethertype, payload, source_mac, destination_mac)).is_err() {
-                                        warn!("Packet dropped: failed to send to async observer handler (queue full?)");
-                                    }
-                                } else {
-                                    error!("Failed to parse Ethernet frame.");
-                                }
-                            }
-                            Err(e) => {error!("Error receiving Ethernet frame: {:?}", e);},
-                        }
+        self.join_set.spawn_blocking(move || {
+            info!("Listening for Ethernet frames...");
+            while !notify_tx.is_closed() {
+                let packet = match datalink_rx.next() {
+                    Ok(e) => e,
+                    Err(e) => {
+                        error!("Error receiving Ethernet frame: {e:?}");
+                        continue;
                     }
-                });
-        
-        Ok(())
-    }
-}
+                };
 
-impl Default for EthernetReceiver {
-    fn default() -> Self {
-        Self::new()
+                let Some(eth_packet) = EthernetPacket::new(packet) else {
+                    error!("Failed to parse Ethernet frame.");
+                    continue;
+                };
+
+                let message = EthernetMessage {
+                    interface_mac,
+                    ether_type: eth_packet.get_ethertype().0,
+                    payload: eth_packet.payload().to_vec(),
+                    source_mac: eth_packet.get_source(),
+                    destination_mac: eth_packet.get_destination(),
+                };
+
+                debug!(
+                    ethertype = format!("0x{:04X}", message.ether_type),
+                    source_mac = ?message.source_mac,
+                    destination_mac = ?message.destination_mac,
+                    packet_length = eth_packet.packet().len(),
+                    "Received Ethernet frame"
+                );
+
+                // Notify observers with interface MAC included
+                if notify_tx.blocking_send(message).is_err() {
+                    warn!("Packet dropped: failed to send to async observer handler");
+                }
+            }
+        });
+
+        // TODO this intermediate channel is not needed and can be removed
+        self.join_set.spawn(async move {
+            while let Some(message) = notify_rx.recv().await {
+                let ether_type = message.ether_type;
+                let Some(observer) = self.observers.get(&ether_type) else {
+                    continue;
+                };
+                if observer.send(message).await.is_ok() {
+                    debug!("Notified observer for EtherType: 0x{ether_type:04X}");
+                } else {
+                    error!("Failed to notify observer for EtherType: 0x{ether_type:04X}");
+                }
+            }
+        });
+        Ok(self.join_set)
     }
 }
