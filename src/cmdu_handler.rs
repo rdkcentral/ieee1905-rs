@@ -120,6 +120,7 @@ impl CMDUHandler {
                 self.handle_topology_query(
                     cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
+                    cmdu.message_version,
                     source_mac,
                 )
                 .await
@@ -200,6 +201,7 @@ impl CMDUHandler {
                 self.handle_topology_query(
                     cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
+                    cmdu.message_version,
                     source_mac,
                 )
                 .await
@@ -558,7 +560,7 @@ impl CMDUHandler {
     }
 
     /// Handles and logs TLVs for Topology Query.
-    async fn handle_topology_query(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) {
+    async fn handle_topology_query(&self, tlvs: &[TLV], message_id: u16, message_version: u8, source_mac: MacAddr) {
         debug!(
             "Handling Topology Query CMDU on interface {}",
             self.interface_name
@@ -603,69 +605,77 @@ impl CMDUHandler {
             return;
         }
 
-        if let Some(remote_al_mac_address) = remote_al_mac {
+        let remote_al_mac_address: MacAddr;
+        if remote_al_mac.is_some() {
+            remote_al_mac_address = remote_al_mac.unwrap();
             info!(
                 "Topology Query received from AL_MAC={}",
                 remote_al_mac_address
             );
+        } else {
+            if message_version == MessageVersion::Version2013.to_u8() {
+                remote_al_mac_address = source_mac;
+                info!("Topology Query without AL_MAC TLV. Using source mac address: {source_mac:?}");
+            } else {
+                error!("Topology Query without AL_MAC TLV. Malformed message. Ignoring CMDU.");
+                return;
+            }
+        }
 
-            let topology_db =
-                TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
-                    .await;
+        let topology_db =
+            TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
+                .await;
 
-            let device_data = Ieee1905DeviceData {
-                al_mac: remote_al_mac_address,
-                destination_mac: Some(source_mac),
-                local_interface_list: None,
-                registry_role: None,
-            };
+        let device_data = Ieee1905DeviceData {
+            al_mac: remote_al_mac_address,
+            destination_mac: Some(source_mac),
+            local_interface_list: None,
+            registry_role: None,
+        };
 
-            let event = {
-                topology_db
-                    .update_ieee1905_topology(
-                        device_data,
-                        UpdateType::QueryReceived,
-                        Some(message_id),
-                        None,
-                    )
-                    .await
-            };
+        let event = {
+            topology_db
+                .update_ieee1905_topology(
+                    device_data,
+                    UpdateType::QueryReceived,
+                    Some(message_id),
+                    None,
+                )
+                .await
+        };
 
-            debug!(
+        debug!(
                 "Topology Database updated: AL_MAC={} set to QueryReceived",
                 remote_al_mac_address
             );
 
-            // Now process the event
-            match event {
-                TransmissionEvent::SendTopologyResponse(destination_mac) => {
-                    debug!(
+        // Now process the event
+        match event {
+            TransmissionEvent::SendTopologyResponse(destination_mac) => {
+                debug!(
                         remote = %remote_al_mac_address,
                         local = %self.local_al_mac,
                         "Preparing to send Topology Response"
                     );
 
-                    let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
 
-                    cmdu_topology_response_transmission(
-                        self.interface_name.clone(),
-                        self.sender.clone(),
-                        self.local_al_mac,
-                        destination_mac,
-                        forwarding_interface_mac,
-                    )
+                cmdu_topology_response_transmission(
+                    self.interface_name.clone(),
+                    self.sender.clone(),
+                    self.local_al_mac,
+                    destination_mac,
+                    forwarding_interface_mac,
+                )
                     .await;
-                }
-                TransmissionEvent::None => {
-                    debug!(
+            }
+            TransmissionEvent::None => {
+                debug!(
                         remote = %remote_al_mac_address,
                         "No transmission needed after topology query update"
                     );
-                }
-                _ => {} // Future proof: ignore other events
             }
-        } else {
-            warn!("Topology Query failed: Missing AL MAC Address TLV");
+            _ => {} // Future proof: ignore other events
         }
     }
 
