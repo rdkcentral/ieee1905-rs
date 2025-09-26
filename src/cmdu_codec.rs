@@ -29,6 +29,7 @@ use nom::{
 
 use pnet::datalink::MacAddr;
 use std::fmt::Debug;
+use bytes::Buf;
 // Internal modules
 use crate::cmdu_reassembler::CmduReassemblyError;
 use crate::tlv_cmdu_codec::TLV;
@@ -175,33 +176,20 @@ pub struct AlMacAddress {
 }
 
 impl AlMacAddress {
-    pub fn parse(input: &[u8], input_length: u16) -> IResult<&[u8], Self> {
-        //let (input, mac_bytes) = take(6usize)(input)?;
-        let (input, mac_bytes) = take(input_length as usize)(input)?;
-
+    pub fn parse(input: &mut impl Buf) -> anyhow::Result<Self> {
         let al_mac_address = MacAddr::new(
-            mac_bytes[0],
-            mac_bytes[1],
-            mac_bytes[2],
-            mac_bytes[3],
-            mac_bytes[4],
-            mac_bytes[5],
+            input.try_get_u8()?,
+            input.try_get_u8()?,
+            input.try_get_u8()?,
+            input.try_get_u8()?,
+            input.try_get_u8()?,
+            input.try_get_u8()?,
         );
-
-        Ok((input, Self { al_mac_address }))
+        Ok(Self { al_mac_address })
     }
 
     pub fn serialize(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&[
-            self.al_mac_address.0,
-            self.al_mac_address.1,
-            self.al_mac_address.2,
-            self.al_mac_address.3,
-            self.al_mac_address.4,
-            self.al_mac_address.5,
-        ]);
-        bytes
+        self.al_mac_address.octets().to_vec()
     }
 }
 ///////////////////////////////////////////////////////////////////////////
@@ -212,33 +200,20 @@ pub struct MacAddress {
 }
 
 impl MacAddress {
-    pub fn parse(input: &[u8], input_length: u16) -> IResult<&[u8], Self> {
-        //let (input, mac_bytes) = take(6usize)(input)?;
-        let (input, mac_bytes) = take(input_length as usize)(input)?;
-
+    pub fn parse(input: &mut impl Buf) -> anyhow::Result<Self> {
         let mac_address = MacAddr::new(
-            mac_bytes[0],
-            mac_bytes[1],
-            mac_bytes[2],
-            mac_bytes[3],
-            mac_bytes[4],
-            mac_bytes[5],
+            input.try_get_u8()?,
+            input.try_get_u8()?,
+            input.try_get_u8()?,
+            input.try_get_u8()?,
+            input.try_get_u8()?,
+            input.try_get_u8()?,
         );
-
-        Ok((input, Self { mac_address }))
+        Ok(Self { mac_address })
     }
 
     pub fn serialize(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&[
-            self.mac_address.0,
-            self.mac_address.1,
-            self.mac_address.2,
-            self.mac_address.3,
-            self.mac_address.4,
-            self.mac_address.5,
-        ]);
-        bytes
+        self.mac_address.octets().to_vec()
     }
 }
 ///////////////////////////////////////////////////////////////////////////
@@ -2102,10 +2077,10 @@ pub mod tests {
     #[test]
     fn test_al_mac_address_parse_and_serialize() {
         // Prepare example local MAC address
-        let al_mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
+        let al_mac = [0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
 
         // Parse provided example data as AL MAC address
-        let parsed = AlMacAddress::parse(&al_mac[..], al_mac.len() as u16).unwrap().1;
+        let parsed = AlMacAddress::parse(&mut al_mac.as_slice()).unwrap();
 
         // Expect success comparing parsed and then serialized AL MAC address with original one
         assert_eq!(parsed.serialize(), al_mac);
@@ -2115,10 +2090,10 @@ pub mod tests {
     #[test]
     fn test_mac_address_parse_and_serialize() {
         // Prepare example vector with valid MAC address
-        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
+        let mac = [0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
 
         // Do the parsing as MacAddress
-        let parsed = MacAddress::parse(&mac[..], mac.len() as u16).unwrap().1;
+        let parsed = MacAddress::parse(&mut mac.as_slice()).unwrap();
 
         // Expect success comparing parsed and then serialized MAC address with original one
         assert_eq!(parsed.serialize(), mac);
@@ -2126,10 +2101,9 @@ pub mod tests {
 
     // Verify parsing incomplete data (only 5 bytes from 6 required for MAC address) as AlMacAddress
     #[test]
-    #[should_panic]
     fn test_mac_address_try_to_parse_not_enough_data() {
-        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64];
-        let _ = MacAddress::parse(&mac[..], mac.len() as u16).unwrap().1;
+        let mac = [0x02, 0x42, 0xc0, 0xa8, 0x64];
+        assert!(MacAddress::parse(&mut mac.as_slice()).is_err());
     }
 
     // Unit tests using malformed data
@@ -2373,47 +2347,42 @@ pub mod tests {
 
     // Verify parsing incomplete data (only 5 bytes from 6 required for MAC address) as AlMacAddress
     #[test]
-    #[should_panic]
     fn test_al_mac_address_try_to_parse_not_enough_data() {
         // Prepare example vector with bad, shortened local MAC address data to 5 bytes
-        let al_mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64];
+        let al_mac = [0x02, 0x42, 0xc0, 0xa8, 0x64];
 
-        // Expect panic trying to parse 5 bytes instead of required 6
-        let _ = AlMacAddress::parse(&al_mac[..], al_mac.len() as u16).unwrap().1;
+        // Expect error trying to parse 5 bytes instead of required 6
+        assert!(AlMacAddress::parse(&mut al_mac.as_slice()).is_err());
     }
 
     // Verify returning redundant data after parsing AlMacAddress
     #[test]
     fn test_al_mac_address_try_to_parse_too_much_data() {
-        // Prepare example vector with valid AL MAC address
-        let al_mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
-        let mut data: Vec<u8> = al_mac.clone();
-
-        // Add redundant byte which should be returned by parser as unparsed part of the passed input
-        data.push(0x11);
+        // Prepare vector with valid AL MAC address and redundant byte
+        let mac = [0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02, 0x11];
 
         // Do the parsing as AlMacAddress
-        let (rest, _) = AlMacAddress::parse(&data[..], al_mac.len() as u16).unwrap();
+        let ptr = &mut mac.as_slice();
+        let parsed_mac = AlMacAddress::parse(ptr).unwrap();
 
         // Expect slice with 0x11 value as redundant data after parsing
-        assert_eq!(rest, &[0x11]);
+        assert_eq!(ptr, &[0x11]);
+        assert_eq!(parsed_mac.serialize(), &mac[..6]);
     }
 
     // Verify returning redundant data after parsing MacAddress
     #[test]
     fn test_mac_address_try_to_parse_too_much_data() {
-        // Prepare example vector with valid MAC address
-        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
-        let mut data: Vec<u8> = mac.clone();
-
-        // Add redundant byte which should be returned by parser as unparsed part of the passed input
-        data.push(0x11);
+        // Prepare buffer with valid MAC address and redundant byte
+        let mac = [0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02, 0x11];
 
         // Do the parsing as MacAddress
-        let (rest, _) = MacAddress::parse(&data[..], mac.len() as u16).unwrap();
+        let ptr = &mut mac.as_slice();
+        let parsed_mac = MacAddress::parse(ptr).unwrap();
 
         // Expect slice with 0x11 value as redundant data after parsing
-        assert_eq!(rest, &[0x11]);
+        assert_eq!(ptr, &[0x11]);
+        assert_eq!(parsed_mac.serialize(), &mac[..6]);
     }
 
     // Verify detection and signalling of mismatch between declared tlv_length and the real length of TLV's payload

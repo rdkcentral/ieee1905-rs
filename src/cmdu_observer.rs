@@ -70,7 +70,9 @@ impl EthernetFrameObserver for CMDUObserver {
                 //let interface_name = handler_ref.interface_name.clone(); // --> not needed for now unles we pass the interface to the handler
 
                 let task_handle = tokio::spawn(async move {
-                    handler_ref.handle_cmdu(&cmdu, source_mac, destination_mac).await;
+                    if let Err(e) = handler_ref.handle_cmdu(&cmdu, source_mac, destination_mac).await {
+                        error!("Failed to handle CMDU: {e:?}");
+                    }
                 });
                 TASK_REGISTRY.lock().await.push(task_handle);
             }

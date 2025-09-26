@@ -20,6 +20,7 @@
 #![deny(warnings)]
 use std::collections::HashMap;
 use std::sync::Arc;
+use anyhow::bail;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::al_sap::service_access_point_data_indication;
@@ -44,6 +45,8 @@ pub struct CMDUHandler {
 }
 
 impl CMDUHandler {
+    const MAX_CMDU_SIZE: usize = 1500;
+
     pub async fn new(
         sender: Arc<EthernetSender>,
         message_id_generator: Arc<MessageIdGenerator>,
@@ -58,14 +61,12 @@ impl CMDUHandler {
             reassembler: Arc::new(CmduReassembler::new().await),
         }
     }
-    pub async fn handle_cmdu(&self, cmdu: &CMDU, source_mac: MacAddr, destination_mac: MacAddr) {
+    pub async fn handle_cmdu(&self, cmdu: &CMDU, source_mac: MacAddr, destination_mac: MacAddr) -> anyhow::Result<()> {
         tracing::trace!("Handling CMDU <{cmdu:?}> source mac: {source_mac}, destination_mac {destination_mac:?}");
-        assert!(
-            cmdu.total_size() <= 1500,
-            "CMDU should have maximum {} bytes but is {} bytes long",
-            1500,
-            cmdu.total_size()
-        );
+
+        if cmdu.total_size() > Self::MAX_CMDU_SIZE {
+            bail!("CMDU should have maximum {} bytes but is {} bytes long", Self::MAX_CMDU_SIZE, cmdu.total_size());
+        }
 
         let cmdu_to_process = if cmdu.is_fragmented() {
             let fragment_clone = cmdu.clone();
@@ -83,8 +84,7 @@ impl CMDUHandler {
                     full_cmdu
                 }
                 Some(Err(e)) => {
-                    error!("Error reassembling CMDU: {:?}", e);
-                    return;
+                    bail!("Error reassembling CMDU: {e:?}");
                 }
                 None => {
                     trace!(
@@ -92,7 +92,7 @@ impl CMDUHandler {
                         cmdu.message_id,
                         cmdu.fragment
                     );
-                    return;
+                    return Ok(());
                 }
             }
         } else {
@@ -101,6 +101,7 @@ impl CMDUHandler {
         tracing::trace!("Dispatching CMDU {cmdu_to_process:?} source mac {source_mac:?} destination_mac {destination_mac:?}");
         self.dispatch_cmdu(cmdu_to_process, source_mac, destination_mac)
             .await;
+        Ok(())
     }
 
     /// Some discriminated messages created above the SAP
@@ -304,8 +305,8 @@ impl CMDUHandler {
         for tlv in tlvs {
             match IEEE1905TLVType::from_u8(tlv.tlv_type) {
                 IEEE1905TLVType::AlMacAddress => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
+                    if let Some(value) = &tlv.tlv_value {
+                        if let Ok(parsed) = AlMacAddress::parse(&mut value.as_slice()) {
                             remote_al_mac = Some(parsed.al_mac_address);
                         }
                     }
@@ -469,15 +470,15 @@ impl CMDUHandler {
 
             match IEEE1905TLVType::from_u8(tlv.tlv_type) {
                 IEEE1905TLVType::AlMacAddress => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
+                    if let Some(value) = &tlv.tlv_value {
+                        if let Ok(parsed) = AlMacAddress::parse(&mut value.as_slice()) {
                             remote_al_mac = Some(parsed.al_mac_address);
                         }
                     }
                 }
                 IEEE1905TLVType::MacAddress => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = MacAddress::parse(value, tlv.tlv_length) {
+                    if let Some(value) = &tlv.tlv_value {
+                        if let Ok(parsed) = MacAddress::parse(&mut value.as_slice()) {
                             remote_interface_mac = Some(parsed.mac_address);
                         }
                     }
@@ -577,8 +578,8 @@ impl CMDUHandler {
 
             match tlv_type {
                 IEEE1905TLVType::AlMacAddress => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
+                    if let Some(value) = &tlv.tlv_value {
+                        if let Ok(parsed) = AlMacAddress::parse(&mut value.as_slice()) {
                             remote_al_mac = Some(parsed.al_mac_address);
                             debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
                         }
@@ -684,8 +685,8 @@ impl CMDUHandler {
         for tlv in tlvs {
             match IEEE1905TLVType::from_u8(tlv.tlv_type) {
                 IEEE1905TLVType::AlMacAddress => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
+                    if let Some(value) = &tlv.tlv_value {
+                        if let Ok(parsed) = AlMacAddress::parse(&mut value.as_slice()) {
                             remote_al_mac = Some(parsed.al_mac_address);
                             tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
                         }
@@ -816,8 +817,8 @@ impl CMDUHandler {
 
             match IEEE1905TLVType::from_u8(tlv.tlv_type) {
                 IEEE1905TLVType::AlMacAddress => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
+                    if let Some(value) = &tlv.tlv_value {
+                        if let Ok(parsed) = AlMacAddress::parse(&mut value.as_slice()) {
                             remote_al_mac = Some(parsed.al_mac_address);
                         }
                     }
@@ -1246,7 +1247,6 @@ mod tests {
 
     // Verify detection of oversized CMDU
     #[tokio::test]
-    #[should_panic]
     async fn test_handle_cmdu_function_for_oversized_cmdu() {
         // Prepare forwarding interface
         let interface_name = "eth0".to_string();
@@ -1293,9 +1293,7 @@ mod tests {
         let destination_mac = MacAddr::new(0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc);
 
         // Expect panic in handle_cmdu() as the CMDU size is prepared to have 1501 bytes
-        cmdu_handler
-            .handle_cmdu(&cmdu, source_mac, destination_mac)
-            .await;
+        assert!(cmdu_handler.handle_cmdu(&cmdu, source_mac, destination_mac).await.is_err());
     }
 
     #[tokio::test]
