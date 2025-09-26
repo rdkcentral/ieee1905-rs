@@ -23,7 +23,6 @@ crossterm = "0.29.0"
 netdev = "0.37.3"
 anyhow = "1.0.99"
 futures = "0.3"
-eyre = "0.6.12"
 tokio-tasker = "1.2.0"
 tokio-util = "0.7.16"
 clap = { version = "4.5.47", features = ["derive"] }

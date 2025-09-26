@@ -398,7 +398,10 @@ pub async fn intercept_roles_and_compare_with_local(sdu_payload: Vec<u8>) {
     let mut expected_role: Option<Role> = None;
     match CMDU::parse(&sdu_payload) {
         Ok((_, parsed_cmd)) => {
-            for tlv in parsed_cmd.get_tlvs() {
+            let Ok(tlvs) = parsed_cmd.get_tlvs() else {
+                return tracing::error!("SDU TLVs parse ERROR. We expect valid SDU/CMDU here!");
+            };
+            for tlv in tlvs {
                 if tlv.tlv_type == IEEE1905TLVType::SearchedRole.to_u8() {
                     //Registrar -- controller
                     expected_role = Some(Role::Registrar);
@@ -517,8 +520,13 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
 
                                         match CMDU::parse(&assembled_payload) {
                                             Ok((_, parsed_cmd)) => {
-                                                if let Some(last_tlv) = parsed_cmd.get_tlvs().last()
-                                                {
+                                                let Ok(tlvs) = parsed_cmd.get_tlvs() else {
+                                                    tracing::error!("ReassembleSDU: Cannot parse CMDU TLVs");
+                                                    return Err(AlSapError::Other(
+                                                        "Error: Cannot parse CMDU TLVs".to_string(),
+                                                    ));
+                                                };
+                                                if let Some(last_tlv) = tlvs.last() {
                                                     if last_tlv.tlv_type
                                                         != IEEE1905TLVType::EndOfMessage.to_u8()
                                                         || last_tlv.tlv_length != 0

@@ -31,7 +31,7 @@ use tokio::{
     task::{spawn, yield_now},
     time::{interval, Duration, Instant},
 };
-use tracing::debug;
+use tracing::{debug, warn};
 use tui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -304,6 +304,9 @@ impl TopologyDatabase {
     pub async fn new(al_mac_address: MacAddr, interface_name: String) -> Self {
         debug!(al_mac = %al_mac_address, "Database initialized");
 
+        // TODO singletons initialization must not be failable. this db should be
+        //  initialized eagerly from main, and propagated as a dependency
+
         // Get local MAC address from forwarding interface
         let local_mac = Arc::new(RwLock::new(get_forwarding_interface_mac(interface_name.clone()).unwrap()));
 
@@ -348,6 +351,7 @@ impl TopologyDatabase {
             .await
             .clone()
     }
+
     /// **Retrieves a device node from the database**
     pub async fn get_device(&self, al_mac: MacAddr) -> Option<Ieee1905Node> {
         let nodes = self.nodes.read().await; // Read lock
@@ -473,8 +477,10 @@ impl TopologyDatabase {
                     }
                 }
                 if let Some(int_name) = interface_name.read().await.clone() {
-                    let mut mac_lock = forwarding_mac.write().await;
-                    *mac_lock = get_forwarding_interface_mac(int_name).unwrap();
+                    match get_forwarding_interface_mac(int_name) {
+                        Some(e) => *forwarding_mac.write().await = e,
+                        None => warn!("Failed to fetch forwarding mac address"),
+                    }
                 }
             }
         });

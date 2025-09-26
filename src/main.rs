@@ -19,7 +19,6 @@
 
 #![deny(warnings)]
 use clap::Parser;
-use eyre::Result;
 use ieee1905::al_sap::AlServiceAccessPoint;
 use ieee1905::cmdu_handler::*;
 use ieee1905::cmdu_message_id_generator::get_message_id_generator;
@@ -34,14 +33,13 @@ use ieee1905::topology_manager::*;
 use ieee1905::CMDUObserver;
 //use ieee1905::crypto_engine::CRYPTO_CONTEXT;
 use std::sync::Arc;
+use anyhow::anyhow;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_tasker::Tasker;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-
-
 use tracing_appender::rolling;
 
 #[derive(Parser)]
@@ -75,7 +73,7 @@ struct CliArgs {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     let cli = CliArgs::parse();
 
     // Start the Tokio console subscriber
@@ -194,8 +192,10 @@ async fn main() -> Result<()> {
             };
 
 
-        // Calculate AL MAC Address (Derived from Frowarding Ethernet Interface)
-        let al_mac = get_local_al_mac(cli.interface.clone()).unwrap();
+        // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
+        let al_mac = get_local_al_mac(cli.interface.clone()).ok_or_else(|| {
+            anyhow!("failed to get local al mac")
+        })?;
         tracing::info!("AL MAC address: {}", al_mac);
 
         // // Initialize Database
@@ -298,7 +298,7 @@ async fn main() -> Result<()> {
         let forwarding_interface_rx = forwarding_interface.clone();
 
         let tasker = Tasker::new();
-        receiver.run(&forwarding_interface_rx, tasker.clone()).await;
+        receiver.run(&forwarding_interface_rx, tasker.clone()).await?;
 
         // Sart of the discovery process
 
@@ -307,7 +307,7 @@ async fn main() -> Result<()> {
 
             let lldp_receiver = EthernetReceiver::new();
             lldp_receiver.subscribe(lldp_observer.clone()).await;
-            lldp_receiver.run(&interface.name, tasker.clone()).await;
+            lldp_receiver.run(&interface.name, tasker.clone()).await?;
 
             let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx)).await;
             lldp_discovery(lldp_sender, chassis_id, interface.mac, interface.name).await;
@@ -326,8 +326,8 @@ async fn main() -> Result<()> {
         )
         .await;
 
-        let mut signal_terminate = signal(SignalKind::terminate()).unwrap();
-        let mut signal_interrupt = signal(SignalKind::interrupt()).unwrap();
+        let mut signal_terminate = signal(SignalKind::terminate())?;
+        let mut signal_interrupt = signal(SignalKind::interrupt())?;
         let signaller = tasker.signaller();
 
         // if topology_cli is running

@@ -20,6 +20,7 @@
 #![deny(warnings)]
 use std::collections::HashMap;
 use std::sync::Arc;
+use anyhow::bail;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::al_sap::service_access_point_data_indication;
@@ -32,7 +33,6 @@ use crate::sdu_codec::SDU;
 use crate::tlv_cmdu_codec::TLV;
 use crate::topology_manager::*;
 use crate::MessageIdGenerator;
-use anyhow::Result;
 use pnet::datalink::MacAddr;
 
 ///the handler has to take care of the reassembly
@@ -45,6 +45,8 @@ pub struct CMDUHandler {
 }
 
 impl CMDUHandler {
+    const MAX_CMDU_SIZE: usize = 1500;
+
     pub async fn new(
         sender: Arc<EthernetSender>,
         message_id_generator: Arc<MessageIdGenerator>,
@@ -59,14 +61,12 @@ impl CMDUHandler {
             reassembler: Arc::new(CmduReassembler::new().await),
         }
     }
-    pub async fn handle_cmdu(&self, cmdu: &CMDU, source_mac: MacAddr, destination_mac: MacAddr) {
+    pub async fn handle_cmdu(&self, cmdu: &CMDU, source_mac: MacAddr, destination_mac: MacAddr) -> anyhow::Result<()> {
         tracing::trace!("Handling CMDU <{cmdu:?}> source mac: {source_mac}, destination_mac {destination_mac:?}");
-        assert!(
-            cmdu.total_size() <= 1500,
-            "CMDU should have maximum {} bytes but is {} bytes long",
-            1500,
-            cmdu.total_size()
-        );
+
+        if cmdu.total_size() > Self::MAX_CMDU_SIZE {
+            bail!("CMDU should have maximum {} bytes but is {} bytes long", Self::MAX_CMDU_SIZE, cmdu.total_size());
+        }
 
         let cmdu_to_process = if cmdu.is_fragmented() {
             let fragment_clone = cmdu.clone();
@@ -84,8 +84,7 @@ impl CMDUHandler {
                     full_cmdu
                 }
                 Some(Err(e)) => {
-                    error!("Error reassembling CMDU: {:?}", e);
-                    return;
+                    bail!("Error reassembling CMDU: {e:?}");
                 }
                 None => {
                     trace!(
@@ -93,7 +92,7 @@ impl CMDUHandler {
                         cmdu.message_id,
                         cmdu.fragment
                     );
-                    return;
+                    return Ok(());
                 }
             }
         } else {
@@ -102,6 +101,7 @@ impl CMDUHandler {
         tracing::trace!("Dispatching CMDU {cmdu_to_process:?} source mac {source_mac:?} destination_mac {destination_mac:?}");
         self.dispatch_cmdu(cmdu_to_process, source_mac, destination_mac)
             .await;
+        Ok(())
     }
 
     /// Some discriminated messages created above the SAP
@@ -111,14 +111,14 @@ impl CMDUHandler {
         cmdu: CMDU,
         source_mac: MacAddr,
         destination_mac: MacAddr,
-    ) {
+    ) -> anyhow::Result<()> {
         info!("Handling unknown CMDU type for message version 2013");
         //Intercept a few messages
         match CMDUType::from_u16(cmdu.message_type) {
             CMDUType::TopologyQuery => {
                 debug!("Handling topolgy query for message version 2013");
                 self.handle_topology_query(
-                    cmdu.clone().get_tlvs().as_slice(),
+                    cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
                     source_mac,
                 )
@@ -126,13 +126,13 @@ impl CMDUHandler {
             }
             CMDUType::TopologyResponse => {
                 debug!("Handling topolgy response for message version 2013");
-                self.handle_topology_response(cmdu.clone().get_tlvs().as_slice(), cmdu.message_id)
+                self.handle_topology_response(cmdu.get_tlvs()?.as_slice(), cmdu.message_id)
                     .await
             }
             CMDUType::ApAutoConfigSearch => {
                 debug!("Handling ApAutoConfigSearch for message version 2013");
                 self.handle_ap_auto_config_search(
-                    cmdu.clone().get_tlvs().as_slice(),
+                    cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
                 )
                 .await;
@@ -140,7 +140,7 @@ impl CMDUHandler {
             CMDUType::ApAutoConfigResponse => {
                 debug!("Handling ApAutoConfigResponse for message version 2013");
                 self.handle_ap_auto_config_response(
-                    cmdu.clone().get_tlvs().as_slice(),
+                    cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
                     source_mac,
                 )
@@ -156,7 +156,7 @@ impl CMDUHandler {
 
         if let Err(e) = self
             .handle_sdu_from_cmdu_reception(
-                cmdu.clone().get_tlvs().as_slice(),
+                cmdu.get_tlvs()?.as_slice(),
                 cmdu.message_id,
                 cmdu.message_type,
                 source_mac,
@@ -170,6 +170,7 @@ impl CMDUHandler {
                 e
             );
         }
+        Ok(())
     }
 
     /// Process and introspect messages
@@ -178,18 +179,18 @@ impl CMDUHandler {
         cmdu: CMDU,
         source_mac: MacAddr,
         destination_mac: MacAddr,
-    ) {
+    ) -> anyhow::Result<()> {
         info!("Handling non 2013 message version");
         match CMDUType::from_u16(cmdu.message_type) {
             CMDUType::TopologyDiscovery => {
                 debug!("Handling topolgy discovery");
-                self.handle_topology_discovery(cmdu.clone().get_tlvs().as_slice(), cmdu.message_id)
+                self.handle_topology_discovery(cmdu.get_tlvs()?.as_slice(), cmdu.message_id)
                     .await
             }
             CMDUType::TopologyNotification => {
                 debug!("Handling topolgy notification");
                 self.handle_topology_notification(
-                    cmdu.clone().get_tlvs().as_slice(),
+                    cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
                 )
                 .await
@@ -197,7 +198,7 @@ impl CMDUHandler {
             CMDUType::TopologyQuery => {
                 debug!("Handling topolgy query");
                 self.handle_topology_query(
-                    cmdu.clone().get_tlvs().as_slice(),
+                    cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
                     source_mac,
                 )
@@ -205,20 +206,20 @@ impl CMDUHandler {
             }
             CMDUType::TopologyResponse => {
                 debug!("Handling topolgy response");
-                self.handle_topology_response(cmdu.clone().get_tlvs().as_slice(), cmdu.message_id)
+                self.handle_topology_response(cmdu.get_tlvs()?.as_slice(), cmdu.message_id)
                     .await
             }
             CMDUType::ApAutoConfigSearch => {
                 debug!("Handling ApAutoConfigSearch CMDU");
                 self.handle_ap_auto_config_search(
-                    cmdu.clone().get_tlvs().as_slice(),
+                    cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
                 )
                 .await;
 
                 if let Err(e) = self
                     .handle_sdu_from_cmdu_reception(
-                        cmdu.clone().get_tlvs().as_slice(),
+                        cmdu.get_tlvs()?.as_slice(),
                         cmdu.message_id,
                         cmdu.message_type,
                         source_mac,
@@ -236,7 +237,7 @@ impl CMDUHandler {
             CMDUType::ApAutoConfigResponse => {
                 debug!("Handling ApAutoConfigResponse CMDU");
                 self.handle_ap_auto_config_response(
-                    cmdu.clone().get_tlvs().as_slice(),
+                    cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
                     source_mac,
                 )
@@ -244,7 +245,7 @@ impl CMDUHandler {
 
                 if let Err(e) = self
                     .handle_sdu_from_cmdu_reception(
-                        cmdu.clone().get_tlvs().as_slice(),
+                        cmdu.get_tlvs()?.as_slice(),
                         cmdu.message_id,
                         cmdu.message_type,
                         source_mac,
@@ -263,23 +264,27 @@ impl CMDUHandler {
                 tracing::warn!("This CMDU will not be handled at all! Unknown data types are handled only for message version 0.  CMDU:{:?}",cmdu);
             }
         }
+        Ok(())
     }
 
     /// Handles a parsed CMDU, logs details, and extracts TLVs.
     async fn dispatch_cmdu(&self, cmdu: CMDU, source_mac: MacAddr, destination_mac: MacAddr) {
         tracing::trace!("Dispatch CMDU {cmdu:?}");
-        match MessageVersion::from_u8(cmdu.message_version).unwrap() {
-            MessageVersion::Version2013 => {
+        let message_id = cmdu.message_id;
+        match MessageVersion::from_u8(cmdu.message_version) {
+            Some(MessageVersion::Version2013) => {
                 tracing::trace!("Handling message version 2013");
                 //process_cmdus
-                self.process_cmdus(cmdu, source_mac, destination_mac)
-                    .await;
+                if let Err(e) = self.process_cmdus(cmdu, source_mac, destination_mac).await {
+                    error!("Failed to process CMDU (msg_id={message_id}): {e:?}");
+                }
             }
             _ => {
                 tracing::trace!("Handling message version different than 2013");
                 //process_sdus
-                self.process_sdus(cmdu, source_mac, destination_mac)
-                    .await;
+                if let Err(e) = self.process_sdus(cmdu, source_mac, destination_mac).await {
+                    error!("Failed to process SDU (msg_id={message_id}): {e:?}");
+                }
             }
         }
     }
@@ -301,7 +306,7 @@ impl CMDUHandler {
             match IEEE1905TLVType::from_u8(tlv.tlv_type) {
                 IEEE1905TLVType::AlMacAddress => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
+                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                         }
                     }
@@ -466,14 +471,14 @@ impl CMDUHandler {
             match IEEE1905TLVType::from_u8(tlv.tlv_type) {
                 IEEE1905TLVType::AlMacAddress => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
+                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                         }
                     }
                 }
                 IEEE1905TLVType::MacAddress => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = MacAddress::parse(value, tlv.tlv_length) {
+                        if let Ok((_, parsed)) = MacAddress::parse(value) {
                             remote_interface_mac = Some(parsed.mac_address);
                         }
                     }
@@ -574,7 +579,7 @@ impl CMDUHandler {
             match tlv_type {
                 IEEE1905TLVType::AlMacAddress => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
+                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                             debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
                         }
@@ -681,7 +686,7 @@ impl CMDUHandler {
             match IEEE1905TLVType::from_u8(tlv.tlv_type) {
                 IEEE1905TLVType::AlMacAddress => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
+                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                             tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
                         }
@@ -813,7 +818,7 @@ impl CMDUHandler {
             match IEEE1905TLVType::from_u8(tlv.tlv_type) {
                 IEEE1905TLVType::AlMacAddress => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
+                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                         }
                     }
@@ -890,7 +895,7 @@ impl CMDUHandler {
         message_type: u16,
         source_mac: MacAddr,
         destination_mac: MacAddr,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let mut end_of_message_found = false;
         let tlv_no = tlvs.len();
         trace!(
@@ -1242,7 +1247,6 @@ mod tests {
 
     // Verify detection of oversized CMDU
     #[tokio::test]
-    #[should_panic]
     async fn test_handle_cmdu_function_for_oversized_cmdu() {
         // Prepare forwarding interface
         let interface_name = "eth0".to_string();
@@ -1289,9 +1293,7 @@ mod tests {
         let destination_mac = MacAddr::new(0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc);
 
         // Expect panic in handle_cmdu() as the CMDU size is prepared to have 1501 bytes
-        cmdu_handler
-            .handle_cmdu(&cmdu, source_mac, destination_mac)
-            .await;
+        assert!(cmdu_handler.handle_cmdu(&cmdu, source_mac, destination_mac).await.is_err());
     }
 
     #[tokio::test]

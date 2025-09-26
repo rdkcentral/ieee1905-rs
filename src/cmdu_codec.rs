@@ -176,9 +176,8 @@ pub struct AlMacAddress {
 }
 
 impl AlMacAddress {
-    pub fn parse(input: &[u8], input_length: u16) -> IResult<&[u8], Self> {
-        //let (input, mac_bytes) = take(6usize)(input)?;
-        let (input, mac_bytes) = take(input_length as usize)(input)?;
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, mac_bytes) = take(6usize)(input)?;
 
         let al_mac_address = MacAddr::new(
             mac_bytes[0],
@@ -213,9 +212,8 @@ pub struct MacAddress {
 }
 
 impl MacAddress {
-    pub fn parse(input: &[u8], input_length: u16) -> IResult<&[u8], Self> {
-        //let (input, mac_bytes) = take(6usize)(input)?;
-        let (input, mac_bytes) = take(input_length as usize)(input)?;
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, mac_bytes) = take(6usize)(input)?;
 
         let mac_address = MacAddr::new(
             mac_bytes[0],
@@ -911,12 +909,12 @@ pub struct CMDU {
     pub payload: Vec<u8>,
 }
 impl CMDU {
-    pub fn get_tlvs(self) -> Vec<TLV> {
+    pub fn get_tlvs(&self) -> anyhow::Result<Vec<TLV>> {
         let mut tlvs: Vec<TLV> = vec![];
         let mut remaining_input = self.payload.as_slice();
         let mut has_reached_end = false;
         while !remaining_input.is_empty() && !has_reached_end {
-                match TLV::parse(remaining_input) {
+            match TLV::parse(remaining_input) {
                 Ok(tlv) => {
                     tracing::trace!("Parsed TLV {:?}", tlv.1);
                     // The minimum Ethernet frame length (over the wire) is 60 bytes
@@ -940,11 +938,12 @@ impl CMDU {
                         .collect::<Vec<String>>()
                         .join(" ");
                     tracing::trace!("Remaining {}", hex_string);
-                    panic!("Failed to parse TLV: {e:?}. Unparseable data: <{hex_string:?}>");
+
+                    return Err(anyhow::anyhow!("Failed to parse TLV: {e}"));
                 }
             }
         }
-        tlvs
+        Ok(tlvs)
     }
     //Force message version to be used for CMDUs received via HLE SDUs
     pub fn set_message_version(&mut self, version: MessageVersion) {
@@ -980,8 +979,11 @@ impl CMDU {
             payload: input.into(),
         };
         if flags & 0x80 != 0 && fragment == 0 {
+            let Ok(tlvs) = cmdu.get_tlvs() else {
+                return Err(NomErr::Failure(Error::new(input, ErrorKind::Tag)));
+            };
             // We can check if TLV's can be parsed and last TLV is really EoF
-            if let Some(last_tlv) = cmdu.clone().get_tlvs().last() {
+            if let Some(last_tlv) = tlvs.last() {
                 if last_tlv.tlv_type != IEEE1905TLVType::EndOfMessage.to_u8()
                     || last_tlv.tlv_length != 0
                     || last_tlv.tlv_value.is_some()
@@ -1078,8 +1080,7 @@ impl CMDU {
         }
 
         // Verify LastFragment flag on the last fragment
-        let last = fragments.last().unwrap();
-        if last.flags & 0x80 == 0 {
+        if fragments.last().is_none_or(|e| e.flags & 0x80 == 0) {
             return Err(CmduReassemblyError::MissingLastFragment);
         }
 
@@ -1624,7 +1625,7 @@ pub mod tests {
         let parsed_discovery = CMDU::parse(&serialized_discovery).unwrap().1;
 
         // Assert that the parsed CMDU matches the original
-        assert_eq!(cmdu_topology_discovery.get_tlvs(), parsed_discovery.get_tlvs());
+        assert_eq!(cmdu_topology_discovery.get_tlvs().unwrap(), parsed_discovery.get_tlvs().unwrap());
     }
 
     // Verify serializing and parsing topology discovery CMDU
@@ -1905,7 +1906,7 @@ pub mod tests {
         let serialized = cmdu.serialize();
         let parsed = CMDU::parse(&serialized).unwrap().1;
 
-        let tlvs = parsed.get_tlvs();
+        let tlvs = parsed.get_tlvs().unwrap();
         let searched_tlv = tlvs
             .iter()
             .find(|tlv| tlv.tlv_type == IEEE1905TLVType::SearchedRole.to_u8())
@@ -2103,7 +2104,7 @@ pub mod tests {
         let al_mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
 
         // Parse provided example data as AL MAC address
-        let parsed = AlMacAddress::parse(&al_mac[..], al_mac.len() as u16).unwrap().1;
+        let parsed = AlMacAddress::parse(&al_mac[..]).unwrap().1;
 
         // Expect success comparing parsed and then serialized AL MAC address with original one
         assert_eq!(parsed.serialize(), al_mac);
@@ -2116,7 +2117,7 @@ pub mod tests {
         let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
 
         // Do the parsing as MacAddress
-        let parsed = MacAddress::parse(&mac[..], mac.len() as u16).unwrap().1;
+        let parsed = MacAddress::parse(&mac[..]).unwrap().1;
 
         // Expect success comparing parsed and then serialized MAC address with original one
         assert_eq!(parsed.serialize(), mac);
@@ -2124,10 +2125,9 @@ pub mod tests {
 
     // Verify parsing incomplete data (only 5 bytes from 6 required for MAC address) as AlMacAddress
     #[test]
-    #[should_panic]
     fn test_mac_address_try_to_parse_not_enough_data() {
-        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64];
-        let _ = MacAddress::parse(&mac[..], mac.len() as u16).unwrap().1;
+        let mac = [0x02, 0x42, 0xc0, 0xa8, 0x64];
+        assert!(MacAddress::parse(&mac).is_err());
     }
 
     // Unit tests using malformed data
@@ -2181,7 +2181,7 @@ pub mod tests {
         let serialized = cmdu.serialize();
         let parsed = CMDU::parse(&serialized).unwrap().1;
 
-        let tlvs = parsed.get_tlvs();
+        let tlvs = parsed.get_tlvs().unwrap();
         let searched_tlv = tlvs
             .iter()
             .find(|tlv| tlv.tlv_type == IEEE1905TLVType::SearchedRole.to_u8())
@@ -2371,13 +2371,12 @@ pub mod tests {
 
     // Verify parsing incomplete data (only 5 bytes from 6 required for MAC address) as AlMacAddress
     #[test]
-    #[should_panic]
     fn test_al_mac_address_try_to_parse_not_enough_data() {
         // Prepare example vector with bad, shortened local MAC address data to 5 bytes
-        let al_mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64];
+        let al_mac = [0x02, 0x42, 0xc0, 0xa8, 0x64];
 
-        // Expect panic trying to parse 5 bytes instead of required 6
-        let _ = AlMacAddress::parse(&al_mac[..], al_mac.len() as u16).unwrap().1;
+        // Expect error trying to parse 5 bytes instead of required 6
+        assert!(AlMacAddress::parse(&al_mac).is_err());
     }
 
     // Verify returning redundant data after parsing AlMacAddress
@@ -2391,7 +2390,7 @@ pub mod tests {
         data.push(0x11);
 
         // Do the parsing as AlMacAddress
-        let (rest, _) = AlMacAddress::parse(&data[..], al_mac.len() as u16).unwrap();
+        let (rest, _) = AlMacAddress::parse(&data[..]).unwrap();
 
         // Expect slice with 0x11 value as redundant data after parsing
         assert_eq!(rest, &[0x11]);
@@ -2408,7 +2407,7 @@ pub mod tests {
         data.push(0x11);
 
         // Do the parsing as MacAddress
-        let (rest, _) = MacAddress::parse(&data[..], mac.len() as u16).unwrap();
+        let (rest, _) = MacAddress::parse(&data[..]).unwrap();
 
         // Expect slice with 0x11 value as redundant data after parsing
         assert_eq!(rest, &[0x11]);
@@ -2416,7 +2415,6 @@ pub mod tests {
 
     // Verify detection and signalling of mismatch between declared tlv_length and the real length of TLV's payload
     #[test]
-    #[should_panic]
     fn test_get_tlvs_too_short_data() {
         // Make CMDU with two small TLVs
         let cmdu = make_dummy_cmdu(vec![100, 200]);
@@ -2437,7 +2435,7 @@ pub mod tests {
         let (_, cmdu_parsed) = CMDU::parse(cmdu_payload_extended.as_slice()).unwrap();
 
         // Expect panic as the bad_tlv_length.tlv_length (100) doesn't match the real TLV payload length (1)
-        let _tlvs = cmdu_parsed.get_tlvs();
+        assert!(cmdu_parsed.get_tlvs().is_err());
     }
 
     // Verify fragmentation and reassembly on CMDU with size of 1501 bytes
@@ -2533,7 +2531,6 @@ pub mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn test_unknown_tlv() {
         let end_of_message_tlv = TLV {
             tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
@@ -2552,9 +2549,9 @@ pub mod tests {
         };
 
         let serialized_query = cmdu_topology_query.serialize();
-        let parsed_query = CMDU::parse(&serialized_query).unwrap().1;
+        let parsed_query_result = CMDU::parse(&serialized_query);
 
-        assert_eq!(cmdu_topology_query, parsed_query);
+        assert!(parsed_query_result.is_err());
     }
 
     // Check detection and signalling of missing last fragment in CMDU fragments chain

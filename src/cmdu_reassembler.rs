@@ -25,6 +25,7 @@ use tokio::time::Duration;
 
 // Standard library
 use std::collections::{BTreeMap, HashMap};
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -100,12 +101,15 @@ impl CmduReassembler {
         let key = (source_mac, fragment.message_id);
         let mut buffer = self.buffer.lock().await;
 
-        let entry = buffer.entry(key).or_insert_with(|| FragmentBuffer {
-            fragments: BTreeMap::new(),
-            first_received: Instant::now(),
-        });
+        let mut entry = match buffer.entry(key) {
+            Entry::Occupied(e) => e,
+            Entry::Vacant(e) => e.insert_entry(FragmentBuffer {
+                fragments: BTreeMap::new(),
+                first_received: Instant::now(),
+            }),
+        };
 
-        let inserted = entry.fragments.insert(fragment.fragment, fragment.clone());
+        let inserted = entry.get_mut().fragments.insert(fragment.fragment, fragment.clone());
         if inserted.is_some() {
             tracing::trace!("Duplicated fragment: {:?}", fragment.fragment);
             return Some(Err(CmduReassemblyError::DuplicatedFragment));
@@ -113,7 +117,7 @@ impl CmduReassembler {
 
         if fragment.is_last_fragment() {
             tracing::trace!("All fragments arrived. Generating reassembled CMDU");
-            let fragments_map = buffer.remove(&key).unwrap().fragments;
+            let fragments_map = entry.remove().fragments;
             let fragments: Vec<CMDU> = fragments_map.into_values().collect();
             Some(CMDU::reassemble(fragments))
         } else {
