@@ -305,8 +305,8 @@ impl CMDUHandler {
         for tlv in tlvs {
             match IEEE1905TLVType::from_u8(tlv.tlv_type) {
                 IEEE1905TLVType::AlMacAddress => {
-                    if let Some(value) = &tlv.tlv_value {
-                        if let Ok(parsed) = AlMacAddress::parse(&mut value.as_slice()) {
+                    if let Some(ref value) = tlv.tlv_value {
+                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                         }
                     }
@@ -470,15 +470,15 @@ impl CMDUHandler {
 
             match IEEE1905TLVType::from_u8(tlv.tlv_type) {
                 IEEE1905TLVType::AlMacAddress => {
-                    if let Some(value) = &tlv.tlv_value {
-                        if let Ok(parsed) = AlMacAddress::parse(&mut value.as_slice()) {
+                    if let Some(ref value) = tlv.tlv_value {
+                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                         }
                     }
                 }
                 IEEE1905TLVType::MacAddress => {
-                    if let Some(value) = &tlv.tlv_value {
-                        if let Ok(parsed) = MacAddress::parse(&mut value.as_slice()) {
+                    if let Some(ref value) = tlv.tlv_value {
+                        if let Ok((_, parsed)) = MacAddress::parse(value) {
                             remote_interface_mac = Some(parsed.mac_address);
                         }
                     }
@@ -578,8 +578,8 @@ impl CMDUHandler {
 
             match tlv_type {
                 IEEE1905TLVType::AlMacAddress => {
-                    if let Some(value) = &tlv.tlv_value {
-                        if let Ok(parsed) = AlMacAddress::parse(&mut value.as_slice()) {
+                    if let Some(ref value) = tlv.tlv_value {
+                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                             debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
                         }
@@ -685,8 +685,8 @@ impl CMDUHandler {
         for tlv in tlvs {
             match IEEE1905TLVType::from_u8(tlv.tlv_type) {
                 IEEE1905TLVType::AlMacAddress => {
-                    if let Some(value) = &tlv.tlv_value {
-                        if let Ok(parsed) = AlMacAddress::parse(&mut value.as_slice()) {
+                    if let Some(ref value) = tlv.tlv_value {
+                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                             tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
                         }
@@ -817,8 +817,8 @@ impl CMDUHandler {
 
             match IEEE1905TLVType::from_u8(tlv.tlv_type) {
                 IEEE1905TLVType::AlMacAddress => {
-                    if let Some(value) = &tlv.tlv_value {
-                        if let Ok(parsed) = AlMacAddress::parse(&mut value.as_slice()) {
+                    if let Some(ref value) = tlv.tlv_value {
+                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                         }
                     }
