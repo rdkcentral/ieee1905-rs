@@ -79,6 +79,7 @@ pub enum RegistrationResult {
     NoRangesAvailable = 0x02,
     ServiceNotSupported = 0x03,
     OperationNotSupported = 0x04,
+    ControllerAlreadyInNetwork = 0x5,
 }
 
 impl RegistrationResult {
@@ -90,6 +91,7 @@ impl RegistrationResult {
             0x02 => RegistrationResult::NoRangesAvailable,
             0x03 => RegistrationResult::ServiceNotSupported,
             0x04 => RegistrationResult::OperationNotSupported,
+            0x05 => RegistrationResult::ControllerAlreadyInNetwork,
             _ => return Err(nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Tag))),
         };
         Ok((input, result))
@@ -254,7 +256,7 @@ pub mod tests {
     #[test]
     #[should_panic]
     fn test_try_to_parse_inappropriate_registration_result() {
-        assert!(RegistrationResult::parse(&[5]).is_ok());
+        assert!(RegistrationResult::parse(&[6]).is_ok());
     }
 
     #[test]

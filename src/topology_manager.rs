@@ -384,6 +384,15 @@ impl TopologyDatabase {
         }
     }
 
+    pub async fn find_registrar_node_al_mac(&self) -> Option<MacAddr> {
+        self.nodes
+            .read()
+            .await
+            .values()
+            .find(|e| e.device_data.registry_role == Some(Role::Registrar))
+            .map(|e| e.device_data.al_mac)
+    }
+
     pub async fn refresh_topology(&self) {
         let nodes_clone = Arc::clone(&self.nodes);
         let _task_handle = spawn(async move {
@@ -863,5 +872,31 @@ impl TopologyDatabase {
         disable_raw_mode()?;
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::topology_manager::{Ieee1905DeviceData, Role, UpdateType};
+    use crate::TopologyDatabase;
+    use pnet::util::MacAddr;
+
+    #[tokio::test]
+    async fn test_find_registrar_node_al_mac() {
+        let db = TopologyDatabase::new(MacAddr::zero(), "eth0".to_string()).await;
+
+        assert!(db.find_registrar_node_al_mac().await.is_none());
+
+        let device_mac1 = MacAddr::from([0, 0, 0, 0, 0, 1]);
+        let device = Ieee1905DeviceData::new(device_mac1, None, None, Some(Role::Enrollee));
+        db.update_ieee1905_topology(device, UpdateType::DiscoveryReceived, None, None).await;
+
+        assert!(db.find_registrar_node_al_mac().await.is_none());
+
+        let device_mac2 = MacAddr::from([0, 0, 0, 0, 0, 2]);
+        let device = Ieee1905DeviceData::new(device_mac2, None, None, Some(Role::Registrar));
+        db.update_ieee1905_topology(device, UpdateType::DiscoveryReceived, None, None).await;
+
+        assert_eq!(db.find_registrar_node_al_mac().await, Some(device_mac2));
     }
 }
