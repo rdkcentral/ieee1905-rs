@@ -99,6 +99,11 @@ impl CMDUHandler {
         } else {
             cmdu.clone()
         };
+
+        if !self.filter_incoming_cmdu(&cmdu).await {
+            return;
+        }
+
         tracing::trace!("Dispatching CMDU {cmdu_to_process:?} source mac {source_mac:?} destination_mac {destination_mac:?}");
         self.dispatch_cmdu(cmdu_to_process, source_mac, destination_mac)
             .await;
@@ -282,6 +287,31 @@ impl CMDUHandler {
                     .await;
             }
         }
+    }
+
+    async fn filter_incoming_cmdu(&self, cmdu: &CMDU) -> bool {
+        let db = TopologyDatabase::get_instance(
+            self.local_al_mac,
+            self.interface_name.clone(),
+        ).await;
+
+        let role = db.get_local_role().await;
+        let role_restricted_types: &[CMDUType] = match role {
+            Some(Role::Registrar) => &[CMDUType::ApAutoConfigResponse],
+            Some(Role::Enrollee) => {
+                match db.find_registrar_node_al_mac().await {
+                    None => &[], // an agent can act as controller when controller is down
+                    Some(_) => &[CMDUType::ApAutoConfigSearch],
+                }
+            },
+            None => &[],
+        };
+
+        if role_restricted_types.contains(&CMDUType::from_u16(cmdu.message_type)) {
+            warn!("CMDU type {:04x} blocked based on the local role {role:?}", cmdu.message_type);
+            return false;
+        }
+        true
     }
 
     /// Handles APAutoconfigSearchCMDU
