@@ -281,33 +281,25 @@ async fn main() -> anyhow::Result<()> {
         );
 
         // Initialize Ethernet Receiver
-
-        let receiver = Arc::new(EthernetReceiver::new());
+        let mut receiver = EthernetReceiver::new();
 
         // Subscription of observers
-
-        receiver.subscribe(cmdu_observer).await;
-
-        tracing::info!(
-            "CMDU observers subscribed with local MAC: {}",
-            al_mac
-        );
+        receiver.subscribe(cmdu_observer);
+        tracing::info!("CMDU observers subscribed with local MAC: {al_mac}");
 
         // Launch of receiver, take in account logic for Rx is sperated from Logic for Tx, so we clone the forwarding_interface
-
-        let forwarding_interface_rx = forwarding_interface.clone();
-
         let tasker = Tasker::new();
-        receiver.run(&forwarding_interface_rx, tasker.clone()).await?;
+        let mut cmdu_receiver_task = receiver.run(&forwarding_interface)?;
 
         // Sart of the discovery process
 
+        let mut lldp_receiver_tasks = Vec::new();
         for interface in get_physical_ethernet_interfaces() {
             tracing::info!("Starting LLDP Discovery on {}/{}", interface.name, interface.mac);
 
-            let lldp_receiver = EthernetReceiver::new();
-            lldp_receiver.subscribe(lldp_observer.clone()).await;
-            lldp_receiver.run(&interface.name, tasker.clone()).await?;
+            let mut lldp_receiver = EthernetReceiver::new();
+            lldp_receiver.subscribe(lldp_observer.clone());
+            lldp_receiver_tasks.push(lldp_receiver.run(&interface.name)?);
 
             let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx)).await;
             lldp_discovery(lldp_sender, chassis_id, interface.mac, interface.name).await;
@@ -344,7 +336,7 @@ async fn main() -> anyhow::Result<()> {
                      }
             _ = async {topology_db.start_topology_cli().await} , if cli.topology_ui => {signaller.stop();}
 
-        };
+        }
         tracing::info!("Waiting for child tasks to finish up to five seconds.");
         tasker.join().await;
         tracing::info!("All tasks finished.");
@@ -359,10 +351,18 @@ async fn main() -> anyhow::Result<()> {
             for handle in &drained_handles {
                 handle.abort();
             }
+            for task in lldp_receiver_tasks.iter_mut() {
+                task.abort_all();
+            }
+            cmdu_receiver_task.abort_all();
             tracing::trace!("Tasks aborted. Waiting for them to finish");
             for handle in drained_handles {
                 let _ = handle.await;
             }
+            for mut task in lldp_receiver_tasks {
+                task.shutdown().await;
+            }
+            cmdu_receiver_task.shutdown().await;
             tracing::info!("All tasks aborted and finished.");
             continue;
         }
