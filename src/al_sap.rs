@@ -265,8 +265,9 @@ impl AlServiceAccessPoint {
                     };
 
                     if registration_status == RegistrationResult::Success {
-                        // TODO should we set this even if registration fails?
                         self.service_type = Some(request.service_type);
+                    } else {
+                        self.service_type = None;
                     }
 
                     // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
