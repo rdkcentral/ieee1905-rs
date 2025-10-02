@@ -1,0 +1,16 @@
+
+consolidate-commits = true
+push-remote = "origin"
+
+# Tag format & message
+tag-name = "v{{version}}"
+tag-message = "Release {{crate_name}} v{{version}}"
+
+publish = false
+
+verify = false
+
+# Sign everything
+sign-commit = true
+sign-tag = true
+
