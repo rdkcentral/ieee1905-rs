@@ -916,7 +916,7 @@ impl SupportedService {
     pub const CONTROLLER: u8 = 0x00;
     pub const AGENT: u8 = 0x01;
 
-    /// Parse `SupportedService` from raw TLV data, ensuring the role is exactly 0x00
+    /// Parse `SupportedService` from raw TLV data
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         use nom::number::complete::u8;
 

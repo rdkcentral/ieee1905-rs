@@ -424,7 +424,7 @@ pub async fn cmdu_topology_response_transmission(
             fragment: 0,
             flags: 0x80, // Not fragmented
             #[cfg(feature = "size_based_fragmentation")]
-            payload: tlv_vec.iter().flat_map(|e| e.serialize()).collect(),
+            payload: tlv_vec.iter().flat_map(TLV::serialize).collect(),
             #[cfg(not(feature = "size_based_fragmentation"))]
             payload: tlv_vec,
         };
