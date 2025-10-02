@@ -370,6 +370,7 @@ impl CMDUHandler {
                 destination_mac: None,
                 local_interface_list: None,
                 registry_role: Some(reg_role),
+                supported_roles: vec![],
             };
 
             let _event = {
@@ -448,6 +449,7 @@ impl CMDUHandler {
                 destination_mac: None,
                 local_interface_list: None,
                 registry_role: Some(reg_role),
+                supported_roles: vec![],
             };
 
             let _event = {
@@ -533,6 +535,7 @@ impl CMDUHandler {
                 destination_mac: Some(neighbor_interface_mac_address),
                 local_interface_list: None,
                 registry_role: None,
+                supported_roles: vec![],
             };
 
             let event = topology_db
@@ -643,6 +646,7 @@ impl CMDUHandler {
                 destination_mac: Some(source_mac),
                 local_interface_list: None,
                 registry_role: None,
+                supported_roles: vec![],
             };
 
             let event = {
@@ -705,6 +709,7 @@ impl CMDUHandler {
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut interfaces: Vec<Ieee1905InterfaceData> = Vec::new();
         let mut ieee_neighbors_map: HashMap<MacAddr, Vec<IEEE1905Neighbor>> = HashMap::new();
+        let mut supported_service = None;
         let mut end_of_message_found = false;
 
         for tlv in tlvs {
@@ -747,6 +752,13 @@ impl CMDUHandler {
                         }
                     }
                 }
+                IEEE1905TLVType::SupportedService => {
+                    if let Some(value) = tlv.tlv_value.as_ref() {
+                        if let Ok((_, parsed)) = SupportedService::parse(value) {
+                            supported_service = Some(parsed);
+                        }
+                    }
+                }
                 //TODO: NonIeee1905NeighborDevices
                 //TODO: Bridge TUPLES only BRLAN0
                 IEEE1905TLVType::EndOfMessage => {
@@ -766,11 +778,20 @@ impl CMDUHandler {
                 TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
                     .await;
 
+            let supported_roles = supported_service.map(|e| e.services).unwrap_or_default().iter()
+                .filter_map(|e| match *e {
+                    SupportedService::AGENT => Some(Role::Enrollee),
+                    SupportedService::CONTROLLER => Some(Role::Registrar),
+                    _ => None,
+                })
+                .collect();
+
             let updated_device_data = Ieee1905DeviceData {
                 al_mac: remote_al_mac_address,
                 destination_mac: None,
                 local_interface_list: Some(interfaces.clone()),
                 registry_role: None,
+                supported_roles,
             };
 
             let event = {
@@ -871,6 +892,7 @@ impl CMDUHandler {
                 destination_mac: None,
                 local_interface_list: None,
                 registry_role: None,
+                supported_roles: vec![],
             };
 
             let event = topology_db
@@ -973,6 +995,7 @@ impl CMDUHandler {
             destination_mac: Some(destination_mac),
             local_interface_list: None,
             registry_role: None,
+            supported_roles: vec![],
         };
 
         topology_db

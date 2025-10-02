@@ -42,7 +42,6 @@ use tui::{
 // use crate::task_registry::TASK_REGISTRY;
 // Standard library
 use std::{collections::HashMap, io, sync::Arc};
-
 // Internal modules
 use crate::{
     cmdu::IEEE1905Neighbor,
@@ -220,6 +219,7 @@ pub struct Ieee1905DeviceData {
     pub destination_mac: Option<MacAddr>,
     pub local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
     pub registry_role: Option<Role>,
+    pub supported_roles: Vec<Role>,
 }
 
 impl Ieee1905DeviceData {
@@ -235,6 +235,7 @@ impl Ieee1905DeviceData {
             destination_mac,
             local_interface_list,
             registry_role,
+            supported_roles: vec![],
         }
     }
 
@@ -250,9 +251,6 @@ impl Ieee1905DeviceData {
         if let Some(interfaces) = new_interfaces {
             self.local_interface_list = Some(interfaces);
         }
-    }
-    pub fn has_changed(&self, other: &Self) -> bool {
-        self.local_interface_list != other.local_interface_list
     }
 }
 
@@ -586,7 +584,12 @@ impl TopologyDatabase {
                                     "Comparing local_interface_list"
                                 );
 
-                                if node.device_data.has_changed(&device_data) {
+                                if node.device_data.supported_roles != device_data.supported_roles {
+                                    debug!("Device data changed supported roles");
+                                    node.device_data.supported_roles = device_data.supported_roles;
+                                }
+
+                                if node.device_data.local_interface_list != device_data.local_interface_list {
                                     tracing::debug!("Device data changed local_interface_list)");
 
                                     node.device_data.update(

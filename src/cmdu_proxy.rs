@@ -32,7 +32,7 @@ use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
-use crate::topology_manager::{TopologyDatabase, UpdateType};
+use crate::topology_manager::{Role, TopologyDatabase, UpdateType};
 use crate::MessageIdGenerator;
 use crate::SDU;
 use crate::task_registry::TASK_REGISTRY;
@@ -281,6 +281,7 @@ pub async fn cmdu_topology_response_transmission(
             return;
         };
 
+        let mut tlv_vec = Vec::new();
         let message_id: u16 = node.metadata.message_id.unwrap_or(0);
 
         // Retrieve Forwarding MAC Address from Database
@@ -319,19 +320,20 @@ pub async fn cmdu_topology_response_transmission(
 
         let al_mac_address: MacAddr = local_al_mac_address;
         warn!("this is the al mac I'm using {}", remote_al_mac_address);
-        let al_mac_tlv = TLV {
+        tlv_vec.push(TLV {
             tlv_type: IEEE1905TLVType::AlMacAddress.to_u8(),
             tlv_length: 6,
             tlv_value: Some(al_mac_address.octets().to_vec()),
-        };
+        });
 
-        let device_information =
-            DeviceInformation::new(local_al_mac_address, ieee1905_local_interfaces);
-        let device_information_tlv = TLV {
+        let device_information = DeviceInformation::new(local_al_mac_address, ieee1905_local_interfaces);
+        let device_information_payload = device_information.serialize();
+        tlv_vec.push(TLV {
             tlv_type: IEEE1905TLVType::DeviceInformation.to_u8(),
-            tlv_length: device_information.serialize().len() as u16,
-            tlv_value: Some(device_information.serialize()),
-        };
+            tlv_length: device_information_payload.len() as u16,
+            tlv_value: Some(device_information_payload),
+        });
+
         //TODO biridging TUPLE
         /*
         let mut bridging_tuples_list: Vec<BridgingTuple> = Vec::new();
@@ -373,7 +375,7 @@ pub async fn cmdu_topology_response_transmission(
             list
         };
 
-        let ieee_neighbors_tlv = if ieee_neighbors_list.is_empty() {
+        tlv_vec.push(if ieee_neighbors_list.is_empty() {
             TLV {
                 tlv_type: IEEE1905TLVType::Ieee1905NeighborDevices.to_u8(),
                 tlv_length: 0,
@@ -390,24 +392,28 @@ pub async fn cmdu_topology_response_transmission(
                 tlv_length: serialized.len() as u16,
                 tlv_value: Some(serialized),
             }
-        };
+        });
+
+        if let Some(role) = topology_db.get_local_role().await {
+            let service = match role {
+                Role::Enrollee => SupportedService::AGENT,
+                Role::Registrar => SupportedService::CONTROLLER,
+            };
+            let model = SupportedService { services: vec![service] };
+            let payload = model.serialize();
+            tlv_vec.push(TLV {
+                tlv_type: IEEE1905TLVType::SupportedService.to_u8(),
+                tlv_length: payload.len() as u16,
+                tlv_value: Some(payload),
+            })
+        }
 
         // End of Message TLV
-        let end_of_message_tlv = TLV {
+        tlv_vec.push(TLV {
             tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
             tlv_length: 0,
             tlv_value: None,
-        };
-
-        #[cfg(feature = "size_based_fragmentation")]
-        let mut serialized_payload: Vec<u8> = vec![];
-        #[cfg(feature = "size_based_fragmentation")]
-        {
-            serialized_payload.extend(al_mac_tlv.serialize() );
-            serialized_payload.extend( device_information_tlv.serialize() );
-            serialized_payload.extend( ieee_neighbors_tlv.serialize() );
-            serialized_payload.extend( end_of_message_tlv.serialize() );
-        }
+        });
 
         // Construct the CMDU
         let cmdu_topology_response = CMDU {
@@ -418,14 +424,9 @@ pub async fn cmdu_topology_response_transmission(
             fragment: 0,
             flags: 0x80, // Not fragmented
             #[cfg(feature = "size_based_fragmentation")]
-            payload: serialized_payload,
+            payload: tlv_vec.iter().flat_map(|e| e.serialize()).collect(),
             #[cfg(not(feature = "size_based_fragmentation"))]
-            payload: vec![
-                al_mac_tlv,
-                device_information_tlv,
-                ieee_neighbors_tlv,
-                end_of_message_tlv,
-            ],
+            payload: tlv_vec,
         };
 
         // Serialize CMDU
