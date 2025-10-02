@@ -219,7 +219,6 @@ pub struct Ieee1905DeviceData {
     pub destination_mac: Option<MacAddr>,
     pub local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
     pub registry_role: Option<Role>,
-    pub supported_roles: Vec<Role>,
 }
 
 impl Ieee1905DeviceData {
@@ -235,7 +234,6 @@ impl Ieee1905DeviceData {
             destination_mac,
             local_interface_list,
             registry_role,
-            supported_roles: vec![],
         }
     }
 
@@ -383,12 +381,9 @@ impl TopologyDatabase {
     }
 
     pub async fn find_registrar_node_al_mac(&self) -> Option<MacAddr> {
-        self.nodes
-            .read()
-            .await
-            .values()
-            .find(|e| e.device_data.registry_role == Some(Role::Registrar))
-            .map(|e| e.device_data.al_mac)
+        let nodes = self.nodes.read().await;
+        let node = nodes.values().find(|e| e.device_data.registry_role == Some(Role::Registrar));
+        Some(node?.device_data.al_mac)
     }
 
     pub async fn refresh_topology(&self) {
@@ -584,9 +579,9 @@ impl TopologyDatabase {
                                     "Comparing local_interface_list"
                                 );
 
-                                if node.device_data.supported_roles != device_data.supported_roles {
-                                    debug!("Device data changed supported roles");
-                                    node.device_data.supported_roles = device_data.supported_roles;
+                                if node.device_data.registry_role != device_data.registry_role {
+                                    debug!("Device data changed registry role");
+                                    node.device_data.registry_role = device_data.registry_role;
                                 }
 
                                 if node.device_data.local_interface_list != device_data.local_interface_list {

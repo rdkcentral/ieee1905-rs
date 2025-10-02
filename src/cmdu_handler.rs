@@ -370,7 +370,6 @@ impl CMDUHandler {
                 destination_mac: None,
                 local_interface_list: None,
                 registry_role: Some(reg_role),
-                supported_roles: vec![],
             };
 
             let _event = {
@@ -449,7 +448,6 @@ impl CMDUHandler {
                 destination_mac: None,
                 local_interface_list: None,
                 registry_role: Some(reg_role),
-                supported_roles: vec![],
             };
 
             let _event = {
@@ -535,7 +533,6 @@ impl CMDUHandler {
                 destination_mac: Some(neighbor_interface_mac_address),
                 local_interface_list: None,
                 registry_role: None,
-                supported_roles: vec![],
             };
 
             let event = topology_db
@@ -646,7 +643,6 @@ impl CMDUHandler {
                 destination_mac: Some(source_mac),
                 local_interface_list: None,
                 registry_role: None,
-                supported_roles: vec![],
             };
 
             let event = {
@@ -778,20 +774,21 @@ impl CMDUHandler {
                 TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
                     .await;
 
-            let supported_roles = supported_service.map(|e| e.services).unwrap_or_default().iter()
-                .filter_map(|e| match *e {
-                    SupportedService::AGENT => Some(Role::Enrollee),
-                    SupportedService::CONTROLLER => Some(Role::Registrar),
-                    _ => None,
-                })
-                .collect();
+            let registry_role = supported_service.and_then(|e| {
+                if e.services.contains(&SupportedService::CONTROLLER) {
+                    return Some(Role::Registrar);
+                }
+                if e.services.contains(&SupportedService::AGENT) {
+                    return Some(Role::Enrollee);
+                }
+                None
+            });
 
             let updated_device_data = Ieee1905DeviceData {
                 al_mac: remote_al_mac_address,
                 destination_mac: None,
                 local_interface_list: Some(interfaces.clone()),
-                registry_role: None,
-                supported_roles,
+                registry_role,
             };
 
             let event = {
@@ -892,7 +889,6 @@ impl CMDUHandler {
                 destination_mac: None,
                 local_interface_list: None,
                 registry_role: None,
-                supported_roles: vec![],
             };
 
             let event = topology_db
@@ -995,7 +991,6 @@ impl CMDUHandler {
             destination_mac: Some(destination_mac),
             local_interface_list: None,
             registry_role: None,
-            supported_roles: vec![],
         };
 
         topology_db
