@@ -234,8 +234,8 @@ impl AlServiceAccessPoint {
                             self.enabled = false;
                         }
                     };
-                    self.service_type = Some(request.service_type);
-                    match request.service_type {
+
+                    let registration_status = match request.service_type {
                         ServiceType::EasyMeshAgent => {
                             tracing::info!("ServiceType EasyMeshAgent - Might be Enrollee");
                             let db = TopologyDatabase::get_instance(
@@ -244,17 +244,31 @@ impl AlServiceAccessPoint {
                             )
                             .await;
                             db.set_local_role(Some(Role::Enrollee)).await;
+                            RegistrationResult::Success
                         }
                         ServiceType::EasyMeshController => {
                             tracing::info!("ServiceType EasyMeshController - Might be Registrar");
+
                             let db = TopologyDatabase::get_instance(
                                 get_local_al_mac(self.interface_name.clone()).unwrap(),
                                 self.interface_name.clone(),
-                            )
-                            .await;
-                            db.set_local_role(Some(Role::Registrar)).await;
+                            ).await;
+
+                            if db.find_registrar_node_al_mac().await.is_none() {
+                                db.set_local_role(Some(Role::Registrar)).await;
+                                RegistrationResult::Success
+                            } else {
+                                tracing::warn!("ServiceType EasyMeshController - Registrar already present");
+                                RegistrationResult::ControllerAlreadyInNetwork
+                            }
                         }
                     };
+
+                    if registration_status == RegistrationResult::Success {
+                        self.service_type = Some(request.service_type);
+                    } else {
+                        self.service_type = None;
+                    }
 
                     // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
                     let al_mac = if let Some(mac) = get_local_al_mac(self.interface_name.clone()) {
@@ -267,7 +281,7 @@ impl AlServiceAccessPoint {
                     let response = AlServiceRegistrationResponse {
                         al_mac_address_local: al_mac,
                         message_id_range: (0, 65535),
-                        result: RegistrationResult::Success,
+                        result: registration_status,
                     };
 
                     let _ = self

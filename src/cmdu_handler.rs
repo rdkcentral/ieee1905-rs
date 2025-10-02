@@ -99,6 +99,11 @@ impl CMDUHandler {
         } else {
             cmdu.clone()
         };
+
+        if !self.filter_incoming_cmdu(&cmdu).await {
+            return;
+        }
+
         tracing::trace!("Dispatching CMDU {cmdu_to_process:?} source mac {source_mac:?} destination_mac {destination_mac:?}");
         self.dispatch_cmdu(cmdu_to_process, source_mac, destination_mac)
             .await;
@@ -282,6 +287,31 @@ impl CMDUHandler {
                     .await;
             }
         }
+    }
+
+    async fn filter_incoming_cmdu(&self, cmdu: &CMDU) -> bool {
+        let db = TopologyDatabase::get_instance(
+            self.local_al_mac,
+            self.interface_name.clone(),
+        ).await;
+
+        let role = db.get_local_role().await;
+        let role_restricted_types: &[CMDUType] = match role {
+            Some(Role::Registrar) => &[CMDUType::ApAutoConfigResponse],
+            Some(Role::Enrollee) => {
+                match db.find_registrar_node_al_mac().await {
+                    None => &[], // an agent can act as controller when controller is down
+                    Some(_) => &[CMDUType::ApAutoConfigSearch],
+                }
+            },
+            None => &[],
+        };
+
+        if role_restricted_types.contains(&CMDUType::from_u16(cmdu.message_type)) {
+            warn!("CMDU type {:04x} blocked based on the local role {role:?}", cmdu.message_type);
+            return false;
+        }
+        true
     }
 
     /// Handles APAutoconfigSearchCMDU
@@ -675,6 +705,7 @@ impl CMDUHandler {
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut interfaces: Vec<Ieee1905InterfaceData> = Vec::new();
         let mut ieee_neighbors_map: HashMap<MacAddr, Vec<IEEE1905Neighbor>> = HashMap::new();
+        let mut supported_service = None;
         let mut end_of_message_found = false;
 
         for tlv in tlvs {
@@ -717,6 +748,13 @@ impl CMDUHandler {
                         }
                     }
                 }
+                IEEE1905TLVType::SupportedService => {
+                    if let Some(value) = tlv.tlv_value.as_ref() {
+                        if let Ok((_, parsed)) = SupportedService::parse(value) {
+                            supported_service = Some(parsed);
+                        }
+                    }
+                }
                 //TODO: NonIeee1905NeighborDevices
                 //TODO: Bridge TUPLES only BRLAN0
                 IEEE1905TLVType::EndOfMessage => {
@@ -736,11 +774,21 @@ impl CMDUHandler {
                 TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
                     .await;
 
+            let registry_role = supported_service.and_then(|e| {
+                if e.services.contains(&SupportedService::CONTROLLER) {
+                    return Some(Role::Registrar);
+                }
+                if e.services.contains(&SupportedService::AGENT) {
+                    return Some(Role::Enrollee);
+                }
+                None
+            });
+
             let updated_device_data = Ieee1905DeviceData {
                 al_mac: remote_al_mac_address,
                 destination_mac: None,
                 local_interface_list: Some(interfaces.clone()),
-                registry_role: None,
+                registry_role,
             };
 
             let event = {

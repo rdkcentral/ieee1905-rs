@@ -42,7 +42,6 @@ use tui::{
 // use crate::task_registry::TASK_REGISTRY;
 // Standard library
 use std::{collections::HashMap, io, sync::Arc};
-
 // Internal modules
 use crate::{
     cmdu::IEEE1905Neighbor,
@@ -251,9 +250,6 @@ impl Ieee1905DeviceData {
             self.local_interface_list = Some(interfaces);
         }
     }
-    pub fn has_changed(&self, other: &Self) -> bool {
-        self.local_interface_list != other.local_interface_list
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -382,6 +378,12 @@ impl TopologyDatabase {
         } else {
             (None, None)
         }
+    }
+
+    pub async fn find_registrar_node_al_mac(&self) -> Option<MacAddr> {
+        let nodes = self.nodes.read().await;
+        let node = nodes.values().find(|e| e.device_data.registry_role == Some(Role::Registrar));
+        Some(node?.device_data.al_mac)
     }
 
     pub async fn refresh_topology(&self) {
@@ -577,7 +579,12 @@ impl TopologyDatabase {
                                     "Comparing local_interface_list"
                                 );
 
-                                if node.device_data.has_changed(&device_data) {
+                                if node.device_data.registry_role != device_data.registry_role {
+                                    debug!("Device data changed registry role");
+                                    node.device_data.registry_role = device_data.registry_role;
+                                }
+
+                                if node.device_data.local_interface_list != device_data.local_interface_list {
                                     tracing::debug!("Device data changed local_interface_list)");
 
                                     node.device_data.update(
@@ -863,5 +870,31 @@ impl TopologyDatabase {
         disable_raw_mode()?;
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::topology_manager::{Ieee1905DeviceData, Role, UpdateType};
+    use crate::TopologyDatabase;
+    use pnet::util::MacAddr;
+
+    #[tokio::test]
+    async fn test_find_registrar_node_al_mac() {
+        let db = TopologyDatabase::new(MacAddr::zero(), "eth0".to_string()).await;
+
+        assert!(db.find_registrar_node_al_mac().await.is_none());
+
+        let device_mac1 = MacAddr::from([0, 0, 0, 0, 0, 1]);
+        let device = Ieee1905DeviceData::new(device_mac1, None, None, Some(Role::Enrollee));
+        db.update_ieee1905_topology(device, UpdateType::DiscoveryReceived, None, None).await;
+
+        assert!(db.find_registrar_node_al_mac().await.is_none());
+
+        let device_mac2 = MacAddr::from([0, 0, 0, 0, 0, 2]);
+        let device = Ieee1905DeviceData::new(device_mac2, None, None, Some(Role::Registrar));
+        db.update_ieee1905_topology(device, UpdateType::DiscoveryReceived, None, None).await;
+
+        assert_eq!(db.find_registrar_node_al_mac().await, Some(device_mac2));
     }
 }
