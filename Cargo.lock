@@ -801,7 +801,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ieee1905"
+name = "ieee1905-core"
 version = "0.1.8"
 dependencies = [
  "anyhow",
@@ -826,6 +826,22 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "tui",
+]
+
+[[package]]
+name = "ieee1905-tests"
+version = "0.1.8"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "clap",
+ "futures",
+ "ieee1905-core",
+ "pnet",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
