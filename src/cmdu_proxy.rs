@@ -394,7 +394,7 @@ pub async fn cmdu_topology_response_transmission(
             }
         });
 
-        if let Some(role) = topology_db.get_local_role().await {
+        if let Some(role) = topology_db.get_actual_local_role().await {
             let service = match role {
                 Role::Enrollee => SupportedService::AGENT,
                 Role::Registrar => SupportedService::CONTROLLER,

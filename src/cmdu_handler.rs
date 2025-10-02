@@ -295,13 +295,13 @@ impl CMDUHandler {
             self.interface_name.clone(),
         ).await;
 
-        let role = db.get_local_role().await;
+        let role = db.get_actual_local_role().await;
         let role_restricted_types: &[CMDUType] = match role {
             Some(Role::Registrar) => &[CMDUType::ApAutoConfigResponse],
             Some(Role::Enrollee) => {
-                match db.find_registrar_node_al_mac().await {
-                    None => &[], // an agent can act as controller when controller is down
-                    Some(_) => &[CMDUType::ApAutoConfigSearch],
+                match !db.has_remote_controllers().await {
+                    true => &[], // an agent can act as controller when controller is down
+                    false => &[CMDUType::ApAutoConfigSearch],
                 }
             },
             None => &[],

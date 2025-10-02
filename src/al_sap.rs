@@ -254,8 +254,9 @@ impl AlServiceAccessPoint {
                                 self.interface_name.clone(),
                             ).await;
 
-                            if db.find_registrar_node_al_mac().await.is_none() {
-                                db.set_local_role(Some(Role::Registrar)).await;
+                            db.set_local_role(Some(Role::Registrar)).await;
+                            
+                            if db.get_actual_local_role().await == Some(Role::Registrar) {
                                 RegistrationResult::Success
                             } else {
                                 tracing::warn!("ServiceType EasyMeshController - Registrar already present");
@@ -317,7 +318,7 @@ impl AlServiceAccessPoint {
             self.interface_name.clone(),
         )
         .await;
-        if let Some(local_role) = db.get_local_role().await {
+        if let Some(local_role) = db.get_actual_local_role().await {
             tracing::trace!("Compare local_role {local_role:?} with {role:?}");
             role == local_role
         } else {
