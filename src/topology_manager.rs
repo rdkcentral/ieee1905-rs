@@ -551,13 +551,15 @@ impl TopologyDatabase {
                             let remote_state = node.metadata.node_state_remote;
 
                             if matches!((local_state, remote_state), (Some(_), Some(_))) {
-                                node.metadata.update(
-                                    Some(operation),
-                                    msg_id,
-                                    None,
-                                    None,
-                                    Some(StateRemote::ConvergingRemote),
-                                );
+                                if node.metadata.node_state_remote == Some(StateRemote::Idle) {
+                                    node.metadata.update(
+                                        Some(operation),
+                                        msg_id,
+                                        None,
+                                        None,
+                                        Some(StateRemote::ConvergingRemote),
+                                    );
+                                }
                                 tracing::debug!("Event: Send Topology Response");
                                 TransmissionEvent::SendTopologyResponse(al_mac)
                             } else {

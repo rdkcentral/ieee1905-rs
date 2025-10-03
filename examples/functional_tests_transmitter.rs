@@ -140,6 +140,50 @@ fn prepare_payload_with_small_tlv(r: &AlServiceRegistrationResponse, multicast: 
     }
 }
 
+fn prepare_payload_with_topology_query(r: &AlServiceRegistrationResponse, multicast: bool) -> Vec<u8> {
+    // Here is whole SDU with autoconfig request taken from onewifi_em_agent_
+    let src_mac_addr = r.al_mac_address_local;
+    let mut dest_mac_addr: MacAddr = MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02);
+    if multicast {
+        dest_mac_addr = MacAddr::new(0x01, 0x80, 0xc2, 0x00, 0x00, 0x13);
+    }
+    let sdu_bytes: Vec<u8> = vec![
+        src_mac_addr.0,     // SDU source_al_mac_address
+        src_mac_addr.1,
+        src_mac_addr.2,
+        src_mac_addr.3,
+        src_mac_addr.4,
+        src_mac_addr.5,
+        dest_mac_addr.0,    // SDU destination_al_mac_address
+        dest_mac_addr.1,
+        dest_mac_addr.2,
+        dest_mac_addr.3,
+        dest_mac_addr.4,
+        dest_mac_addr.5,
+        0x00,               // SDU is_fragment
+        0x01,               // SDU is_last_fragment
+        0x00,               // SDU fragment_id
+
+        // Start of CMDU
+        0x00, 0x00, 0x00, 0x02, 0xff, 0x1b, 0x00, 0x80,
+        0xb3, 0x00, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    ];
+
+    match SDU::parse(sdu_bytes.as_slice()) {
+        Ok(tuple) => {
+            println!("Successfully parsed long bytes");
+            tuple.1.serialize()
+        }
+        Err(e) => {
+            println!("Failed to parse long bytes {e:?}");
+            vec![]
+        }
+    }
+}
 
 fn prepare_payload_with_huge_tlv(r: &AlServiceRegistrationResponse, multicast: bool) -> Vec<u8> {
     // Here is whole SDU with autoconfig request taken from onewifi_em_agent_
@@ -635,6 +679,28 @@ async fn send_huge_data(
     }
 
     Ok(sdu_autoconfig_search)
+}
+
+async fn send_query_data(
+    framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
+    reg_resp: AlServiceRegistrationResponse,
+) -> anyhow::Result<Vec<u8>> {
+    println!("Sending data");
+    println!("Prepare and send multicast autoconfig search request");
+    let sdu_query = prepare_payload_with_topology_query(&reg_resp, false);
+    match framed_data_socket
+        .send(Bytes::from(sdu_query.clone()))
+        .await
+    {
+        Ok(_) => {
+            println!("Successfully send SDU");
+        }
+        Err(err) => {
+            println!("Sending SDU FAILURE {err}");
+        }
+    }
+
+    Ok(sdu_query)
 }
 
 async fn read_data(framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>) -> anyhow::Result<SDU> {
@@ -1151,7 +1217,219 @@ async fn test4_break_connection_and_receive(sap_control_path: &str, sap_data_pat
                             test_finished = true;
                             test_result = false;
                         }
+                    }
+                }
+            }
+        }
 
+        if test_finished { break; };
+    }
+    println!("Exit from test4 with result: {test_result:?}\n");
+
+    Ok(())
+}
+
+// Breaking connection case: Connect -> Register -> Break connection -> Re-connect -> Re-register -> Send data -> Receive data -> Compare data
+// Send Topology Query
+async fn test5_send_query(sap_control_path: &str, sap_data_path: &str, read_timeout: u8, connect_timeout: u8) -> anyhow::Result<()> {
+    let mut framed_control_socket: Option<Framed<UnixStream, LengthDelimitedCodec>> = None;
+    let mut framed_data_socket: Option<Framed<UnixStream, LengthDelimitedCodec>> = None;
+    let mut reg_resp: Option<AlServiceRegistrationResponse> = None;
+
+    enum State {
+        Connect,
+        Register,
+        BreakConnection,
+        ReConnect,
+        ReRegister,
+        SendData,
+        ReceiveAndCompareData,
+    }
+
+    let mut state = State::Connect;
+    let mut try_no: u8 = 1;
+    let mut test_finished: bool = false;
+    let mut test_result: bool = false;
+
+    println!("Starting test4");
+    let mut data_for_verification: Vec<u8> = Vec::new();
+
+    loop {
+        match state {
+            State::Connect => match connect(sap_control_path, sap_data_path).await {
+                Ok((control, data)) => {
+                    framed_control_socket = control;
+                    framed_data_socket = data;
+                    state = State::Register;
+                    try_no = 1;
+                    println!("Transition to Register");
+                }
+                Err(e) => {
+                    println!("Failed to establish connection: {e:?}");
+                    if try_no < connect_timeout {
+                        println!("Trying to re-connect (try: {try_no}/{connect_timeout})");
+                        try_no += 1;
+                        sleep(Duration::from_millis(100)).await;
+                    } else {
+                        println!("Trying to re-connect failed after {} tries", try_no);
+                        test_finished = true;
+                        test_result = false;
+                    }
+                }
+            },
+
+            State::Register => {
+                match framed_control_socket {
+                    Some(ref mut control_socket) => match register(control_socket).await {
+                        Ok(_) => {
+                            state = State::BreakConnection;
+                            try_no = 1;
+                            println!("Transition to BreakConnection");
+                        }
+                        Err(e) => {
+                            println!("Registration failed: {e:?}");
+                            println!("Trying to re-register");
+                            if try_no < connect_timeout {
+                                println!("Trying to register (try: {try_no}/{connect_timeout})");
+                                try_no += 1;
+                                sleep(Duration::from_millis(100)).await;
+                            } else {
+                                println!("Trying to register failed after {} tries", try_no);
+                                test_finished = true;
+                                test_result = false;
+                            }
+                        }
+                    },
+                    None => println!("Framed_control_socket not initialized"),
+                };
+            }
+
+            State::BreakConnection => {
+                match framed_control_socket {
+                    Some(ref mut control_socket) => {
+                        close_control_connection(control_socket).await;
+                    }
+                    None => println!("Framed_control_socket not initialized"),
+                };
+                match framed_data_socket {
+                    Some(ref mut data_socket) => {
+                        close_data_connection(data_socket).await;
+                    }
+                    None => println!("Framed_data_socket not initialized"),
+                };
+                state = State::ReConnect;
+                println!("Transition to ReConnect");
+            }
+
+            State::ReConnect => match connect(sap_control_path, sap_data_path).await {
+                Ok((control, data)) => {
+                    framed_control_socket = control;
+                    framed_data_socket = data;
+                    state = State::ReRegister;
+                    try_no = 1;
+                    println!("Transition to ReRegister");
+                }
+                Err(e) => {
+                    println!("Failed to establish connection: {e:?}");
+                    if try_no < connect_timeout {
+                        println!("Trying to re-connect (try: {try_no}/{connect_timeout})");
+                        try_no += 1;
+                        sleep(Duration::from_millis(100)).await;
+                    } else {
+                        println!("Trying to re-connect failed after {} tries", try_no);
+                        test_finished = true;
+                        test_result = false;
+                    }
+                }
+            },
+
+            State::ReRegister => {
+                match framed_control_socket {
+                    Some(ref mut control_socket) => match register(control_socket).await {
+                        Ok(rr) => {
+                            state = State::SendData;
+                            try_no = 1;
+                            println!(
+                                "Transition to SendData with registration response: {:?}",
+                                rr
+                            );
+                            reg_resp = Some(rr);
+                        }
+                        Err(e) => {
+                            println!("Registration failed: {e:?}");
+                            println!("Trying to re-register");
+                            if try_no < connect_timeout {
+                                println!("Trying to register (try: {try_no}/{connect_timeout})");
+                                try_no += 1;
+                                sleep(Duration::from_millis(100)).await;
+                            } else {
+                                println!("Trying to register failed after {} tries", try_no);
+                                test_finished = true;
+                                test_result = false;
+                            }
+                        }
+                    },
+                    None => println!("Framed_control_socket not initialized"),
+                };
+            }
+
+            State::SendData => {
+                if let Some(ref mut data_socket) = framed_data_socket {
+                    let res = send_query_data(data_socket, reg_resp.clone().unwrap()).await;
+
+                    match res {
+                        Err(e) => {
+                            println!("Sending failed: {e:?}");
+                            return Err(e);
+                        }
+                        Ok(sdu_sent) => {
+                            data_for_verification = sdu_sent;
+                        }
+                    }
+                    try_no = 1;
+                    state = State::ReceiveAndCompareData;
+                    println!("Transition to ReceiveDataAndCompareData");
+                } else if let None = framed_data_socket.take() {
+                    println!("Data socket not available");
+                    sleep(Duration::from_millis(100)).await;
+                    test_finished = true;
+                    test_result = false;
+                }
+            }
+
+            State::ReceiveAndCompareData => {
+                tokio::select! {
+                    res = async {
+                        if let Some(ref mut data_socket) = framed_data_socket {
+                            // Returned echoed data have padding trimmed (31 bytes). Reduce the size of the data to compare.
+                            let rd = read_and_compare_data(data_socket, &data_for_verification[0..data_for_verification.len() - 31].to_vec()).await;
+                            match rd {
+                                Ok(_) => {
+                                    println!("read_and_compare_data: ok");
+                                    return true;
+                                }
+                                Err(e) => {
+                                    println!("read_and_compare_data: failed: {e:?}");
+                                    return false;
+                                }
+                            }
+                        } else {
+                            return false;
+                        }
+                    } => {
+                        println!("Test finished with result: {res:?}");
+                        test_finished = true;
+                        test_result = res;
+                    }
+
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                        if try_no < read_timeout {
+                            println!("Trying to read any data (try: {try_no}/{read_timeout})");
+                            try_no += 1;
+                        } else {
+                            test_finished = true;
+                            test_result = false;
+                        }
                     }
                 }
             }
@@ -1216,6 +1494,10 @@ async fn main() -> anyhow::Result<()> {
 
     if test == 4 {
         let _t4 = test4_break_connection_and_receive(sap_control_path, sap_data_path, read, connect).await;
+    }
+
+    if test == 5 {
+        let _t5 = test5_send_query(sap_control_path, sap_data_path, read, connect).await;
     }
 
     return Ok(());
