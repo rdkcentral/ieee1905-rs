@@ -9,7 +9,6 @@ publish = false
 
 [lib]
 name = "ieee1905"
-path = "src/lib.rs"
 
 [features]
 default = []

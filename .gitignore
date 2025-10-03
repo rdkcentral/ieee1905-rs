@@ -22,9 +22,6 @@ Makefile
 # Ignore CMake build directory
 systemd/
 
-#ignore systemd for now
-target/
-
 # Ignore Makefile build artifacts
 *.d        # Dependency files
 *.o        # Object files
@@ -99,3 +96,6 @@ docker-*
 
 # Ignore .dockignore files
 .dockerignore
+
+# Ignore lgs folder
+logs/

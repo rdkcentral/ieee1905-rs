@@ -1,9 +1,9 @@
 [workspace]
+resolver = "2"
 members = [
   "ieee1905-core",
   "ieee1905-tests",
 ]
-resolver = "2"
 
 [profile.release]
 strip = true
