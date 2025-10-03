@@ -1,0 +1,22 @@
+[package]
+name = "ieee1905-tests"
+version = "0.1.8"
+edition = "2021"
+publish = false
+
+[dependencies]
+# core library
+ieee1905-core = { path = "../ieee1905-core" }
+
+tokio  = { version = "1.47.1", features = ["rt-multi-thread", "macros", "net", "time", "fs"] }
+tokio-util = "0.7.16"
+futures = "0.3"
+bytes = "1.10.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+anyhow = "1.0.99"
+clap = { version = "4.5.47", features = ["derive"] }
+pnet = "0.35.0"
+
+[features]
+enable_tokio_console = ["ieee1905-core/enable_tokio_console"]
