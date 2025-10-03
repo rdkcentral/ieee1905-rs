@@ -17,21 +17,16 @@
  * limitations under the License.
 */
 
-#![deny(warnings)]
-// External crates
 use pnet::datalink::MacAddr;
 use tokio::sync::Mutex;
 use tokio::time::Duration;
-
-// Standard library
+use tokio::task::JoinSet;
 use std::collections::{BTreeMap, HashMap};
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::time::Instant;
-
-// Internal modules
 use crate::cmdu::CMDU;
-use crate::task_registry::TASK_REGISTRY;
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CmduReassemblyError {
     EmptyFragments,
@@ -48,18 +43,20 @@ struct FragmentBuffer {
     fragments: BTreeMap<u8, CMDU>,
     first_received: Instant,
 }
-#[derive(Debug, Default)]
+
+#[derive(Default)]
 pub struct CmduReassembler {
+    _join_set: JoinSet<()>,
     buffer: Arc<Mutex<HashMap<(MacAddr, u16), FragmentBuffer>>>,
 }
 
 impl CmduReassembler {
     pub async fn new() -> Self {
-        let buffer: Arc<Mutex<HashMap<(MacAddr, u16), FragmentBuffer>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+        let buffer = Arc::new(Mutex::new(HashMap::<(MacAddr, u16), FragmentBuffer>::new()));
         let buffer_clone = buffer.clone();
 
-        let task_handle = tokio::spawn(async move {
+        let mut join_set = JoinSet::new();
+        join_set.spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(3));
 
             loop {
@@ -91,9 +88,7 @@ impl CmduReassembler {
                 });
             }
         });
-
-        TASK_REGISTRY.lock().await.push(task_handle);
-        Self { buffer }
+        Self { _join_set: join_set, buffer }
     }
 
     pub async fn push_fragment(&self, source_mac: MacAddr, fragment: CMDU) -> Option<Result<CMDU, CmduReassemblyError>> {

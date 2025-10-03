@@ -22,13 +22,12 @@ use clap::Parser;
 use ieee1905::al_sap::AlServiceAccessPoint;
 use ieee1905::cmdu_handler::*;
 use ieee1905::cmdu_message_id_generator::get_message_id_generator;
-use ieee1905::cmdu_proxy::cmdu_topology_discovery_transmission;
+use ieee1905::cmdu_proxy::cmdu_topology_discovery_transmission_worker;
 use ieee1905::ethernet_subject_reception::EthernetReceiver;
 use ieee1905::ethernet_subject_transmission::EthernetSender;
 use ieee1905::interface_manager::*;
 use ieee1905::lldpdu_observer::LLDPObserver;
-use ieee1905::lldpdu_proxy::lldp_discovery;
-use ieee1905::task_registry::TASK_REGISTRY;
+use ieee1905::lldpdu_proxy::lldp_discovery_worker;
 use ieee1905::topology_manager::*;
 use ieee1905::CMDUObserver;
 //use ieee1905::crypto_engine::CRYPTO_CONTEXT;
@@ -37,8 +36,7 @@ use anyhow::anyhow;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
-use tokio_tasker::Tasker;
+use tokio::task::JoinSet;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use tracing_appender::rolling;
 
@@ -179,8 +177,10 @@ async fn main() -> anyhow::Result<()> {
     //the keys are stored in  ctx.gtk_key and ctx.pmk_key
     //We need to insert the PIN value to access softHSM2 as env variable or hardcoded
 
-
     loop {
+        let mut join_sets = Vec::new();
+        let mut main_join_set = JoinSet::new();
+
         //Set AL MAC & test MAC addresses
         let forwarding_interface =
             if let Some(iface) = get_forwarding_interface_name(cli.interface.clone()) {
@@ -225,9 +225,7 @@ async fn main() -> anyhow::Result<()> {
         // Initialize Ethernet Sender
 
         let forwarding_interface_tx = forwarding_interface.clone();
-
-        let sender: Arc<EthernetSender> =
-            Arc::new(EthernetSender::new(&forwarding_interface_tx, Arc::clone(&mutex_tx)).await);
+        let sender = Arc::new(EthernetSender::new(&forwarding_interface_tx, Arc::clone(&mutex_tx)));
 
         // Initialization for adaptation layer SAP
 
@@ -242,22 +240,14 @@ async fn main() -> anyhow::Result<()> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         // Launch of AL-SAP as independent task
-        let task_handle = tokio::spawn(async move {
-            if let Err(e) = AlServiceAccessPoint::initialize_and_store(
-                sap_control_path,
-                sap_data_path,
-                sender_clone,
-                forwarding_interface_clone,
-                Some(shutdown_tx),
-            )
-            .await
-            {
-                tracing::error!("Failed to initialize SAP: {:?}", e);
-            } else {
-                tracing::info!("SAP server initialized and stored.");
-            }
-        });
-        TASK_REGISTRY.lock().await.push(task_handle);
+        main_join_set.spawn(AlServiceAccessPoint::initialize_and_store(
+            sap_control_path,
+            sap_data_path,
+            sender_clone,
+            forwarding_interface_clone,
+            Some(shutdown_tx),
+        ));
+
         // Initialization of the CMDU handler
         let cmdu_handler = Arc::new(
             CMDUHandler::new(
@@ -270,15 +260,12 @@ async fn main() -> anyhow::Result<()> {
         );
 
         // Initialize CMDU Observer
-        let cmdu_observer = Arc::new(CMDUObserver::new(al_mac, Arc::clone(&cmdu_handler)));
+        let cmdu_observer = CMDUObserver::new(Arc::clone(&cmdu_handler));
         // FLAG to enable and disable LLDP
         // Initialize LLDP Observer with chassis_id assuming al_mac an chassis id have the same value as idicated in IEEE1905
-        let lldp_observer = Arc::new(LLDPObserver::new(chassis_id, cli.interface.clone()));
+        let lldp_observer = LLDPObserver::new(chassis_id, cli.interface.clone());
 
-        tracing::info!(
-            "LLDP and CMDU observers initilized with local MAC: {}",
-            al_mac
-        );
+        tracing::info!("LLDP and CMDU observers initilized with local MAC: {al_mac}");
 
         // Initialize Ethernet Receiver
         let mut receiver = EthernetReceiver::new();
@@ -288,57 +275,51 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("CMDU observers subscribed with local MAC: {al_mac}");
 
         // Launch of receiver, take in account logic for Rx is sperated from Logic for Tx, so we clone the forwarding_interface
-        let tasker = Tasker::new();
-        let mut cmdu_receiver_task = receiver.run(&forwarding_interface)?;
+        join_sets.push(receiver.run(&forwarding_interface)?);
 
         // Sart of the discovery process
 
-        let mut lldp_receiver_tasks = Vec::new();
         for interface in get_physical_ethernet_interfaces() {
             tracing::info!("Starting LLDP Discovery on {}/{}", interface.name, interface.mac);
 
             let mut lldp_receiver = EthernetReceiver::new();
             lldp_receiver.subscribe(lldp_observer.clone());
-            lldp_receiver_tasks.push(lldp_receiver.run(&interface.name)?);
+            join_sets.push(lldp_receiver.run(&interface.name)?);
 
-            let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx)).await;
-            lldp_discovery(lldp_sender, chassis_id, interface.mac, interface.name).await;
+            let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx));
+            main_join_set.spawn(lldp_discovery_worker(lldp_sender, chassis_id, interface.mac, interface.name));
         }
 
         let discovery_interface_ieee1905 = forwarding_interface.clone();
 
         tracing::debug!("Starting IEEE1905 Discovery on {}", forwarding_interface);
 
-        cmdu_topology_discovery_transmission(
+        main_join_set.spawn(cmdu_topology_discovery_transmission_worker(
             discovery_interface_ieee1905,
             Arc::clone(&sender),
             Arc::clone(&message_id_generator),
             al_mac,
             forwarding_mac,
-        )
-        .await;
+        ));
+
+        join_sets.push(main_join_set);
 
         let mut signal_terminate = signal(SignalKind::terminate())?;
         let mut signal_interrupt = signal(SignalKind::interrupt())?;
-        let signaller = tasker.signaller();
 
         // if topology_cli is running
         // you can close app by pressing q
         let mut exit_service = true;
 
         tokio::select! {
-            _ = signal_terminate.recv() => {signaller.stop();},
-            _ = signal_interrupt.recv() => {signaller.stop();},
+            _ = signal_terminate.recv() => {},
+            _ = signal_interrupt.recv() => {},
             _ = shutdown_rx => {
-                    tracing::info!("Socket closed. Trying to restart.");
-                    signaller.stop();
-                    exit_service = false;
-                     }
-            _ = async {topology_db.start_topology_cli().await} , if cli.topology_ui => {signaller.stop();}
-
+                tracing::info!("Socket closed. Trying to restart.");
+                exit_service = false;
+            }
+            _ = topology_db.start_topology_cli(), if cli.topology_ui => {}
         }
-        tracing::info!("Waiting for child tasks to finish up to five seconds.");
-        tasker.join().await;
         tracing::info!("All tasks finished.");
         if exit_service {
             tracing::info!("Closing app.");
@@ -346,23 +327,13 @@ async fn main() -> anyhow::Result<()> {
         } else {
             tracing::info!("Socket closed by client");
             tracing::debug!("Aborting all tasks");
-            let mut handles = TASK_REGISTRY.lock().await;
-            let drained_handles: Vec<JoinHandle<()>> = handles.drain(..).collect();
-            for handle in &drained_handles {
-                handle.abort();
-            }
-            for task in lldp_receiver_tasks.iter_mut() {
+            for task in join_sets.iter_mut() {
                 task.abort_all();
             }
-            cmdu_receiver_task.abort_all();
             tracing::trace!("Tasks aborted. Waiting for them to finish");
-            for handle in drained_handles {
-                let _ = handle.await;
-            }
-            for mut task in lldp_receiver_tasks {
+            for mut task in join_sets {
                 task.shutdown().await;
             }
-            cmdu_receiver_task.shutdown().await;
             tracing::info!("All tasks aborted and finished.");
             continue;
         }

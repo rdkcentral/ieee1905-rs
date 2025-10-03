@@ -17,15 +17,11 @@
  * limitations under the License.
 */
 
-#![deny(warnings)]
-// External crates
 use pnet::datalink::MacAddr;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
-
-// Standard library
 use std::sync::Arc;
-use crate::task_registry::TASK_REGISTRY;
+use tokio::task::JoinSet;
 
 #[derive(Debug, Clone)]
 pub struct Frame {
@@ -36,18 +32,19 @@ pub struct Frame {
 }
 
 pub struct EthernetSender {
+    _join_set: JoinSet<()>,
     tx_channel: mpsc::Sender<Frame>,
 }
 
 impl EthernetSender {
     /// **Creates a new `EthernetSender`**
-    pub async fn new(interface_name: &str, interface_mutex: Arc<Mutex<()>>) -> Self {
-        let (tx, mut rx): (mpsc::Sender<Frame>, mpsc::Receiver<Frame>) = mpsc::channel(100);
+    pub fn new(interface_name: &str, interface_mutex: Arc<Mutex<()>>) -> Self {
+        let (tx, mut rx) = mpsc::channel::<Frame>(100);
 
         let interface_name = interface_name.to_string();
-        let interface_mutex_clone = Arc::clone(&interface_mutex);
 
-        let task_handle =tokio::spawn(async move {
+        let mut join_set = JoinSet::new();
+        join_set.spawn(async move {
             info!(interface_name = %interface_name, "Async sender task initialized");
 
             let interfaces = pnet::datalink::interfaces();
@@ -85,7 +82,7 @@ impl EthernetSender {
                     "Processing outgoing Ethernet frame"
                 );
 
-                let _lock = interface_mutex_clone.lock().await;
+                let _lock = interface_mutex.lock().await;
 
                 let mut buffer = vec![0u8; 14 + frame.payload.len()];
                 buffer[..6].copy_from_slice(&frame.destination_mac.octets());
@@ -102,9 +99,9 @@ impl EthernetSender {
 
             warn!("Async sender task exiting.");
         });
-        TASK_REGISTRY.lock().await.push(task_handle);
 
         Self {
+            _join_set: join_set,
             tx_channel: tx,
         }
     }
