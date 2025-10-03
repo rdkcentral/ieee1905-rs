@@ -17,35 +17,33 @@
  * limitations under the License.
 */
 
-#![deny(warnings)]
-// External crates
 use tracing::{error, trace, warn};
 use async_trait::async_trait;
 use pnet::datalink::MacAddr;
 use std::sync::Arc;
-
-// Internal modules
+use tokio::task::JoinSet;
 use crate::cmdu::{CMDU, CMDUType};
 use crate::cmdu_handler::CMDUHandler;
 use crate::ethernet_subject_reception::EthernetFrameObserver;
-use crate::task_registry::TASK_REGISTRY;
-#[derive(Clone)]
-pub struct CMDUObserver {
-    pub local_al_mac: MacAddr,
-    pub handler: Arc<CMDUHandler>,
 
+pub struct CMDUObserver {
+    handler: Arc<CMDUHandler>,
+    join_set: JoinSet<()>,
 }
 
 impl CMDUObserver {
-    pub fn new(local_al_mac: MacAddr, handler: Arc<CMDUHandler>) -> Self {
-        Self { local_al_mac, handler }
+    pub fn new(handler: Arc<CMDUHandler>) -> Self {
+        Self { handler, join_set: JoinSet::new() }
     }
 
+    fn release_finished_tasks(&mut self) {
+        while self.join_set.try_join_next().is_some() {}
+    }
 }
 
 #[async_trait]
 impl EthernetFrameObserver for CMDUObserver {
-    async fn on_frame(&self, interface_mac: MacAddr, frame: &[u8], source_mac: MacAddr, destination_mac: MacAddr) {
+    async fn on_frame(&mut self, interface_mac: MacAddr, frame: &[u8], source_mac: MacAddr, destination_mac: MacAddr) {
         let frame_owned = frame.to_vec();
         tracing::trace!("Parsing CMDU on_frame <{frame_owned:?}>");
         match CMDU::parse(&frame_owned) {
@@ -61,20 +59,17 @@ impl EthernetFrameObserver for CMDUObserver {
                     return;
                 }
 
-                trace!(
-                    "Processing CMDU type: {:?}",
-                    cmdu_type
-                );
+                trace!("Processing CMDU type: {cmdu_type:?}");
                 let handler_ref: Arc<CMDUHandler> = Arc::clone(&self.handler); // Explicit type annotation
                 //TODO to clean up
                 //let interface_name = handler_ref.interface_name.clone(); // --> not needed for now unles we pass the interface to the handler
 
-                let task_handle = tokio::spawn(async move {
+                self.release_finished_tasks();
+                self.join_set.spawn(async move {
                     if let Err(e) = handler_ref.handle_cmdu(&cmdu, source_mac, destination_mac).await {
                         error!("Failed to handle CMDU: {e:?}");
                     }
                 });
-                TASK_REGISTRY.lock().await.push(task_handle);
             }
             Err(e) => {
                 error!("Failed to parse CMDU: {:?}", e);

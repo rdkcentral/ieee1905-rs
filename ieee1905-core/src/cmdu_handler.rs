@@ -61,6 +61,7 @@ impl CMDUHandler {
             reassembler: Arc::new(CmduReassembler::new().await),
         }
     }
+
     pub async fn handle_cmdu(&self, cmdu: &CMDU, source_mac: MacAddr, destination_mac: MacAddr) -> anyhow::Result<()> {
         tracing::trace!("Handling CMDU <{cmdu:?}> source mac: {source_mac}, destination_mac {destination_mac:?}");
 
@@ -1261,8 +1262,7 @@ mod tests {
 
         // Prepare sender
         let mutex_tx = Arc::new(Mutex::new(()));
-        let sender: Arc<EthernetSender> =
-            Arc::new(EthernetSender::new(&forwarding_interface, Arc::clone(&mutex_tx)).await);
+        let sender = Arc::new(EthernetSender::new(&forwarding_interface, Arc::clone(&mutex_tx)));
 
         // Prepare MessageIdGenerator instance
         let message_id_generator = get_message_id_generator().await;
