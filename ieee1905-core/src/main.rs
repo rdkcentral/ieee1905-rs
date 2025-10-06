@@ -37,7 +37,6 @@ use anyhow::anyhow;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
-use tokio::task::JoinSet;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use tracing_appender::rolling;
 
@@ -179,28 +178,26 @@ fn main() -> anyhow::Result<()> {
 
     loop {
         tracing::info!("Starting runtime");
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()?;
+        let runtime = tokio::runtime::Runtime::new()?;
 
         tracing::info!("Runtime started");
         if runtime.block_on(run_main_logic(&cli))? {
-            tracing::info!("Closing app.");
             break;
         }
 
         tracing::info!("Releasing runtime");
-        // timeout is used for blocking tasks, which in our case are related to datalink.
-        // all those tasks are configured to have a 1-second timeout, so must die at most in 1 second.
+        // timeout is used for blocking tasks, which in our case are related to datalink channels.
+        // all such tasks are configured to have a 1-second timeout, so will die at most in 1 second.
         runtime.shutdown_timeout(Duration::from_secs(2));
         tracing::info!("Runtime released");
     }
+    
+    tracing::info!("Closing app.");
     Ok(())
 }
 
 async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     let mut join_sets = Vec::new();
-    let mut main_join_set = JoinSet::new();
 
     //Set AL MAC & test MAC addresses
     let forwarding_interface =
@@ -261,7 +258,7 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
     // Launch of AL-SAP as independent task
-    main_join_set.spawn(AlServiceAccessPoint::initialize_and_store(
+    tokio::task::spawn(AlServiceAccessPoint::initialize_and_store(
         sap_control_path,
         sap_data_path,
         sender_clone,
@@ -308,14 +305,14 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
         join_sets.push(lldp_receiver.run(&interface.name)?);
 
         let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx));
-        main_join_set.spawn(lldp_discovery_worker(lldp_sender, chassis_id, interface.mac, interface.name));
+        tokio::task::spawn(lldp_discovery_worker(lldp_sender, chassis_id, interface.mac, interface.name));
     }
 
     let discovery_interface_ieee1905 = forwarding_interface.clone();
 
     tracing::debug!("Starting IEEE1905 Discovery on {}", forwarding_interface);
 
-    main_join_set.spawn(cmdu_topology_discovery_transmission_worker(
+    tokio::task::spawn(cmdu_topology_discovery_transmission_worker(
         discovery_interface_ieee1905,
         Arc::clone(&sender),
         Arc::clone(&message_id_generator),
@@ -323,14 +320,16 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
         forwarding_mac,
     ));
 
-    join_sets.push(main_join_set);
-
     let mut signal_terminate = signal(SignalKind::terminate())?;
     let mut signal_interrupt = signal(SignalKind::interrupt())?;
 
     // if topology_cli is running
     // you can close app by pressing q
     let mut exit_service = true;
+
+    if "".is_empty() {
+        return Ok(false);
+    }
 
     tokio::select! {
         _ = signal_terminate.recv() => {},

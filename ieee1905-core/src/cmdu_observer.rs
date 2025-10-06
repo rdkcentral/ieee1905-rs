@@ -25,6 +25,7 @@ use crate::cmdu::{CMDU, CMDUType};
 use crate::cmdu_handler::CMDUHandler;
 use crate::ethernet_subject_reception::EthernetFrameObserver;
 
+#[derive(Clone)]
 pub struct CMDUObserver {
     handler: Arc<CMDUHandler>,
 }
@@ -54,12 +55,12 @@ impl EthernetFrameObserver for CMDUObserver {
                 }
 
                 trace!("Processing CMDU type: {cmdu_type:?}");
-                let handler_ref: Arc<CMDUHandler> = Arc::clone(&self.handler); // Explicit type annotation
+                let handler = Arc::clone(&self.handler); // Explicit type annotation
                 //TODO to clean up
                 //let interface_name = handler_ref.interface_name.clone(); // --> not needed for now unles we pass the interface to the handler
 
                 tokio::task::spawn(async move {
-                    if let Err(e) = handler_ref.handle_cmdu(&cmdu, source_mac, destination_mac).await {
+                    if let Err(e) = handler.handle_cmdu(&cmdu, source_mac, destination_mac).await {
                         error!("Failed to handle CMDU: {e:?}");
                     }
                 });
