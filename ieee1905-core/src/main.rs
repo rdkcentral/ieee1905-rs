@@ -327,10 +327,6 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     // you can close app by pressing q
     let mut exit_service = true;
 
-    if "".is_empty() {
-        return Ok(false);
-    }
-
     tokio::select! {
         _ = signal_terminate.recv() => {},
         _ = signal_interrupt.recv() => {},
