@@ -37,7 +37,7 @@ use tracing::{debug, error, info, warn};
 #[async_trait]
 pub trait EthernetFrameObserver: Send + Sync + 'static {
     async fn on_frame(
-        &mut self,
+        &self,
         interface_mac: MacAddr,
         frame: &[u8],
         source_mac: MacAddr,
@@ -68,7 +68,7 @@ impl EthernetReceiver {
     }
 
     /// **Subscribe an observer**, avoiding duplicate subscriptions for the same `EtherType`
-    pub fn subscribe(&mut self, mut observer: impl EthernetFrameObserver) {
+    pub fn subscribe(&mut self, observer: impl EthernetFrameObserver) {
         let ether_type = observer.get_ethertype();
         debug!("Trying to subscribe observer for EtherType: 0x{ether_type:04X}");
 

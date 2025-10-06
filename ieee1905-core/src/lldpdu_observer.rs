@@ -44,7 +44,7 @@ impl LLDPObserver {
 
 #[async_trait]
 impl EthernetFrameObserver for LLDPObserver {
-    async fn on_frame(&mut self, interface_mac: MacAddr, frame: &[u8], source_mac: MacAddr, destination_mac: MacAddr) {
+    async fn on_frame(&self, interface_mac: MacAddr, frame: &[u8], source_mac: MacAddr, destination_mac: MacAddr) {
         debug!(
             interface_mac = ?interface_mac,
             source_mac = ?source_mac,
