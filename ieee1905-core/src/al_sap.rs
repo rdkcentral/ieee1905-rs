@@ -95,8 +95,8 @@ pub struct AlServiceAccessPoint {
 
 impl AlServiceAccessPoint {
     pub async fn initialize_and_store(
-        control_socket_path: String,
-        data_socket_path: String,
+        control_socket_path: impl AsRef<Path>,
+        data_socket_path: impl AsRef<Path>,
         sender: Arc<EthernetSender>,
         interface_name: String,
         shutdown_tx: Option<oneshot::Sender<()>>,
@@ -129,14 +129,14 @@ impl AlServiceAccessPoint {
     }
 
     async fn start_server(
-        control_socket_path: String,
-        data_socket_path: String,
+        control_socket_path: impl AsRef<Path>,
+        data_socket_path: impl AsRef<Path>,
         sender: Arc<EthernetSender>,
         interface_name: String,
     ) -> Result<AlServiceAccessPoint> {
         tracing::info!("Starting server");
-        let ctrl_path: &Path = control_socket_path.as_ref();
-        let data_path: &Path = data_socket_path.as_ref();
+        let ctrl_path = control_socket_path.as_ref();
+        let data_path = data_socket_path.as_ref();
 
         if ctrl_path.exists() {
             fs::remove_file(ctrl_path).await?;
