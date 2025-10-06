@@ -32,6 +32,7 @@ use ieee1905::topology_manager::*;
 use ieee1905::CMDUObserver;
 //use ieee1905::crypto_engine::CRYPTO_CONTEXT;
 use std::sync::Arc;
+use std::time::Duration;
 use anyhow::anyhow;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
@@ -70,8 +71,7 @@ struct CliArgs {
     stdout_apender: bool,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let cli = CliArgs::parse();
 
     // Start the Tokio console subscriber
@@ -178,165 +178,168 @@ async fn main() -> anyhow::Result<()> {
     //We need to insert the PIN value to access softHSM2 as env variable or hardcoded
 
     loop {
-        let mut join_sets = Vec::new();
-        let mut main_join_set = JoinSet::new();
+        tracing::info!("Starting runtime");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?;
 
-        //Set AL MAC & test MAC addresses
-        let forwarding_interface =
-            if let Some(iface) = get_forwarding_interface_name(cli.interface.clone()) {
-                tracing::info!("Forwarding interface: {}", iface);
-                iface
-            } else {
-                tracing::debug!("No Ethernet interface found for forwarding, using default.");
-                "eth_default".to_string() // Default interface name if none found
-            };
-
-
-        // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
-        let al_mac = get_local_al_mac(cli.interface.clone()).ok_or_else(|| {
-            anyhow!("failed to get local al mac")
-        })?;
-        tracing::info!("AL MAC address: {}", al_mac);
-
-        // // Initialize Database
-
-        let topology_db = TopologyDatabase::get_instance(al_mac, cli.interface.clone()).await;
-
-        // Upon every loop restart topology database role can change
-        topology_db.set_local_role(None).await;
-
-        // Find Forwarding MAC Address (Ethernet Interface)
-        let forwarding_mac = topology_db.get_forwarding_interface_mac().await;
-        tracing::info!("Forwarding MAC address: {}", forwarding_mac);
-
-        //we initilize here the values for LLDP input parameters
-        let chassis_id = al_mac;
-
-        tracing::debug!("Topology Database initialized with AL MAC: {:?}", al_mac);
-
-        // Initialize Message ID Generator for CMDUs
-        let message_id_generator = get_message_id_generator().await;
-
-        // Initialization for Tx
-
-        // Create shared mutex for exclusive access to network interfaces for transmission
-        let mutex_tx = Arc::new(Mutex::new(()));
-
-        // Initialize Ethernet Sender
-
-        let forwarding_interface_tx = forwarding_interface.clone();
-        let sender = Arc::new(EthernetSender::new(&forwarding_interface_tx, Arc::clone(&mutex_tx)));
-
-        // Initialization for adaptation layer SAP
-
-        //Initialization of the socket paths
-        let sap_control_path = cli.sap_control_path.clone();
-        let sap_data_path = cli.sap_data_path.clone();
-
-        // Clonning of Tx structures to be used from the AL-SAP
-        let sender_clone = Arc::clone(&sender);
-        let forwarding_interface_clone = forwarding_interface.clone();
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
-        // Launch of AL-SAP as independent task
-        main_join_set.spawn(AlServiceAccessPoint::initialize_and_store(
-            sap_control_path,
-            sap_data_path,
-            sender_clone,
-            forwarding_interface_clone,
-            Some(shutdown_tx),
-        ));
-
-        // Initialization of the CMDU handler
-        let cmdu_handler = Arc::new(
-            CMDUHandler::new(
-                Arc::clone(&sender),
-                Arc::clone(&message_id_generator),
-                al_mac,
-                forwarding_interface.clone(),
-            )
-            .await,
-        );
-
-        // Initialize CMDU Observer
-        let cmdu_observer = CMDUObserver::new(Arc::clone(&cmdu_handler));
-        // FLAG to enable and disable LLDP
-        // Initialize LLDP Observer with chassis_id assuming al_mac an chassis id have the same value as idicated in IEEE1905
-        let lldp_observer = LLDPObserver::new(chassis_id, cli.interface.clone());
-
-        tracing::info!("LLDP and CMDU observers initilized with local MAC: {al_mac}");
-
-        // Initialize Ethernet Receiver
-        let mut receiver = EthernetReceiver::new();
-
-        // Subscription of observers
-        receiver.subscribe(cmdu_observer);
-        tracing::info!("CMDU observers subscribed with local MAC: {al_mac}");
-
-        // Launch of receiver, take in account logic for Rx is sperated from Logic for Tx, so we clone the forwarding_interface
-        join_sets.push(receiver.run(&forwarding_interface)?);
-
-        // Sart of the discovery process
-
-        for interface in get_physical_ethernet_interfaces() {
-            tracing::info!("Starting LLDP Discovery on {}/{}", interface.name, interface.mac);
-
-            let mut lldp_receiver = EthernetReceiver::new();
-            lldp_receiver.subscribe(lldp_observer.clone());
-            join_sets.push(lldp_receiver.run(&interface.name)?);
-
-            let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx));
-            main_join_set.spawn(lldp_discovery_worker(lldp_sender, chassis_id, interface.mac, interface.name));
+        tracing::info!("Runtime started");
+        if runtime.block_on(run_main_logic(&cli))? {
+            tracing::info!("Closing app.");
+            break;
         }
 
-        let discovery_interface_ieee1905 = forwarding_interface.clone();
+        tracing::info!("Releasing runtime");
+        // timeout is used for blocking tasks, which in our case are related to datalink.
+        // all those tasks are configured to have a 1-second timeout, so must die at most in 1 second.
+        runtime.shutdown_timeout(Duration::from_secs(2));
+        tracing::info!("Runtime released");
+    }
+    Ok(())
+}
 
-        tracing::debug!("Starting IEEE1905 Discovery on {}", forwarding_interface);
+async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
+    let mut join_sets = Vec::new();
+    let mut main_join_set = JoinSet::new();
 
-        main_join_set.spawn(cmdu_topology_discovery_transmission_worker(
-            discovery_interface_ieee1905,
+    //Set AL MAC & test MAC addresses
+    let forwarding_interface =
+        if let Some(iface) = get_forwarding_interface_name(cli.interface.clone()) {
+            tracing::info!("Forwarding interface: {}", iface);
+            iface
+        } else {
+            tracing::debug!("No Ethernet interface found for forwarding, using default.");
+            "eth_default".to_string() // Default interface name if none found
+        };
+
+
+    // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
+    let al_mac = get_local_al_mac(cli.interface.clone()).ok_or_else(|| {
+        anyhow!("failed to get local al mac")
+    })?;
+    tracing::info!("AL MAC address: {}", al_mac);
+
+    // // Initialize Database
+
+    let topology_db = TopologyDatabase::get_instance(al_mac, cli.interface.clone()).await;
+
+    // Upon every loop restart topology database role can change
+    topology_db.set_local_role(None).await;
+
+    // Find Forwarding MAC Address (Ethernet Interface)
+    let forwarding_mac = topology_db.get_forwarding_interface_mac().await;
+    tracing::info!("Forwarding MAC address: {}", forwarding_mac);
+
+    //we initilize here the values for LLDP input parameters
+    let chassis_id = al_mac;
+
+    tracing::debug!("Topology Database initialized with AL MAC: {:?}", al_mac);
+
+    // Initialize Message ID Generator for CMDUs
+    let message_id_generator = get_message_id_generator().await;
+
+    // Initialization for Tx
+
+    // Create shared mutex for exclusive access to network interfaces for transmission
+    let mutex_tx = Arc::new(Mutex::new(()));
+
+    // Initialize Ethernet Sender
+
+    let forwarding_interface_tx = forwarding_interface.clone();
+    let sender = Arc::new(EthernetSender::new(&forwarding_interface_tx, Arc::clone(&mutex_tx)));
+
+    // Initialization for adaptation layer SAP
+
+    //Initialization of the socket paths
+    let sap_control_path = cli.sap_control_path.clone();
+    let sap_data_path = cli.sap_data_path.clone();
+
+    // Clonning of Tx structures to be used from the AL-SAP
+    let sender_clone = Arc::clone(&sender);
+    let forwarding_interface_clone = forwarding_interface.clone();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+    // Launch of AL-SAP as independent task
+    main_join_set.spawn(AlServiceAccessPoint::initialize_and_store(
+        sap_control_path,
+        sap_data_path,
+        sender_clone,
+        forwarding_interface_clone,
+        Some(shutdown_tx),
+    ));
+
+    // Initialization of the CMDU handler
+    let cmdu_handler = Arc::new(
+        CMDUHandler::new(
             Arc::clone(&sender),
             Arc::clone(&message_id_generator),
             al_mac,
-            forwarding_mac,
-        ));
+            forwarding_interface.clone(),
+        )
+            .await,
+    );
 
-        join_sets.push(main_join_set);
+    // Initialize CMDU Observer
+    let cmdu_observer = CMDUObserver::new(Arc::clone(&cmdu_handler));
+    // FLAG to enable and disable LLDP
+    // Initialize LLDP Observer with chassis_id assuming al_mac an chassis id have the same value as idicated in IEEE1905
+    let lldp_observer = LLDPObserver::new(chassis_id, cli.interface.clone());
 
-        let mut signal_terminate = signal(SignalKind::terminate())?;
-        let mut signal_interrupt = signal(SignalKind::interrupt())?;
+    tracing::info!("LLDP and CMDU observers initilized with local MAC: {al_mac}");
 
-        // if topology_cli is running
-        // you can close app by pressing q
-        let mut exit_service = true;
+    // Initialize Ethernet Receiver
+    let mut receiver = EthernetReceiver::new();
 
-        tokio::select! {
-            _ = signal_terminate.recv() => {},
-            _ = signal_interrupt.recv() => {},
-            _ = shutdown_rx => {
-                tracing::info!("Socket closed. Trying to restart.");
-                exit_service = false;
-            }
-            _ = topology_db.start_topology_cli(), if cli.topology_ui => {}
+    // Subscription of observers
+    receiver.subscribe(cmdu_observer);
+    tracing::info!("CMDU observers subscribed with local MAC: {al_mac}");
+
+    // Launch of receiver, take in account logic for Rx is sperated from Logic for Tx, so we clone the forwarding_interface
+    join_sets.push(receiver.run(&forwarding_interface)?);
+
+    // Sart of the discovery process
+
+    for interface in get_physical_ethernet_interfaces() {
+        tracing::info!("Starting LLDP Discovery on {}/{}", interface.name, interface.mac);
+
+        let mut lldp_receiver = EthernetReceiver::new();
+        lldp_receiver.subscribe(lldp_observer.clone());
+        join_sets.push(lldp_receiver.run(&interface.name)?);
+
+        let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx));
+        main_join_set.spawn(lldp_discovery_worker(lldp_sender, chassis_id, interface.mac, interface.name));
+    }
+
+    let discovery_interface_ieee1905 = forwarding_interface.clone();
+
+    tracing::debug!("Starting IEEE1905 Discovery on {}", forwarding_interface);
+
+    main_join_set.spawn(cmdu_topology_discovery_transmission_worker(
+        discovery_interface_ieee1905,
+        Arc::clone(&sender),
+        Arc::clone(&message_id_generator),
+        al_mac,
+        forwarding_mac,
+    ));
+
+    join_sets.push(main_join_set);
+
+    let mut signal_terminate = signal(SignalKind::terminate())?;
+    let mut signal_interrupt = signal(SignalKind::interrupt())?;
+
+    // if topology_cli is running
+    // you can close app by pressing q
+    let mut exit_service = true;
+
+    tokio::select! {
+        _ = signal_terminate.recv() => {},
+        _ = signal_interrupt.recv() => {},
+        _ = shutdown_rx => {
+            tracing::info!("Socket closed. Trying to restart.");
+            exit_service = false;
         }
-        tracing::info!("All tasks finished.");
-        if exit_service {
-            tracing::info!("Closing app.");
-            break;
-        } else {
-            tracing::info!("Socket closed by client");
-            tracing::debug!("Aborting all tasks");
-            for task in join_sets.iter_mut() {
-                task.abort_all();
-            }
-            tracing::trace!("Tasks aborted. Waiting for them to finish");
-            for mut task in join_sets {
-                task.shutdown().await;
-            }
-            tracing::info!("All tasks aborted and finished.");
-            continue;
-        }
-    } // end of loop for socket restart
-    Ok(())
+        _ = topology_db.start_topology_cli(), if cli.topology_ui => {}
+    }
+    Ok(exit_service)
 }

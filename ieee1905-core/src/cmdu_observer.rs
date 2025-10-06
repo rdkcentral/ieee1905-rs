@@ -21,23 +21,17 @@ use tracing::{error, trace, warn};
 use async_trait::async_trait;
 use pnet::datalink::MacAddr;
 use std::sync::Arc;
-use tokio::task::JoinSet;
 use crate::cmdu::{CMDU, CMDUType};
 use crate::cmdu_handler::CMDUHandler;
 use crate::ethernet_subject_reception::EthernetFrameObserver;
 
 pub struct CMDUObserver {
     handler: Arc<CMDUHandler>,
-    join_set: JoinSet<()>,
 }
 
 impl CMDUObserver {
     pub fn new(handler: Arc<CMDUHandler>) -> Self {
-        Self { handler, join_set: JoinSet::new() }
-    }
-
-    fn release_finished_tasks(&mut self) {
-        while self.join_set.try_join_next().is_some() {}
+        Self { handler }
     }
 }
 
@@ -64,8 +58,7 @@ impl EthernetFrameObserver for CMDUObserver {
                 //TODO to clean up
                 //let interface_name = handler_ref.interface_name.clone(); // --> not needed for now unles we pass the interface to the handler
 
-                self.release_finished_tasks();
-                self.join_set.spawn(async move {
+                tokio::task::spawn(async move {
                     if let Err(e) = handler_ref.handle_cmdu(&cmdu, source_mac, destination_mac).await {
                         error!("Failed to handle CMDU: {e:?}");
                     }
