@@ -51,7 +51,7 @@ pub struct CmduReassembler {
 }
 
 impl CmduReassembler {
-    pub async fn new() -> Self {
+    pub fn new() -> Self {
         let buffer = Arc::new(Mutex::new(HashMap::<(MacAddr, u16), FragmentBuffer>::new()));
         let buffer_clone = buffer.clone();
 
@@ -134,7 +134,7 @@ pub mod tests {
     // Create CMDU reassembler instance but don't push any fragments to it
     #[tokio::test]
     async fn test_empty_fragment() {
-        let cmdu_reasm = CmduReassembler::new().await;
+        let cmdu_reasm = CmduReassembler::new();
 
         // Wait longer than 3 seconds timeout set in tokio async in new() method
         sleep(Duration::from_secs(4)).await;
@@ -164,7 +164,7 @@ pub mod tests {
             payload: tlv.serialize(),
         };
 
-        let cmdu_reasm = CmduReassembler::new().await;
+        let cmdu_reasm = CmduReassembler::new();
 
         // Push the only fragment
         let _ = cmdu_reasm.push_fragment(MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66), cmdu.clone()).await;
@@ -218,7 +218,7 @@ pub mod tests {
             payload: tlv2.serialize(),
         };
 
-        let cmdu_reasm = CmduReassembler::new().await;
+        let cmdu_reasm = CmduReassembler::new();
 
         // Add both CMDUs to CMDU reassembler buffer
         let _ = cmdu_reasm.push_fragment(MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66), cmdu1.clone()).await;
@@ -250,7 +250,7 @@ pub mod tests {
 
         let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
         let fragments = vec![cmdu0, cmdu1, cmdu2];
-        let cmdu_reasm = CmduReassembler::new().await;
+        let cmdu_reasm = CmduReassembler::new();
 
         for fragment in fragments.iter() {
             match cmdu_reasm.push_fragment(source_mac, fragment.clone()).await {

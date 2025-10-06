@@ -58,7 +58,7 @@ impl CMDUHandler {
             message_id_generator,
             local_al_mac,
             interface_name,
-            reassembler: Arc::new(CmduReassembler::new().await),
+            reassembler: Arc::new(CmduReassembler::new()),
         }
     }
 
@@ -1040,7 +1040,7 @@ mod tests {
         let fragments = cmdu.clone().fragment(1500);
 
         // Prepare a CmduReassembler instance
-        let cmdu_reasm = CmduReassembler::new().await;
+        let cmdu_reasm = CmduReassembler::new();
 
         let mut reassembled: Option<CMDU> = None;
 
@@ -1199,7 +1199,7 @@ mod tests {
         let fragments: Vec<CMDU> = vec![cmdu_part_1, cmdu_part_2];
 
         // Prepare instance of CmduReassembler
-        let cmdu_reasm = CmduReassembler::new().await;
+        let cmdu_reasm = CmduReassembler::new();
 
         // Make instance of CMDU for reassembling CMDU fragments into one, final CMDU
         let mut reassembled: Option<CMDU> = None;
@@ -1309,7 +1309,7 @@ mod tests {
 
         let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
         let fragments = vec![cmdu0, cmdu1, cmdu2];
-        let cmdu_reasm = CmduReassembler::new().await;
+        let cmdu_reasm = CmduReassembler::new();
 
         for fragment in fragments.iter() {
             match cmdu_reasm.push_fragment(source_mac, fragment.clone()).await {
