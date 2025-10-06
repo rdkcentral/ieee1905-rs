@@ -1,0 +1,125 @@
+name: Functional tests
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Revision of the IEEE1905 repo to test
+        required: true
+        default: main
+        type: string
+
+jobs:
+  functional_tests:
+    runs-on: ubuntu-24.04
+
+    steps:
+      # Get timestamp for output artifact archive file with logs
+      - name: Get timestamp
+        id: timestamp
+        run: echo "date=$(date +'%Y%m%d_%H%M%S')" >> "$GITHUB_OUTPUT"
+
+      # Log input value (revision) in github logs for debug purposes
+      - name: Log input value
+        run: |
+            echo "INPUT_REVISION=${{ github.event.inputs.revision }}"
+
+      # Checkout the project
+      - name: Clone IEEE1905
+        uses: actions/checkout@v4
+        with:
+            ref: ${{ github.event.inputs.revision }}
+            path: ieee1905
+
+      # Install Rust
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+            toolchain: stable
+            override: true
+
+      # Build binaries from this IEEE1905 project
+      - name: Build main IEEE1905 project
+        working-directory: ieee1905
+        run: cargo build
+
+      # Build docker image for two containers
+      - name: Build docker image
+        run: docker compose -f ieee1905/ieee1905-tests/docker-compose.yaml build --progress=plain --no-cache
+        env:
+            WORK_DIR: ${{ github.workspace }}
+
+      # Start both containers
+      - name: Run both docker containers
+        run: docker compose -f ieee1905/ieee1905-tests/docker-compose.yaml up -d
+        env:
+            WORK_DIR: ${{ github.workspace }}
+
+      # Run the functional tests
+      - name: Run ieee1905 on node1
+        run: docker exec -dt ieee1905_node1 /bin/bash -c 'stdbuf -o0 /app/ieee1905 | stdbuf -o0 ansi2txt >& /tmp/node1_ieee1905.txt'
+
+      - name: Run ieee1905 on node2
+        run: docker exec -dt ieee1905_node2 /bin/bash -c 'stdbuf -o0 /app/ieee1905 | stdbuf -o0 ansi2txt >& /tmp/node2_ieee1905.txt'
+
+      - name: Run receiver on node1
+        run: docker exec -dt ieee1905_node1 /bin/bash -c 'stdbuf -o0 /app/functional_tests_receiver | stdbuf -o0 ansi2txt >& /tmp/node1_receiver.txt'
+
+      - name: Run transmitter on node2
+        run: |
+            sleep 30
+            docker exec -t ieee1905_node2 /bin/bash -c 'stdbuf -o0 /app/functional_tests_transmitter | stdbuf -o0 ansi2txt >& /tmp/node2_transmitter.txt'
+
+      # Send SIGINT and SIGTERM signals to the applications to terminate them
+      - name: Stop ieee1905 on node1
+        run: docker exec -dt ieee1905_node1 /bin/bash -c 'pkill -SIGINT -f /app/ieee1905'
+
+      - name: Stop ieee1905 on node2
+        run: docker exec -dt ieee1905_node2 /bin/bash -c 'pkill -SIGINT -f /app/ieee1905'
+
+      - name: Stop functional_tests_receiver on node1
+        run: docker exec -dt ieee1905_node1 /bin/bash -c 'pkill -SIGTERM -f /app/functional_tests_receiver'
+
+      - name: Stop functional_tests_transmitter on node2
+        run: docker exec -dt ieee1905_node2 /bin/bash -c 'pkill -SIGTERM -f /app/functional_tests_transmitter'
+
+      # Wait 5 seconds for the applications to finish
+      - name: Wait for the applications to finish
+        continue-on-error: true
+        run: |
+            docker exec -t ieee1905_node1 /bin/bash -c 'timeout 5s pidwait ieee1905 || true'
+            docker exec -t ieee1905_node2 /bin/bash -c 'timeout 5s pidwait ieee1905 || true'
+            docker exec -t ieee1905_node1 /bin/bash -c 'timeout 5s pidwait functional_tests_receiver || true'
+            docker exec -t ieee1905_node2 /bin/bash -c 'timeout 5s pidwait functional_tests_transmitter || true'
+
+      # Store user's input as environment variables to save them in all_env.txt artifact log file
+      - name: Set environment variables
+        run: |
+            echo "INPUT_REVISION=${{ github.event.inputs.revision }}" >> $GITHUB_ENV
+
+      # Dump all the github runner environment variables
+      - name: Dump environment variables
+        run: printenv > all_env.txt
+
+      # Download logs from both containers
+      - name: Download logs from both containers
+        run: |
+            docker cp ieee1905_node1:/tmp/node1_ieee1905.txt .
+            docker cp ieee1905_node2:/tmp/node2_ieee1905.txt .
+            docker cp ieee1905_node1:/tmp/node1_receiver.txt .
+            docker cp ieee1905_node2:/tmp/node2_transmitter.txt .
+
+      # Store the logs as an artifact archive
+      - name: Upload logs as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+            name: functional_test_logs_#${{ github.run_number }}_${{ steps.timestamp.outputs.date }}
+            path: |
+                node1_ieee1905.txt
+                node2_ieee1905.txt
+                node1_receiver.txt
+                node2_transmitter.txt
+                all_env.txt
+
+      - name: Shutdown both docker containers
+        run: |
+            docker compose -f ieee1905/ieee1905-tests/docker-compose.yaml down
