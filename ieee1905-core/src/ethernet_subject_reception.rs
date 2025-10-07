@@ -28,7 +28,6 @@ use pnet::packet::Packet;
 use pnet::util::MacAddr;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::task::{yield_now, JoinSet};
@@ -69,7 +68,7 @@ impl EthernetReceiver {
     }
 
     /// **Subscribe an observer**, avoiding duplicate subscriptions for the same `EtherType`
-    pub fn subscribe(&mut self, observer: Arc<impl EthernetFrameObserver>) {
+    pub fn subscribe(&mut self, observer: impl EthernetFrameObserver) {
         let ether_type = observer.get_ethertype();
         debug!("Trying to subscribe observer for EtherType: 0x{ether_type:04X}");
 

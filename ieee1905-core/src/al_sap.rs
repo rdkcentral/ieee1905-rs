@@ -26,7 +26,6 @@ use crate::registration_codec::{
     ServiceOperation, ServiceType,
 };
 use crate::sdu_codec::SDU;
-use crate::task_registry::TASK_REGISTRY;
 use crate::topology_manager::Role;
 use crate::TopologyDatabase;
 use anyhow::{Context, Result};
@@ -62,10 +61,11 @@ pub enum AlSapError {
 }
 
 // Setter for SAP_INSTANCE
-async fn set_instance(instance: AlServiceAccessPoint) {
+async fn set_instance(instance: AlServiceAccessPoint) -> Arc<Mutex<AlServiceAccessPoint>> {
     let mut lock = SAP_INSTANCE.lock().await;
-    *lock = Some(Arc::new(Mutex::new(instance)));
+    lock.insert(Arc::new(Mutex::new(instance))).clone()
 }
+
 // Getter for mutable access
 async fn get_instance_mut() -> Option<Arc<Mutex<AlServiceAccessPoint>>> {
     let lock = SAP_INSTANCE.lock().await;
@@ -94,63 +94,43 @@ pub struct AlServiceAccessPoint {
 }
 
 impl AlServiceAccessPoint {
-    pub async fn initialize_and_store<P: AsRef<Path>>(
-        control_socket_path: P,
-        data_socket_path: P,
+    pub async fn initialize_and_store(
+        control_socket_path: impl AsRef<Path>,
+        data_socket_path: impl AsRef<Path>,
         sender: Arc<EthernetSender>,
         interface_name: String,
         shutdown_tx: Option<oneshot::Sender<()>>,
-    ) -> Result<()> {
+    ) {
         let sap = AlServiceAccessPoint::start_server(
             control_socket_path,
             data_socket_path,
             sender,
             interface_name,
-        )
-        .await?;
+        ).await;
 
-        tracing::trace!("Setting up new SAP_INSTANCE");
-        set_instance(sap).await;
-        tracing::trace!("New instance setup done");
+        let sap = match sap {
+            Ok(e) => set_instance(e).await,
+            Err(e) => return tracing::error!("Failed to initialize SAP: {e:?}"),
+        };
+        tracing::info!("SAP server initialized and stored.");
 
-        if let Some(sap_instance_arc) = get_instance_mut().await {
-            // Run as a task listener registration
-            let task_handle = tokio::spawn(async move {
-                let mut sap_instance = sap_instance_arc.lock().await;
-                tracing::debug!("Got SAP_INSTANCE");
+        let result = sap.lock().await.service_access_point_registration_request().await;
+        tracing::debug!("SAP_INSTANCE locking result: {:?}", result);
 
-                let result: std::result::Result<AlServiceRegistrationRequest, anyhow::Error> =
-                    sap_instance
-                        .service_access_point_registration_request()
-                        .await;
-                tracing::debug!("SAP_INSTANCE locking result: {:?}", result);
-
-                match result {
-                    Ok(_req) => {
-                        tracing::debug!(
-                            "Received registration request on control unix stream socket"
-                        );
-                        // this task is gently closed when socket socket client disconnects no need to close it
-                        // via task_handler
-                        let task_handle = tokio::spawn(async move {
-                            sap_data_request_handler(shutdown_tx).await;
-                        });
-                        TASK_REGISTRY.lock().await.push(task_handle);
-                    }
-                    Err(err) => {
-                        tracing::error!("Registration request error: {:?}", err);
-                    }
-                }
-                tracing::debug!("Releasing lock on SAP_INSTANCE");
-            });
-            TASK_REGISTRY.lock().await.push(task_handle);
+        match result {
+            Ok(_) => {
+                tracing::debug!("Received registration request on control unix stream socket");
+                sap_data_request_handler(shutdown_tx).await;
+            }
+            Err(err) => {
+                tracing::error!("Registration request error: {:?}", err);
+            }
         }
-        Ok(())
     }
 
-    pub async fn start_server<P: AsRef<Path>>(
-        control_socket_path: P,
-        data_socket_path: P,
+    async fn start_server(
+        control_socket_path: impl AsRef<Path>,
+        data_socket_path: impl AsRef<Path>,
         sender: Arc<EthernetSender>,
         interface_name: String,
     ) -> Result<AlServiceAccessPoint> {
@@ -621,12 +601,11 @@ async fn send_cmdu_from_sdu(sdu: SDU) -> Result<()> {
             ));
         }
         tracing::debug!("Sending CMDU part from SDU via network");
-        cmdu_from_sdu_transmission(
+        tokio::task::spawn(cmdu_from_sdu_transmission(
             sap_guard.interface_name.clone(),
             sap_guard.sender.clone(),
             sdu.clone(),
-        )
-        .await;
+        ));
         Ok(())
     } else {
         tracing::warn!("SAP instance not ready, skipping registration");

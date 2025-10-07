@@ -17,17 +17,11 @@
  * limitations under the License.
 */
 
-#![deny(warnings)]
-// External crates
 use pnet::datalink::MacAddr;
-use tokio::task;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, trace, warn};
-
-// Standard library
 use std::sync::Arc;
-
-// Internal modules
+use tokio::task;
 use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
@@ -35,92 +29,87 @@ use crate::interface_manager::get_mac_address_by_interface;
 use crate::topology_manager::{TopologyDatabase, UpdateType};
 use crate::MessageIdGenerator;
 use crate::SDU;
-use crate::task_registry::TASK_REGISTRY;
 
-pub async fn cmdu_topology_discovery_transmission(
+pub async fn cmdu_topology_discovery_transmission_worker(
     interface: String,
     sender: Arc<EthernetSender>,
     message_id_generator: Arc<MessageIdGenerator>,
     local_al_mac_address: MacAddr,
     interface_mac_address: MacAddr,
 ) {
-    let task_handle = task::spawn(async move {
+    let mut ticker = interval(Duration::from_secs(30)); // Creates a ticker that ticks every 5 seconds
 
-        let mut ticker = interval(Duration::from_secs(30)); // Creates a ticker that ticks every 5 seconds
+    loop {
+        ticker.tick().await; // Wait for the next tick before executing the loop body
 
-        loop {
-            ticker.tick().await; // Wait for the next tick before executing the loop body
+        let message_id = message_id_generator.next_id();
+        trace!(interface = %interface, message_id = message_id, "Creating CMDU Topology Discovery");
+        let al_mac_address = local_al_mac_address;
+        let mac_address = interface_mac_address;
 
-            let message_id = message_id_generator.next_id();
-            trace!(interface = %interface, message_id = message_id, "Creating CMDU Topology Discovery");
-            let al_mac_address = local_al_mac_address;
-            let mac_address = interface_mac_address;
+        // Define TLVs
+        let al_mac_tlv = TLV {
+            tlv_type: IEEE1905TLVType::AlMacAddress.to_u8(),
+            tlv_length: 6,
+            tlv_value: Some(AlMacAddress { al_mac_address }.serialize()),
+        };
 
-            // Define TLVs
-            let al_mac_tlv = TLV {
-                tlv_type: IEEE1905TLVType::AlMacAddress.to_u8(),
-                tlv_length: 6,
-                tlv_value: Some(AlMacAddress { al_mac_address }.serialize()),
-            };
+        let mac_address_tlv = TLV {
+            tlv_type: IEEE1905TLVType::MacAddress.to_u8(),
+            tlv_length: 6,
+            tlv_value: Some(MacAddress { mac_address }.serialize()),
+        };
 
-            let mac_address_tlv = TLV {
-                tlv_type: IEEE1905TLVType::MacAddress.to_u8(),
-                tlv_length: 6,
-                tlv_value: Some(MacAddress { mac_address }.serialize()),
-            };
+        let end_of_message_tlv = TLV {
+            tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
+            tlv_length: 0,
+            tlv_value: None,
+        };
 
-            let end_of_message_tlv = TLV {
-                tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
-                tlv_length: 0,
-                tlv_value: None,
-            };
+        let mut serialized_payload: Vec<u8> = vec![];
+            serialized_payload.extend(al_mac_tlv.serialize() );
+            serialized_payload.extend( mac_address_tlv.serialize() );
+            serialized_payload.extend( end_of_message_tlv.serialize() );
 
-            let mut serialized_payload: Vec<u8> = vec![];
-                serialized_payload.extend(al_mac_tlv.serialize() );
-                serialized_payload.extend( mac_address_tlv.serialize() );
-                serialized_payload.extend( end_of_message_tlv.serialize() );
+        // Construct CMDU
+        let cmdu_topology_discovery = CMDU {
+            message_version: 1,
+            reserved: 0,
+            message_type: CMDUType::TopologyDiscovery.to_u16(),
+            message_id,
+            fragment: 0,
+            flags: 0x80,
+            payload: serialized_payload,
+        };
+        //TODO only size based
 
-            // Construct CMDU
-            let cmdu_topology_discovery = CMDU {
-                message_version: 1,
-                reserved: 0,
-                message_type: CMDUType::TopologyDiscovery.to_u16(),
-                message_id,
-                fragment: 0,
-                flags: 0x80,
-                payload: serialized_payload,
-            };
-            //TODO only size based
+        let serialized_cmdu = cmdu_topology_discovery.serialize();
+        debug!(
+            message_id = message_id,
+            ?serialized_cmdu,
+            "Serialized CMDU for Topology Discovery"
+        );
 
-            let serialized_cmdu = cmdu_topology_discovery.serialize();
-            debug!(
-                message_id = message_id,
-                ?serialized_cmdu,
-                "Serialized CMDU for Topology Discovery"
-            );
+        let destination_mac = MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13); // IEEE 1905 Control Multicast Address
+        let ethertype = 0x893A;
 
-            let destination_mac = MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13); // IEEE 1905 Control Multicast Address
-            let ethertype = 0x893A;
-
-            match sender
-                .send_frame(
-                    destination_mac,
-                    interface_mac_address,
-                    ethertype,
-                    &serialized_cmdu,
-                )
-                .await
-            {
-                Err(e) => {
-                    error!(message_id = message_id, "Failed to send CMDU: {}", e);
-                }
-                Ok(()) => {
-                    info!(interface = %interface, message_id = message_id, "CMDU Topology Discovery sent successfully");
-                }
+        match sender
+            .send_frame(
+                destination_mac,
+                interface_mac_address,
+                ethertype,
+                &serialized_cmdu,
+            )
+            .await
+        {
+            Err(e) => {
+                error!(message_id = message_id, "Failed to send CMDU: {}", e);
+            }
+            Ok(()) => {
+                info!(interface = %interface, message_id = message_id, "CMDU Topology Discovery sent successfully");
             }
         }
-    });
-    TASK_REGISTRY.lock().await.push(task_handle);
+    }
 }
 
 pub async fn cmdu_topology_query_transmission(
@@ -131,7 +120,7 @@ pub async fn cmdu_topology_query_transmission(
     remote_al_mac_address: MacAddr,
     interface_mac_address: MacAddr,
     ) {
-    let task_handle = task::spawn(async move {
+    task::spawn(async move {
         let message_id = message_id_generator.next_id();
         debug!(
             interface = %interface,
@@ -235,8 +224,8 @@ pub async fn cmdu_topology_query_transmission(
             }
         }
     });
-    TASK_REGISTRY.lock().await.push(task_handle);
 }
+
 pub async fn cmdu_topology_response_transmission(
     interface: String,
     sender: Arc<EthernetSender>,
@@ -244,7 +233,7 @@ pub async fn cmdu_topology_response_transmission(
     remote_al_mac_address: MacAddr,
     interface_mac_address: MacAddr,
 ) {
-    let task_handle = task::spawn(async move {
+    task::spawn(async move {
         //let message_id = message_id_generator.next_id();
         trace!(
             interface = %interface,
@@ -446,7 +435,6 @@ pub async fn cmdu_topology_response_transmission(
             }
         }
     });
-    TASK_REGISTRY.lock().await.push(task_handle);
 }
 
 pub async fn cmdu_topology_notification_transmission(
@@ -455,9 +443,8 @@ pub async fn cmdu_topology_notification_transmission(
     message_id_generator: Arc<MessageIdGenerator>,
     local_al_mac_address: MacAddr,
     forwarding_interface_mac: MacAddr
-)
-     {
-    let task_handle = task::spawn(async move {
+) {
+    task::spawn(async move {
         let message_id = message_id_generator.next_id();
         trace!(
             interface = %interface,
@@ -531,18 +518,14 @@ pub async fn cmdu_topology_notification_transmission(
             ),
         }
     });
-    TASK_REGISTRY.lock().await.push(task_handle);
 }
-
-
-
 
 pub async fn cmdu_from_sdu_transmission(
     interface: String,
     sender: Arc<EthernetSender>,
     sdu: SDU,
 ) {
-    let task_handle = task::spawn(async move {
+    task::spawn(async move {
         trace!(?sdu, "Parsing CMDU from SDU payload");
         match CMDU::parse(&sdu.payload) {
             Ok((_, cmdu)) => {
@@ -625,5 +608,4 @@ pub async fn cmdu_from_sdu_transmission(
             }
         }
     });
-    TASK_REGISTRY.lock().await.push(task_handle);
 }

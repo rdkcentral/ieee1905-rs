@@ -38,7 +38,6 @@ pub mod sdu_codec;
 pub mod tlv_cmdu_codec;
 pub mod tlv_lldpdu_codec;
 pub mod topology_manager;
-pub mod task_registry;
 pub mod crypto_engine;
 
 
