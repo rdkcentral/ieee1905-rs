@@ -38,11 +38,19 @@ pub async fn cmdu_topology_discovery_transmission_worker(
     interface_mac_address: MacAddr,
 ) {
     let mut ticker = interval(Duration::from_secs(30)); // Creates a ticker that ticks every 5 seconds
+    let mut rotating_message_versions = [
+        MessageVersion::Version2013,
+        MessageVersion::Version2025,
+    ];
 
     loop {
         ticker.tick().await; // Wait for the next tick before executing the loop body
 
+        // select the next version to advertise
+        rotating_message_versions.rotate_left(1);
+
         let message_id = message_id_generator.next_id();
+        let message_version = rotating_message_versions[0];
         trace!(interface = %interface, message_id = message_id, "Creating CMDU Topology Discovery");
         let al_mac_address = local_al_mac_address;
         let mac_address = interface_mac_address;
@@ -73,7 +81,7 @@ pub async fn cmdu_topology_discovery_transmission_worker(
 
         // Construct CMDU
         let cmdu_topology_discovery = CMDU {
-            message_version: 1,
+            message_version: message_version.to_u8(),
             reserved: 0,
             message_type: CMDUType::TopologyDiscovery.to_u16(),
             message_id,
