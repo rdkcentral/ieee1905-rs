@@ -127,7 +127,7 @@ pub async fn cmdu_topology_query_transmission(
     local_al_mac_address: MacAddr,
     remote_al_mac_address: MacAddr,
     interface_mac_address: MacAddr,
-    ) {
+) {
     task::spawn(async move {
         let message_id = message_id_generator.next_id();
         debug!(
@@ -222,6 +222,7 @@ pub async fn cmdu_topology_query_transmission(
                         device_data.clone(),
                         UpdateType::QuerySent,
                         Some(message_id),
+                        None,
                         None,
                     )
                     .await;
@@ -426,6 +427,7 @@ pub async fn cmdu_topology_response_transmission(
                         node.device_data.clone(),
                         UpdateType::ResponseSent,
                         Some(message_id),
+                        None,
                         None,
                     )
                     .await;

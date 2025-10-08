@@ -110,6 +110,7 @@ impl CMDUHandler {
     async fn process_cmdus(
         &self,
         cmdu: CMDU,
+        message_version: MessageVersion,
         source_mac: MacAddr,
         destination_mac: MacAddr,
     ) -> anyhow::Result<()> {
@@ -121,31 +122,34 @@ impl CMDUHandler {
                 self.handle_topology_query(
                     cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
+                    message_version,
                     source_mac,
-                )
-                .await
+                ).await
             }
             CMDUType::TopologyResponse => {
                 debug!("Handling topolgy response for message version 2013");
-                self.handle_topology_response(cmdu.get_tlvs()?.as_slice(), cmdu.message_id)
-                    .await
+                self.handle_topology_response(
+                    cmdu.get_tlvs()?.as_slice(),
+                    cmdu.message_id,
+                    message_version,
+                ).await
             }
             CMDUType::ApAutoConfigSearch => {
                 debug!("Handling ApAutoConfigSearch for message version 2013");
                 self.handle_ap_auto_config_search(
                     cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
-                )
-                .await;
+                    message_version,
+                ).await;
             }
             CMDUType::ApAutoConfigResponse => {
                 debug!("Handling ApAutoConfigResponse for message version 2013");
                 self.handle_ap_auto_config_response(
                     cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
+                    message_version,
                     source_mac,
-                )
-                .await;
+                ).await;
             }
             _ => {
                 tracing::trace!(
@@ -160,10 +164,10 @@ impl CMDUHandler {
                 cmdu.get_tlvs()?.as_slice(),
                 cmdu.message_id,
                 cmdu.message_type,
+                message_version,
                 source_mac,
                 destination_mac,
-            )
-            .await
+            ).await
         {
             tracing::error!(
                 "Error handling SDU from CMDU (msg_id={}): {:?}",
@@ -178,6 +182,7 @@ impl CMDUHandler {
     async fn process_sdus(
         &self,
         cmdu: CMDU,
+        message_version: MessageVersion,
         source_mac: MacAddr,
         destination_mac: MacAddr,
     ) -> anyhow::Result<()> {
@@ -185,48 +190,54 @@ impl CMDUHandler {
         match CMDUType::from_u16(cmdu.message_type) {
             CMDUType::TopologyDiscovery => {
                 debug!("Handling topolgy discovery");
-                self.handle_topology_discovery(cmdu.get_tlvs()?.as_slice(), cmdu.message_id)
-                    .await
+                self.handle_topology_discovery(
+                    cmdu.get_tlvs()?.as_slice(),
+                    cmdu.message_id,
+                    message_version,
+                ).await
             }
             CMDUType::TopologyNotification => {
                 debug!("Handling topolgy notification");
                 self.handle_topology_notification(
                     cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
-                )
-                .await
+                    message_version,
+                ).await
             }
             CMDUType::TopologyQuery => {
                 debug!("Handling topolgy query");
                 self.handle_topology_query(
                     cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
+                    message_version,
                     source_mac,
-                )
-                .await
+                ).await
             }
             CMDUType::TopologyResponse => {
                 debug!("Handling topolgy response");
-                self.handle_topology_response(cmdu.get_tlvs()?.as_slice(), cmdu.message_id)
-                    .await
+                self.handle_topology_response(
+                    cmdu.get_tlvs()?.as_slice(),
+                    cmdu.message_id,
+                    message_version,
+                ).await
             }
             CMDUType::ApAutoConfigSearch => {
                 debug!("Handling ApAutoConfigSearch CMDU");
                 self.handle_ap_auto_config_search(
                     cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
-                )
-                .await;
+                    message_version,
+                ).await;
 
                 if let Err(e) = self
                     .handle_sdu_from_cmdu_reception(
                         cmdu.get_tlvs()?.as_slice(),
                         cmdu.message_id,
                         cmdu.message_type,
+                        message_version,
                         source_mac,
                         destination_mac,
-                    )
-                    .await
+                    ).await
                 {
                     tracing::error!(
                         "Error handling SDU from CMDU (msg_id={}): {:?}",
@@ -240,19 +251,19 @@ impl CMDUHandler {
                 self.handle_ap_auto_config_response(
                     cmdu.get_tlvs()?.as_slice(),
                     cmdu.message_id,
+                    message_version,
                     source_mac,
-                )
-                .await;
+                ).await;
 
                 if let Err(e) = self
                     .handle_sdu_from_cmdu_reception(
                         cmdu.get_tlvs()?.as_slice(),
                         cmdu.message_id,
                         cmdu.message_type,
+                        message_version,
                         source_mac,
                         destination_mac,
-                    )
-                    .await
+                    ).await
                 {
                     tracing::error!(
                         "Error handling SDU from CMDU (msg_id={}): {:?}",
@@ -270,28 +281,28 @@ impl CMDUHandler {
 
     /// Handles a parsed CMDU, logs details, and extracts TLVs.
     async fn dispatch_cmdu(&self, cmdu: CMDU, source_mac: MacAddr, destination_mac: MacAddr) {
-        tracing::trace!("Dispatch CMDU {cmdu:?}");
+        trace!("Dispatch CMDU {cmdu:?}");
         let message_id = cmdu.message_id;
-        match MessageVersion::from_u8(cmdu.message_version) {
-            Some(MessageVersion::Version2013) => {
-                tracing::trace!("Handling message version 2013");
-                //process_cmdus
-                if let Err(e) = self.process_cmdus(cmdu, source_mac, destination_mac).await {
+        let message_version = cmdu.message_version;
+        match MessageVersion::from_u8(message_version) {
+            Some(x) if x == MessageVersion::Version2013 => {
+                trace!("Handling message version 2013");
+                if let Err(e) = self.process_cmdus(cmdu, x, source_mac, destination_mac).await {
                     error!("Failed to process CMDU (msg_id={message_id}): {e:?}");
                 }
             }
-            _ => {
-                tracing::trace!("Handling message version different than 2013");
-                //process_sdus
-                if let Err(e) = self.process_sdus(cmdu, source_mac, destination_mac).await {
+            Some(x) if x == MessageVersion::Version2025 => {
+                trace!("Handling message version different than 2013");
+                if let Err(e) = self.process_sdus(cmdu, x, source_mac, destination_mac).await {
                     error!("Failed to process SDU (msg_id={message_id}): {e:?}");
                 }
             }
+            _ => error!("unsupported message version: msg_id={message_id}, version: {message_version}"),
         }
     }
 
     /// Handles APAutoconfigSearchCMDU
-    async fn handle_ap_auto_config_search(&self, tlvs: &[TLV], message_id: u16) {
+    async fn handle_ap_auto_config_search(&self, tlvs: &[TLV], message_id: u16, message_version: MessageVersion) {
         tracing::debug!(
             "Handling Ap Auto Config Response CMDU with Message ID: {} from interface {}",
             message_id,
@@ -354,9 +365,9 @@ impl CMDUHandler {
                         updated_device_data,
                         UpdateType::AutoConfigSearch,
                         Some(message_id),
+                        Some(message_version),
                         None,
-                    )
-                    .await
+                    ).await
             };
 
             debug!(
@@ -375,6 +386,7 @@ impl CMDUHandler {
         &self,
         tlvs: &[TLV],
         message_id: u16,
+        message_version: MessageVersion,
         source_mac: MacAddr,
     ) {
         tracing::debug!(
@@ -432,9 +444,9 @@ impl CMDUHandler {
                         updated_device_data,
                         UpdateType::AutoConfigResponse,
                         Some(message_id),
+                        Some(message_version),
                         None,
-                    )
-                    .await
+                    ).await
             };
 
             tracing::info!(
@@ -451,7 +463,7 @@ impl CMDUHandler {
     }
 
     /// Handles and logs TLVs from the CMDU payload for Topology Discovery.
-    async fn handle_topology_discovery(&self, tlvs: &[TLV], message_id: u16) {
+    async fn handle_topology_discovery(&self, tlvs: &[TLV], message_id: u16, message_version: MessageVersion) {
         debug!(
             "Handling Topology Discovery CMDU with Message ID: {}, from interface {}",
             message_id, self.interface_name
@@ -516,9 +528,9 @@ impl CMDUHandler {
                     device_data,
                     UpdateType::DiscoveryReceived,
                     Some(message_id),
+                    Some(message_version),
                     None,
-                )
-                .await;
+                ).await;
 
             info!(
                 "Topology Discovery Processed: AL_MAC={} INTERFACE_MAC={}",
@@ -559,7 +571,13 @@ impl CMDUHandler {
     }
 
     /// Handles and logs TLVs for Topology Query.
-    async fn handle_topology_query(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) {
+    async fn handle_topology_query(
+        &self,
+        tlvs: &[TLV],
+        message_id: u16,
+        message_version: MessageVersion,
+        source_mac: MacAddr,
+    ) {
         debug!(
             "Handling Topology Query CMDU on interface {}",
             self.interface_name
@@ -627,9 +645,9 @@ impl CMDUHandler {
                         device_data,
                         UpdateType::QueryReceived,
                         Some(message_id),
+                        Some(message_version),
                         None,
-                    )
-                    .await
+                    ).await
             };
 
             debug!(
@@ -671,7 +689,7 @@ impl CMDUHandler {
     }
 
     /// Handles and logs TLVs for Topology Response.
-    async fn handle_topology_response(&self, tlvs: &[TLV], message_id: u16) {
+    async fn handle_topology_response(&self, tlvs: &[TLV], message_id: u16, message_version: MessageVersion) {
         tracing::debug!(
             "Handling Topology Response CMDU with Message ID: {} from interface {}",
             message_id,
@@ -755,9 +773,9 @@ impl CMDUHandler {
                         updated_device_data,
                         UpdateType::ResponseReceived,
                         Some(message_id),
+                        Some(message_version),
                         None,
-                    )
-                    .await
+                    ).await
             };
 
             tracing::info!(
@@ -798,7 +816,7 @@ impl CMDUHandler {
     }
 
     /// Handles and logs TLVs from the CMDU payload for Topology Notification.
-    async fn handle_topology_notification(&self, tlvs: &[TLV], message_id: u16) {
+    async fn handle_topology_notification(&self, tlvs: &[TLV], message_id: u16, message_version: MessageVersion) {
         tracing::debug!(
             "Handling Topology Notification CMDU with Message ID: {} from interface {}",
             message_id,
@@ -854,9 +872,9 @@ impl CMDUHandler {
                     received_device_data,
                     UpdateType::NotificationReceived,
                     Some(message_id),
+                    Some(message_version),
                     None,
-                )
-                .await;
+                ).await;
 
             tracing::info!(
                 "Topology Notification Processed: from AL_MAC={}",
@@ -894,6 +912,7 @@ impl CMDUHandler {
         tlvs: &[TLV],
         message_id: u16,
         message_type: u16,
+        message_version: MessageVersion,
         source_mac: MacAddr,
         destination_mac: MacAddr,
     ) -> anyhow::Result<()> {
@@ -951,9 +970,13 @@ impl CMDUHandler {
             registry_role: None,
         };
 
-        topology_db
-            .update_ieee1905_topology(device_data, UpdateType::SDU, Some(message_id), None)
-            .await;
+        topology_db.update_ieee1905_topology(
+            device_data,
+            UpdateType::SDU,
+            Some(message_id),
+            Some(message_version),
+            None,
+        ).await;
 
         if let Some(updated_node) = topology_db.get_device(source_mac).await {
             trace!("Node: {updated_node:?}");

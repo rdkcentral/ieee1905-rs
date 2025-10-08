@@ -49,6 +49,7 @@ use crate::{
     interface_manager::{get_forwarding_interface_mac, get_interfaces},
     //task_registry::TASK_REGISTRY,
 };
+use crate::cmdu_codec::MessageVersion;
 use crate::lldpdu::PortId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +157,7 @@ pub struct Ieee1905NodeInfo {
     pub last_update: UpdateType,
     pub last_seen: Instant,
     pub message_id: Option<u16>,
+    pub message_version: Option<MessageVersion>,
     pub lldp_neighbor: Option<PortId>,
     pub node_state_local: Option<StateLocal>,
     pub node_state_remote: Option<StateRemote>,
@@ -166,6 +168,7 @@ impl Ieee1905NodeInfo {
     pub fn new(
         last_update: UpdateType,
         message_id: Option<u16>,
+        message_version: Option<MessageVersion>,
         lldp_neighbor: Option<PortId>,
         node_state_local: Option<StateLocal>,
         node_state_remote: Option<StateRemote>,
@@ -174,6 +177,7 @@ impl Ieee1905NodeInfo {
             last_update,
             last_seen: Instant::now(), // Set current time at creation
             message_id,
+            message_version,
             lldp_neighbor,
             node_state_local,
             node_state_remote,
@@ -501,6 +505,7 @@ impl TopologyDatabase {
         device_data: Ieee1905DeviceData,
         operation: UpdateType,
         msg_id: Option<u16>,
+        message_version: Option<MessageVersion>,
         lldp_neighbor: Option<PortId>,
     ) -> TransmissionEvent {
         let al_mac = device_data.al_mac;
@@ -514,6 +519,10 @@ impl TopologyDatabase {
             event = match nodes.get_mut(&al_mac) {
                 Some(node) => {
                     tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Updating existing node");
+
+                    if let Some(message_version) = message_version {
+                        node.metadata.message_version = Some(message_version);
+                    }
 
                     match operation {
                         UpdateType::DiscoveryReceived => {
@@ -687,6 +696,7 @@ impl TopologyDatabase {
                             last_update: operation,
                             last_seen: Instant::now(),
                             message_id: msg_id,
+                            message_version,
                             lldp_neighbor,
                             node_state_local: None,
                             node_state_remote: None,
