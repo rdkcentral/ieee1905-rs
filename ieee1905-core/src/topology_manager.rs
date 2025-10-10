@@ -77,7 +77,6 @@ pub enum UpdateType {
     ResponseReceived,
     AutoConfigSearch,
     AutoConfigResponse,
-    SDU,
 }
 
 pub enum TransmissionEvent {
