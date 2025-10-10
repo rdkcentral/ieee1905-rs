@@ -160,9 +160,9 @@ pub async fn cmdu_topology_query_transmission(
             tlv_value: Some(al_mac_address.octets().to_vec()),
         };
         //Vendor Specific TLV (OUI 00:90:96, payload 00 01 00)
-         let vendor_info = VendorSpecificInfo {
-            oui: [0x00, 0x90, 0x96],                 // Comcast OUI (per your request)
-            vendor_data: vec![0x00, 0x01, 0x00],     // Vendor payload
+        let vendor_info = VendorSpecificInfo {
+            oui: COMCAST_OUI,                            // Comcast OUI (per your request)
+            vendor_data: COMCAST_QUERY_TAG.to_vec(),     // Vendor payload
         };
         let vendor_value = vendor_info.serialize();
         let vendor_specific_tlv = TLV {
@@ -176,10 +176,12 @@ pub async fn cmdu_topology_query_transmission(
             tlv_length: 0,
             tlv_value: None,
         };
-        let mut serialized_payload: Vec<u8> = vec![];
-            serialized_payload.extend(al_mac_tlv.serialize() );
-            serialized_payload.extend(vendor_specific_tlv.serialize()); 
-            serialized_payload.extend(end_of_message_tlv.serialize());
+
+        let mut serialized_payload = vec![];
+        serialized_payload.extend(al_mac_tlv.serialize());
+        serialized_payload.extend(vendor_specific_tlv.serialize());
+        serialized_payload.extend(end_of_message_tlv.serialize());
+
         // Construct CMDU
         let cmdu_topology_query = CMDU {
             message_version: 1,
@@ -307,8 +309,8 @@ pub async fn cmdu_topology_response_transmission(
             tlv_value: Some(al_mac_address.octets().to_vec()),
         };
         let vendor_info = VendorSpecificInfo {
-            oui: [0x00, 0x90, 0x96],                 // Comcast OUI (per your request)
-            vendor_data: vec![0x00, 0x01, 0x00],     // Vendor payload
+            oui: COMCAST_OUI,                            // Comcast OUI (per your request)
+            vendor_data: COMCAST_QUERY_TAG.to_vec(),     // Vendor payload
         };
         let vendor_value = vendor_info.serialize();
         let vendor_specific_tlv = TLV {
@@ -317,8 +319,7 @@ pub async fn cmdu_topology_response_transmission(
             tlv_value: Some(vendor_value),
         };
         //Vendor Specific TLV (OUI 00:90:96, payload 00 01 00)
-        let device_information =
-            DeviceInformation::new(local_al_mac_address, ieee1905_local_interfaces);
+        let device_information = DeviceInformation::new(local_al_mac_address, ieee1905_local_interfaces);
         let device_information_tlv = TLV {
             tlv_type: IEEE1905TLVType::DeviceInformation.to_u8(),
             tlv_length: device_information.serialize().len() as u16,
@@ -392,12 +393,12 @@ pub async fn cmdu_topology_response_transmission(
             tlv_value: None,
         };
 
-        let mut serialized_payload: Vec<u8> = vec![];
-            serialized_payload.extend(al_mac_tlv.serialize() );
-            serialized_payload.extend(vendor_specific_tlv.serialize()); // <- inserted here
-            serialized_payload.extend( device_information_tlv.serialize() );
-            serialized_payload.extend( ieee_neighbors_tlv.serialize() );
-            serialized_payload.extend( end_of_message_tlv.serialize() );
+        let mut serialized_payload = vec![];
+        serialized_payload.extend(al_mac_tlv.serialize());
+        serialized_payload.extend(vendor_specific_tlv.serialize());
+        serialized_payload.extend(device_information_tlv.serialize());
+        serialized_payload.extend(ieee_neighbors_tlv.serialize());
+        serialized_payload.extend(end_of_message_tlv.serialize());
 
         // Construct the CMDU
         let cmdu_topology_response = CMDU {
@@ -483,13 +484,11 @@ pub async fn cmdu_topology_notification_transmission(
 
         // Define the AL MAC TLV
         let al_mac_address: MacAddr = local_al_mac_address;
-
         let al_mac_tlv = TLV {
             tlv_type: IEEE1905TLVType::AlMacAddress.to_u8(),
             tlv_length: 6,
             tlv_value: Some(al_mac_address.octets().to_vec()),
         };
-
 
         // Define the End of Message TLV
         let end_of_message_tlv = TLV {
@@ -500,8 +499,8 @@ pub async fn cmdu_topology_notification_transmission(
 
         //Vendor Specific TLV (OUI 00:90:96, payload 00 01 00)
         let vendor_info = VendorSpecificInfo {
-            oui: [0x00, 0x90, 0x96],                 // Comcast OUI (per your request)
-            vendor_data: vec![0x00, 0x01, 0x00],     // Vendor payload
+            oui: COMCAST_OUI,                            // Comcast OUI (per your request)
+            vendor_data: COMCAST_QUERY_TAG.to_vec(),     // Vendor payload
         };
         let vendor_value = vendor_info.serialize();
         let vendor_specific_tlv = TLV {
@@ -509,10 +508,11 @@ pub async fn cmdu_topology_notification_transmission(
             tlv_length: vendor_value.len() as u16,   // 3 (OUI) + payload length
             tlv_value: Some(vendor_value),
         };
-        let mut serialized_payload: Vec<u8> = vec![];
-            serialized_payload.extend(al_mac_tlv.serialize() );
-            serialized_payload.extend(vendor_specific_tlv.serialize());
-            serialized_payload.extend( end_of_message_tlv.serialize() );
+
+        let mut serialized_payload = vec![];
+        serialized_payload.extend(al_mac_tlv.serialize());
+        serialized_payload.extend(vendor_specific_tlv.serialize());
+        serialized_payload.extend(end_of_message_tlv.serialize());
 
         // Construct the Topology Notification CMDU
         let cmdu_topology_notification = CMDU {

@@ -144,11 +144,7 @@ impl CMDUHandler {
                         )
                         .await
                     {
-                        tracing::error!(
-                        "Error forwarding SDU from TopologyNotification interoperability (msg_id={}): {:?}",
-                        message_id,
-                        e
-                    );
+                        error!("Error forwarding SDU from TopologyNotification interoperability (msg_id={message_id}): {e:?}");
                     }
                 }
             }
@@ -167,11 +163,7 @@ impl CMDUHandler {
                         )
                         .await
                     {
-                        tracing::error!(
-                        "Error forwarding SDU from TopologyQuery interoperability (msg_id={}): {:?}",
-                        message_id,
-                        e
-                    );
+                        error!("Error forwarding SDU from TopologyQuery interoperability (msg_id={message_id}): {e:?}");
                     }
                 }
             }
@@ -188,22 +180,45 @@ impl CMDUHandler {
                         )
                         .await
                     {
-                        tracing::error!(
-                        "Error forwarding SDU from TopologyResponse interoperability (msg_id={}): {:?}",
-                        message_id,
-                        e
-                    );
+                        error!("Error forwarding SDU from TopologyResponse interoperability (msg_id={message_id}): {e:?}");
                     }
                 }
             }
             CMDUType::ApAutoConfigSearch => {
-                tracing::debug!("Handling ApAutoConfigSearch CMDU");
-                self.handle_ap_auto_config_search(&tlvs, message_id).await;
+                debug!("Handling ApAutoConfigSearch CMDU");
+                let allowed = self.handle_ap_auto_config_search(&tlvs, message_id).await;
+                if allowed {
+                    if let Err(e) = self
+                        .handle_sdu_from_cmdu_reception(
+                            &tlvs,
+                            message_id,
+                            cmdu.message_type,
+                            source_mac,
+                            destination_mac,
+                        )
+                        .await
+                    {
+                        error!("Error forwarding SDU from ApAutoConfigSearch (msg_id={message_id}): {e:?}");
+                    }
+                }
             }
             CMDUType::ApAutoConfigResponse => {
-                tracing::debug!("Handling ApAutoConfigResponse CMDU");
-                self.handle_ap_auto_config_response(&tlvs, message_id, source_mac)
-                    .await;
+                debug!("Handling ApAutoConfigResponse CMDU");
+                let allowed = self.handle_ap_auto_config_response(&tlvs, message_id, source_mac).await;
+                if allowed {
+                    if let Err(e) = self
+                        .handle_sdu_from_cmdu_reception(
+                            &tlvs,
+                            message_id,
+                            cmdu.message_type,
+                            source_mac,
+                            destination_mac,
+                        )
+                        .await
+                    {
+                        error!("Error forwarding SDU from ApAutoConfigResponse (msg_id={message_id}): {e:?}");
+                    }
+                }
             }
             CMDUType::LinkMetricQuery => {
                 tracing::info!("Handling Link Metric Query CMDU");
@@ -341,7 +356,6 @@ impl CMDUHandler {
     }
 
     /// Handles and logs TLVs for Topology Query.
-
     async fn handle_topology_query(
         &self,
         tlvs: &[TLV],
@@ -803,7 +817,7 @@ impl CMDUHandler {
         true
     }
     /// Handles APAutoconfigSearchCMDU
-    async fn handle_ap_auto_config_search(&self, tlvs: &[TLV], message_id: u16) {
+    async fn handle_ap_auto_config_search(&self, tlvs: &[TLV], message_id: u16) -> bool {
         tracing::debug!(
             "Handling Ap Auto Config Response CMDU with Message ID: {} from interface {}",
             message_id,
@@ -841,11 +855,11 @@ impl CMDUHandler {
 
         if !end_of_message_found {
             tracing::warn!("Missing EndOfMessage TLV. Ignoring.");
-            return;
+            return true;
         }
         if !ap_auto_config_search_found {
             tracing::warn!("Missing Ap Auto Config search TLV. Ignoring.");
-            return;
+            return true;
         }
 
         if let (Some(remote_al_mac_address), Some(reg_role)) = (remote_al_mac, registry_role) {
@@ -880,6 +894,7 @@ impl CMDUHandler {
                 "AP auto config  search CMDU processing failed: AL_MAC or Role not found in TLVs"
             );
         }
+        true
     }
 
     /// Handle APAutconfigResposne CMDU
@@ -888,7 +903,7 @@ impl CMDUHandler {
         tlvs: &[TLV],
         message_id: u16,
         source_mac: MacAddr,
-    ) {
+    ) -> bool {
         tracing::debug!(
             "Handling Ap Auto Config Response CMDU with Message ID: {} from interface {}",
             message_id,
@@ -919,11 +934,11 @@ impl CMDUHandler {
 
         if !end_of_message_found {
             tracing::warn!("Missing EndOfMessage TLV. Ignoring.");
-            return;
+            return true;
         }
         if !ap_auto_config_response_found {
             tracing::warn!("Missing Ap Auto Config Response TLV. Ignoring.");
-            return;
+            return true;
         }
 
         if let (Some(remote_al_mac_address), Some(reg_role)) = (remote_al_mac, registry_role) {
@@ -960,6 +975,7 @@ impl CMDUHandler {
                 "AP auto config  response CMDU processing failed: AL_MAC or Registry Role not found in TLVs"
             );
         }
+        true
     }
 
     pub async fn handle_sdu_from_cmdu_reception(
@@ -1016,17 +1032,6 @@ impl CMDUHandler {
 
         let topology_db =
             TopologyDatabase::get_instance(source_mac, self.interface_name.clone()).await;
-
-        let device_data = Ieee1905DeviceData {
-            al_mac: source_mac,
-            destination_mac: Some(destination_mac),
-            local_interface_list: None,
-            registry_role: None,
-        };
-
-        topology_db
-            .update_ieee1905_topology(device_data, UpdateType::SDU, Some(message_id), None)
-            .await;
 
         if let Some(updated_node) = topology_db.get_device(source_mac).await {
             trace!("Node: {updated_node:?}");
