@@ -28,7 +28,7 @@ use crate::registration_codec::{
 use crate::sdu_codec::SDU;
 use crate::topology_manager::Role;
 use crate::TopologyDatabase;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
@@ -262,7 +262,7 @@ impl AlServiceAccessPoint {
                 }
             }
         }
-        panic!("Fatal error while reading from control socket!")
+        bail!("Fatal error while reading from control socket!")
     }
 
     /// Sends a registration response back to the client
@@ -324,7 +324,7 @@ pub async fn service_access_point_data_indication(sdu: &SDU) -> Result<()> {
         let serialized = single_sdu.serialize();
         let mut data_unix_write = LAZY_WRITER.lock().await;
         let Some(ref mut writer) = *data_unix_write else {
-            panic!("Error while dereferencing LAZY_WRITER");
+            bail!("Error while dereferencing LAZY_WRITER");
         };
 
         match writer.send(Bytes::from(serialized)).await {
@@ -358,7 +358,7 @@ pub async fn service_access_point_data_indication(sdu: &SDU) -> Result<()> {
         let serialized = fragment.serialize();
         let mut data_unix_write = LAZY_WRITER.lock().await;
         let Some(ref mut writer) = *data_unix_write else {
-            panic!("Error while dereferencing LAZY_WRITER");
+            bail!("Error while dereferencing LAZY_WRITER");
         };
 
         match writer.send(Bytes::from(serialized)).await {
@@ -432,7 +432,7 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
         let mut data_unix_read = LAZY_READER.lock().await;
         tracing::debug!("Got lock on LAZY_RX");
         let Some(ref mut reader) = *data_unix_read else {
-            panic!("Error while dereferencing LAZY_READER")
+            return Err(AlSapError::Other("Error while dereferencing LAZY_READER".into()));
         };
         let result_option = reader.next().await;
         tracing::debug!(
