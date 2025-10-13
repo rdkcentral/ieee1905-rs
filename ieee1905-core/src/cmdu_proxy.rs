@@ -552,10 +552,10 @@ pub async fn cmdu_from_sdu_transmission(
                         return warn!("No destination_mac found for AL-MAC {destination_al_mac}");
                     };
                     if node.metadata.node_state_local != Some(StateLocal::ConvergedLocal) {
-                        return error!("node has not locally converged, AL-MAC={destination_al_mac}");
+                        return warn!("node has not locally converged, AL-MAC={destination_al_mac}");
                     }
                     if node.metadata.node_state_remote != Some(StateRemote::ConvergedRemote) {
-                        return error!("node has not remotely converged, AL-MAC={destination_al_mac}");
+                        return warn!("node has not remotely converged, AL-MAC={destination_al_mac}");
                     }
 
                     match node.device_data.destination_mac {
