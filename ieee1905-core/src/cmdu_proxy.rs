@@ -26,7 +26,7 @@ use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
-use crate::topology_manager::{TopologyDatabase, UpdateType};
+use crate::topology_manager::{StateLocal, StateRemote, TopologyDatabase, UpdateType};
 use crate::MessageIdGenerator;
 use crate::SDU;
 
@@ -527,6 +527,7 @@ pub async fn cmdu_from_sdu_transmission(
 ) {
     task::spawn(async move {
         trace!(?sdu, "Parsing CMDU from SDU payload");
+        let destination_al_mac = sdu.destination_al_mac_address;
         match CMDU::parse(&sdu.payload) {
             Ok((_, cmdu)) => {
                 let destination_mac = if sdu.destination_al_mac_address == IEEE1905_CONTROL_ADDRESS
@@ -538,31 +539,29 @@ pub async fn cmdu_from_sdu_transmission(
                         "Acquiry topology database for source al mac address {}",
                         sdu.source_al_mac_address
                     );
+
                     let topology_db = TopologyDatabase::get_instance(
                         sdu.source_al_mac_address,
                         interface.clone(),
                     )
                     .await;
-                    trace!(
-                        "Sarching for destination {} in topology database",
-                        sdu.destination_al_mac_address
-                    );
-                    let Some(node) = topology_db.get_device(sdu.destination_al_mac_address).await
-                    else {
-                        tracing::warn!(
-                            "No destination_mac found for AL-MAC {}",
-                            sdu.source_al_mac_address
-                        );
-                        return;
+
+                    trace!("Searching for destination {destination_al_mac} in topology database");
+
+                    let Some(node) = topology_db.get_device(sdu.destination_al_mac_address).await else {
+                        return warn!("No destination_mac found for AL-MAC {destination_al_mac}");
                     };
+                    if node.metadata.node_state_local != Some(StateLocal::ConvergedLocal) {
+                        return error!("node has not locally converged, AL-MAC={destination_al_mac}");
+                    }
+                    if node.metadata.node_state_remote != Some(StateRemote::ConvergedRemote) {
+                        return error!("node has not remotely converged, AL-MAC={destination_al_mac}");
+                    }
+
                     match node.device_data.destination_mac {
                         Some(mac) => mac,
                         None => {
-                            error!(
-                                "Destination MAC address is missing for AL-MAC={}",
-                                sdu.destination_al_mac_address
-                            );
-                            return;
+                            return error!("Destination MAC address is missing for AL-MAC={destination_al_mac}");
                         }
                     }
                 };
