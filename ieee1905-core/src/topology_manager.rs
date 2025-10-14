@@ -150,6 +150,13 @@ impl Ieee1905InterfaceData {
     }
 }
 
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Ieee1905DeviceVendor {
+    Rdk,
+    #[default]
+    Unknown,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ieee1905NodeInfo {
     pub last_update: UpdateType,
@@ -158,6 +165,7 @@ pub struct Ieee1905NodeInfo {
     pub lldp_neighbor: Option<PortId>,
     pub node_state_local: Option<StateLocal>,
     pub node_state_remote: Option<StateRemote>,
+    pub device_vendor: Ieee1905DeviceVendor,
 }
 
 impl Ieee1905NodeInfo {
@@ -176,6 +184,7 @@ impl Ieee1905NodeInfo {
             lldp_neighbor,
             node_state_local,
             node_state_remote,
+            device_vendor: Ieee1905DeviceVendor::Unknown,
         }
     }
 
@@ -501,6 +510,7 @@ impl TopologyDatabase {
         operation: UpdateType,
         msg_id: Option<u16>,
         lldp_neighbor: Option<PortId>,
+        device_vendor: Option<Ieee1905DeviceVendor>,
     ) -> TransmissionEvent {
         let al_mac = device_data.al_mac;
         let event;
@@ -513,6 +523,10 @@ impl TopologyDatabase {
             event = match nodes.get_mut(&al_mac) {
                 Some(node) => {
                     tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Updating existing node");
+
+                    if let Some(device_vendor) = device_vendor {
+                        node.metadata.device_vendor = device_vendor;
+                    }
 
                     match operation {
                         UpdateType::DiscoveryReceived => {
@@ -689,6 +703,7 @@ impl TopologyDatabase {
                             lldp_neighbor,
                             node_state_local: None,
                             node_state_remote: None,
+                            device_vendor: device_vendor.unwrap_or_default(),
                         },
                         device_data,
                     };
