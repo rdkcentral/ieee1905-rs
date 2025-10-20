@@ -357,6 +357,19 @@ impl TopologyDatabase {
         nodes.get(&al_mac).cloned() // Clone to return the device node
     }
 
+    /// **Retrieves a device node from the database**
+    pub async fn find_device_by_port(&self, mac: MacAddr) -> Option<Ieee1905Node> {
+        let nodes = self.nodes.read().await;
+        nodes.values().find(|node| {
+            if node.device_data.destination_mac == Some(mac) {
+                return true;
+            }
+            node.device_data.local_interface_list.as_ref().is_some_and(|interfaces| {
+                interfaces.iter().any(|e| e.mac == mac)
+            })
+        }).cloned()
+    }
+
     /// **Getter for `local_interface_list`**
     pub async fn get_local_interface_list(&self) -> Option<Vec<Ieee1905InterfaceData>> {
         let local_interfaces = self.local_interface_list.read().await;

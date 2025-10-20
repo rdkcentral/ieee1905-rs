@@ -425,11 +425,6 @@ impl CMDUHandler {
             return true;
         }
 
-        let Some(remote_al_mac_address) = remote_al_mac else {
-            tracing::warn!("Topology Query missing AL MAC Address TLV → fallback to SDU.");
-            return false;
-        };
-
         if !has_required_vendor_tlv {
             tracing::warn!(
                 "Topology Query missing required Comcast VendorSpecific TLV → fallback to SDU."
@@ -437,21 +432,30 @@ impl CMDUHandler {
             return false;
         }
 
-        tracing::info!(
-            "Topology Query received from AL_MAC={}",
-            remote_al_mac_address
-        );
+        info!("Topology Query received from REMOTE_PORT_MAC={source_mac}");
 
-        let topology_db =
-            TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
+        let topology_db = TopologyDatabase::get_instance(
+            self.local_al_mac,
+            self.interface_name.clone(),
+        ).await;
 
-        let device_data = Ieee1905DeviceData {
-            al_mac: remote_al_mac_address,
-            destination_mac: Some(source_mac),
-            local_interface_list: None,
-            registry_role: None,
+        let device_data = if let Some(remote_al_mac) = remote_al_mac {
+            Ieee1905DeviceData {
+                al_mac: remote_al_mac,
+                destination_mac: Some(source_mac),
+                local_interface_list: None,
+                registry_role: None,
+            }
+        } else {
+            let Some(mut node) = topology_db.find_device_by_port(source_mac).await else {
+                warn!("Topology Query node not found, REMOTE_PORT_MAC={source_mac}");
+                return false;
+            };
+            node.device_data.destination_mac = Some(source_mac);
+            node.device_data
         };
 
+        let remote_al_mac = device_data.al_mac;
         let event = topology_db
             .update_ieee1905_topology(
                 device_data,
@@ -461,15 +465,12 @@ impl CMDUHandler {
             )
             .await;
 
-        tracing::debug!(
-            "Topology Database updated: AL_MAC={} set to QueryReceived",
-            remote_al_mac_address
-        );
+        debug!("Topology Database updated: AL_MAC={remote_al_mac} set to QueryReceived");
 
         match event {
             TransmissionEvent::SendTopologyResponse(destination_mac) => {
-                tracing::debug!(
-                    remote = %remote_al_mac_address,
+                debug!(
+                    remote = %remote_al_mac,
                     local = %self.local_al_mac,
                     "Preparing to send Topology Response"
                 );
@@ -486,8 +487,8 @@ impl CMDUHandler {
                 .await;
             }
             TransmissionEvent::None => {
-                tracing::debug!(
-                    remote = %remote_al_mac_address,
+                debug!(
+                    remote = %remote_al_mac,
                     "No transmission needed after topology query update"
                 );
             }
