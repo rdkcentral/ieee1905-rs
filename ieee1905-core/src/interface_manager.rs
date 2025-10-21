@@ -22,7 +22,7 @@
 use pnet::datalink::{self, MacAddr};
 
 // Standard library
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::process::Command;
 use std::str;
@@ -195,9 +195,9 @@ fn parse_mac(mac_str: &str) -> Result<MacAddr, ()> {
 /// Retrieves a list of interfaces with additional metadata.
 pub fn get_interfaces() -> Vec<Ieee1905InterfaceData> {
     let mut interfaces = Vec::new();
+    let mut interfaces_by_bridge = HashMap::<u32, Vec<MacAddr>>::new();
 
     let netdev_interfaces = netdev::get_interfaces();
-
     let pnet_interfaces = datalink::interfaces();
 
     for iface in pnet_interfaces {
@@ -216,18 +216,20 @@ pub fn get_interfaces() -> Vec<Ieee1905InterfaceData> {
 
                 let metric = if media_type == 0x01 { Some(10) } else { Some(100) };
 
-                let bridging_info = get_bridge_of(&interface_name);
-                let bridging_flag = bridging_info.is_some();
-                let bridging_tuple = bridging_info.map(|e| e.index);
                 let vlan = get_vlan_id(&net_iface.name);
                 //let non_ieee1905_neighbors = Some(get_neighbor_macs(&interface_name));
                 let non_ieee1905_neighbors = None;
                 let ieee1905_neighbors = None;
+
+                if let Some(bridging_info) = get_bridge_of(&interface_name) {
+                    interfaces_by_bridge.entry(bridging_info.index).or_default().push(mac);
+                }
+
                 interfaces.push(Ieee1905InterfaceData {
                     mac,
                     media_type,
-                    bridging_flag,
-                    bridging_tuple,
+                    bridging_flag: false,
+                    bridging_tuple: None,
                     vlan,
                     metric,
                     non_ieee1905_neighbors,
@@ -236,5 +238,20 @@ pub fn get_interfaces() -> Vec<Ieee1905InterfaceData> {
             }
         }
     }
+
+    let mut bridge_index_by_interface = HashMap::<MacAddr, u8>::new();
+    for (index, bridged_interfaces) in interfaces_by_bridge.into_values().enumerate() {
+        for interface in bridged_interfaces {
+            bridge_index_by_interface.insert(interface, index as u8);
+        }
+    }
+
+    for interface in interfaces.iter_mut() {
+        if let Some(index) = bridge_index_by_interface.get(&interface.mac) {
+            interface.bridging_flag = true;
+            interface.bridging_tuple = Some(*index);
+        }
+    }
+
     interfaces
 }

@@ -301,7 +301,7 @@ pub async fn cmdu_topology_response_transmission(
 
         // Construct DeviceBridgingCapability TLV
         let device_bridging_capability_tlv = {
-            let mut tuples_by_bridge = HashMap::<u32, Vec<MacAddr>>::new();
+            let mut tuples_by_bridge = HashMap::<u8, Vec<MacAddr>>::new();
             for interface in topology_db.local_interface_list.read().await.iter().flatten() {
                 if let Some(bridging_tuple) = interface.bridging_tuple {
                     tuples_by_bridge.entry(bridging_tuple).or_default().push(interface.mac);
