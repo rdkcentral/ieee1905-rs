@@ -509,6 +509,7 @@ impl CMDUHandler {
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut interfaces: Vec<Ieee1905InterfaceData> = Vec::new();
         let mut ieee_neighbors_map: HashMap<MacAddr, Vec<IEEE1905Neighbor>> = HashMap::new();
+        let mut non_ieee_neighbors_map: HashMap<MacAddr, Vec<MacAddr>> = HashMap::new();
         let mut end_of_message_found = false;
         let mut has_required_vendor_tlv = false;
 
@@ -566,15 +567,21 @@ impl CMDUHandler {
                 }
                 IEEE1905TLVType::Ieee1905NeighborDevices => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = Ieee1905NeighborDevice::parse(
-                            value,
-                            ((tlv.tlv_length - 6) / 7) as usize,
-                        ) {
-                            ieee_neighbors_map
-                                .insert(parsed.local_mac_address, parsed.neighborhood_list);
+                        let devices_count = ((tlv.tlv_length - 6) / 7) as usize;
+                        if let Ok((_, parsed)) = Ieee1905NeighborDevice::parse(value, devices_count) {
+                            ieee_neighbors_map.insert(parsed.local_mac_address, parsed.neighborhood_list);
                         }
                     }
                 }
+                IEEE1905TLVType::NonIeee1905NeighborDevices => {
+                    if let Some(ref value) = tlv.tlv_value {
+                        let devices_count = (tlv.tlv_length - 6) / 6;
+                        if let Ok((_, parsed)) = NonIeee1905NeighborDevices::parse(value, devices_count) {
+                            non_ieee_neighbors_map.insert(parsed.local_mac_address, parsed.neighborhood_list);
+                        }
+                    }
+                }
+                //TODO: Bridge TUPLES only BRLAN0
                 IEEE1905TLVType::EndOfMessage => {
                     end_of_message_found = true;
                 }
@@ -633,6 +640,11 @@ impl CMDUHandler {
                 );
                 return false;
             }
+        }
+
+        for interface in interfaces.iter_mut() {
+            interface.ieee1905_neighbors = ieee_neighbors_map.remove(&interface.mac);
+            interface.non_ieee1905_neighbors = non_ieee_neighbors_map.remove(&interface.mac);
         }
 
         let updated_device_data = Ieee1905DeviceData {
