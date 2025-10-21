@@ -16,7 +16,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
-
+use std::collections::HashMap;
 use pnet::datalink::MacAddr;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, trace, warn};
@@ -299,6 +299,41 @@ pub async fn cmdu_topology_response_transmission(
             })
             .unwrap_or_default();
 
+        // Construct DeviceBridgingCapability TLV
+        let device_bridging_capability_tlv = {
+            let mut tuples_by_bridge = HashMap::<u32, Vec<MacAddr>>::new();
+            for interface in topology_db.local_interface_list.read().await.iter().flatten() {
+                if let Some(bridging_tuple) = interface.bridging_tuple {
+                    tuples_by_bridge.entry(bridging_tuple).or_default().push(interface.mac);
+                }
+            }
+
+            let mut tuples = Vec::new();
+            for tuple in tuples_by_bridge.into_values() {
+                if tuple.len() > 1 {
+                    tuples.push(BridgingTuple {
+                        bridging_mac_count: tuple.len() as u8,
+                        bridging_mac_list: tuple,
+                    });
+                }
+            }
+
+            if !tuples.is_empty() {
+                let value = DeviceBridgingCapability {
+                    bridging_tuples_count: tuples.len() as u8,
+                    bridging_tuples_list: tuples,
+                }.serialize();
+
+                Some(TLV {
+                    tlv_type: IEEE1905TLVType::DeviceBridgingCapability.to_u8(),
+                    tlv_length: value.len() as u16,
+                    tlv_value: Some(value),
+                })
+            } else {
+                None
+            }
+        };
+
         // Construct AL MAC TLV
 
         let al_mac_address: MacAddr = local_al_mac_address;
@@ -398,6 +433,9 @@ pub async fn cmdu_topology_response_transmission(
         serialized_payload.extend(vendor_specific_tlv.serialize());
         serialized_payload.extend(device_information_tlv.serialize());
         serialized_payload.extend(ieee_neighbors_tlv.serialize());
+        if let Some(device_bridging_capability_tlv) = device_bridging_capability_tlv {
+            serialized_payload.extend(device_bridging_capability_tlv.serialize());
+        }
         serialized_payload.extend(end_of_message_tlv.serialize());
 
         // Construct the CMDU

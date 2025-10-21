@@ -35,6 +35,12 @@ pub struct InterfaceInfo {
     pub mac: MacAddr,
 }
 
+pub struct BridgeInfo {
+    pub name: String,
+    pub index: u32,
+    pub address: MacAddr,
+}
+
 pub fn get_local_al_mac(interface_name: String) -> Option<MacAddr> {
     // Fetch all network interfaces
     let interfaces = datalink::interfaces();
@@ -109,6 +115,17 @@ pub fn get_mac_address_by_interface(interface_name: &str) -> Option<MacAddr> {
 pub fn is_bridge_member(interface_name: &str) -> bool {
     let path = format!("/sys/class/net/{}/brport", interface_name);
     fs::metadata(&path).is_ok() // If this directory exists, it's part of a bridge
+}
+
+pub fn get_bridge_of(interface_name: &str) -> Option<BridgeInfo> {
+    let path = format!("/sys/class/net/{interface_name}/brport/bridge");
+    let link = fs::read_link(&path).ok()?;
+
+    Some(BridgeInfo {
+        name: link.file_name()?.to_string_lossy().into_owned(),
+        index: fs::read_to_string(format!("{path}/ifindex")).ok()?.trim().parse().ok()?,
+        address: fs::read_to_string(format!("{path}/address")).ok()?.trim().parse().ok()?,
+    })
 }
 
 /// Retrieves VLAN ID from `/proc/net/vlan/config`
@@ -199,8 +216,9 @@ pub fn get_interfaces() -> Vec<Ieee1905InterfaceData> {
 
                 let metric = if media_type == 0x01 { Some(10) } else { Some(100) };
 
-                let bridging_flag = is_bridge_member(&net_iface.name);
-                let bridging_tuple = if bridging_flag { Some(0) } else { None };
+                let bridging_info = get_bridge_of(&interface_name);
+                let bridging_flag = bridging_info.is_some();
+                let bridging_tuple = bridging_info.map(|e| e.index);
                 let vlan = get_vlan_id(&net_iface.name);
                 //let non_ieee1905_neighbors = Some(get_neighbor_macs(&interface_name));
                 let non_ieee1905_neighbors = None;
