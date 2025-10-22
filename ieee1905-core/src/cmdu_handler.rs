@@ -426,31 +426,35 @@ impl CMDUHandler {
             return true;
         }
 
-        let Some(remote_al_mac_address) = remote_al_mac else {
-            tracing::warn!("Topology Query missing AL MAC Address TLV → fallback to SDU.");
-            return false;
-        };
-
         if device_vendor != Ieee1905DeviceVendor::Rdk {
             warn!("Topology Query missing required Comcast VendorSpecific TLV → fallback to SDU.");
             return false;
         }
 
-        tracing::info!(
-            "Topology Query received from AL_MAC={}",
-            remote_al_mac_address
-        );
+        info!("Topology Query received from REMOTE_PORT_MAC={source_mac}");
 
-        let topology_db =
-            TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
+        let topology_db = TopologyDatabase::get_instance(
+            self.local_al_mac,
+            self.interface_name.clone(),
+        ).await;
 
-        let device_data = Ieee1905DeviceData {
-            al_mac: remote_al_mac_address,
-            destination_mac: Some(source_mac),
-            local_interface_list: None,
-            registry_role: None,
+        let device_data = if let Some(remote_al_mac) = remote_al_mac {
+            Ieee1905DeviceData {
+                al_mac: remote_al_mac,
+                destination_mac: Some(source_mac),
+                local_interface_list: None,
+                registry_role: None,
+            }
+        } else {
+            let Some(mut node) = topology_db.find_device_by_port(source_mac).await else {
+                warn!("Topology Query node not found, REMOTE_PORT_MAC={source_mac}");
+                return false;
+            };
+            node.device_data.destination_mac = Some(source_mac);
+            node.device_data
         };
 
+        let remote_al_mac = device_data.al_mac;
         let event = topology_db
             .update_ieee1905_topology(
                 device_data,
@@ -461,15 +465,12 @@ impl CMDUHandler {
             )
             .await;
 
-        tracing::debug!(
-            "Topology Database updated: AL_MAC={} set to QueryReceived",
-            remote_al_mac_address
-        );
+        debug!("Topology Database updated: AL_MAC={remote_al_mac} set to QueryReceived");
 
         match event {
             TransmissionEvent::SendTopologyResponse(destination_mac) => {
-                tracing::debug!(
-                    remote = %remote_al_mac_address,
+                debug!(
+                    remote = %remote_al_mac,
                     local = %self.local_al_mac,
                     "Preparing to send Topology Response"
                 );
@@ -486,8 +487,8 @@ impl CMDUHandler {
                 .await;
             }
             TransmissionEvent::None => {
-                tracing::debug!(
-                    remote = %remote_al_mac_address,
+                debug!(
+                    remote = %remote_al_mac,
                     "No transmission needed after topology query update"
                 );
             }
@@ -508,6 +509,8 @@ impl CMDUHandler {
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut interfaces: Vec<Ieee1905InterfaceData> = Vec::new();
         let mut ieee_neighbors_map: HashMap<MacAddr, Vec<IEEE1905Neighbor>> = HashMap::new();
+        let mut non_ieee_neighbors_map: HashMap<MacAddr, Vec<MacAddr>> = HashMap::new();
+        let mut device_bridging_capability = None;
         let mut end_of_message_found = false;
         let mut device_vendor = Ieee1905DeviceVendor::Unknown;
 
@@ -565,12 +568,24 @@ impl CMDUHandler {
                 }
                 IEEE1905TLVType::Ieee1905NeighborDevices => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = Ieee1905NeighborDevice::parse(
-                            value,
-                            ((tlv.tlv_length - 6) / 7) as usize,
-                        ) {
-                            ieee_neighbors_map
-                                .insert(parsed.local_mac_address, parsed.neighborhood_list);
+                        let devices_count = ((tlv.tlv_length - 6) / 7) as usize;
+                        if let Ok((_, parsed)) = Ieee1905NeighborDevice::parse(value, devices_count) {
+                            ieee_neighbors_map.insert(parsed.local_mac_address, parsed.neighborhood_list);
+                        }
+                    }
+                }
+                IEEE1905TLVType::NonIeee1905NeighborDevices => {
+                    if let Some(ref value) = tlv.tlv_value {
+                        let devices_count = (tlv.tlv_length - 6) / 6;
+                        if let Ok((_, parsed)) = NonIeee1905NeighborDevices::parse(value, devices_count) {
+                            non_ieee_neighbors_map.insert(parsed.local_mac_address, parsed.neighborhood_list);
+                        }
+                    }
+                }
+                IEEE1905TLVType::DeviceBridgingCapability => {
+                    if let Some(ref value) = tlv.tlv_value {
+                        if let Ok((_, parsed)) = DeviceBridgingCapability::parse(value) {
+                            device_bridging_capability = Some(parsed);
                         }
                     }
                 }
@@ -629,6 +644,26 @@ impl CMDUHandler {
                     "No in-flight query for this node (missing expected message_id) → fallback to SDU"
                 );
                 return false;
+            }
+        }
+
+        for interface in interfaces.iter_mut() {
+            interface.ieee1905_neighbors = ieee_neighbors_map.remove(&interface.mac);
+            interface.non_ieee1905_neighbors = non_ieee_neighbors_map.remove(&interface.mac);
+      }
+          if let Some(device_bridging_capability) = device_bridging_capability {
+            let mut bridge_index_by_interface = HashMap::new();
+            for (index, macs) in device_bridging_capability.bridging_tuples_list.iter().enumerate() {
+                for mac in macs.bridging_mac_list.iter() {
+                    bridge_index_by_interface.insert(mac, index as u8);
+                }
+            }
+            
+            for interface in interfaces.iter_mut() {
+                if let Some(bridge_index) = bridge_index_by_interface.get(&interface.mac) {
+                    interface.bridging_flag = true;
+                    interface.bridging_tuple = Some(*bridge_index);
+                }
             }
         }
 
