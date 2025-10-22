@@ -509,6 +509,7 @@ impl CMDUHandler {
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut interfaces: Vec<Ieee1905InterfaceData> = Vec::new();
         let mut ieee_neighbors_map: HashMap<MacAddr, Vec<IEEE1905Neighbor>> = HashMap::new();
+        let mut device_bridging_capability = None;
         let mut end_of_message_found = false;
         let mut has_required_vendor_tlv = false;
 
@@ -575,6 +576,13 @@ impl CMDUHandler {
                         }
                     }
                 }
+                IEEE1905TLVType::DeviceBridgingCapability => {
+                    if let Some(ref value) = tlv.tlv_value {
+                        if let Ok((_, parsed)) = DeviceBridgingCapability::parse(value) {
+                            device_bridging_capability = Some(parsed);
+                        }
+                    }
+                }
                 IEEE1905TLVType::EndOfMessage => {
                     end_of_message_found = true;
                 }
@@ -632,6 +640,22 @@ impl CMDUHandler {
                     "No in-flight query for this node (missing expected message_id) → fallback to SDU"
                 );
                 return false;
+            }
+        }
+
+        if let Some(device_bridging_capability) = device_bridging_capability {
+            let mut bridge_index_by_interface = HashMap::new();
+            for (index, macs) in device_bridging_capability.bridging_tuples_list.iter().enumerate() {
+                for mac in macs.bridging_mac_list.iter() {
+                    bridge_index_by_interface.insert(mac, index as u8);
+                }
+            }
+            
+            for interface in interfaces.iter_mut() {
+                if let Some(bridge_index) = bridge_index_by_interface.get(&interface.mac) {
+                    interface.bridging_flag = true;
+                    interface.bridging_tuple = Some(*bridge_index);
+                }
             }
         }
 
