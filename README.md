@@ -188,14 +188,29 @@ IEEE1905 has been specified to work in multiple topologies but it is specially u
         The topology discovery process is continuous, with devices periodically re-broadcasting their presence and updating their topology databases as they receive new information.
         This ensures that the topology information remains current, even as devices join, leave, or move within the network.
 
-    7. Registrar identification.
+    7. Split Brain scenario protection.
 
-        As part of the topology graph construction IEEE1905 agent will inspect the AP autoconfig search CMDU and AP autoconfig response CMDU, delivered to the EM-HLE, to add to the  topology graph, the AL_MAC of the registrar.
-        The IEEE1905 will not take part in the registrar selection process, but the topology graph will not contain more that one registrar per network, the process will be:
-        1. When the AL_SAP receives an AP autoconfig response with TLV supported role set to 0x00 into a SDU the local AL_MAC will be set as registrar.
-        2. When the IEEE1905 receives an AP autoconfig response with TLV supported role set to 0x00 the remote AL_MAC will be set as registrar.
-        3. When the AL_SAP receives an AP autoconfig search with TLV searched role set to 0x00 into a SDU, in case the local AL_MAC is set as registrar it will be cleaned up.
-        4. In any other case the CMDU's will be ignored and we will not update the topology map.
+        As part of the topology graph construction process, the IEEE1905 agent shall inspect the AP Autoconfig Search CMDU and AP Autoconfig Response CMDU delivered to the EM-HLE in order to identify and record the AL_MAC address of the registrar in the topology graph.
+
+        The IEEE1905 entity shall not participate in the registrar selection process. However, the topology graph shall contain no more than one registrar per network.
+        Registrar management shall follow the procedure below:
+
+        1. When the AL_SAP receives a registration request from the HLE to assume the controller role, the IEEE1905 entity shall verify whether a registrar is already present in the network.
+
+        2. If no registrar is detected, the HLE shall assume the registrar role. In this case, AL_SAP shall:
+
+            2.1 Accept incoming ServiceRequest SDUs containing AP_Autoconfig_Search messages.
+
+            2.2 Transmit outgoing SDUs containing AP_Autoconfig_Response messages.
+
+        3. If a registrar is detected, the AL_SAP shall perform the tie-breaking procedure:
+            3.1 If the local entity wins, AL_SAP shall accept incoming ServiceRequest SDUs containing AP_Autoconfig_Search messages and transmit outgoing CMDUs containing AP_Autoconfig_Response messages.
+
+            3.2 If the remote entity wins, AL_SAP shall filter all AP_Autoconfig SDUs.
+
+        4. If the current registrar becomes unavailable, as determined through topology-notification-triggered convergence, a new registrar shall be selected as part of the network convergence process, following steps 1 through 3.
+
+        5. If a new registrar is detected through topology-discovery-triggered convergence, registrar selection shall again be performed as part of the network convergence process, following steps 1 through 3.
 
     8. Path Performance monitoring.
 
@@ -221,6 +236,14 @@ IEEE1905 has been specified to work in multiple topologies but it is specially u
 ---
 
 ![ARCH](docs/architecture/call_flow_diagram/IEEE1905_call_flow.jpg)
+
+---
+
+### Protection against split brain scenario
+
+---
+
+![ARCH](docs/architecture/call_flow_diagram/IEEE1905_controller_protection.jpg)
 
 ---
 
