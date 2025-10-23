@@ -94,11 +94,11 @@ pub async fn cmdu_topology_discovery_transmission_worker(
         let ethertype = 0x893A;
 
         match sender
-            .send_frame(
+            .enqueue_frame(
                 destination_mac,
                 interface_mac_address,
                 ethertype,
-                &serialized_cmdu,
+                serialized_cmdu,
             )
             .await
         {
@@ -205,7 +205,7 @@ pub async fn cmdu_topology_query_transmission(
 
         // Send the CMDU via EthernetSender
         match sender
-            .send_frame(destination_mac, source_mac, ethertype, &serialized_cmdu)
+            .enqueue_frame(destination_mac, source_mac, ethertype, serialized_cmdu)
             .await
         {
             Err(e) => {
@@ -464,11 +464,8 @@ pub async fn cmdu_topology_response_transmission(
         let ethertype = 0x893A; // IEEE 1905 EtherType
 
         // Send the CMDU via EthernetSender
-        match sender
-            .send_frame(destination_mac, source_mac, ethertype, &serialized_cmdu)
-            .await
-        {
-            Ok(()) => {
+        match sender.send_frame(destination_mac, source_mac, ethertype, serialized_cmdu).await {
+            Ok(_) => {
                 info!(
                     interface = %interface,
                     message_id = message_id,
@@ -580,7 +577,7 @@ pub async fn cmdu_topology_notification_transmission(
 
         // Send the CMDU via EthernetSender
         match sender
-            .send_frame(destination_mac, source_mac, ethertype, &serialized_cmdu)
+            .enqueue_frame(destination_mac, source_mac, ethertype, serialized_cmdu)
             .await
         {
             Ok(()) => info!(
@@ -664,7 +661,7 @@ pub async fn cmdu_from_sdu_transmission(
                     let fragment_id = fragment.fragment;
                     tracing::trace!("Sending CMDU fragment <{serialized:?}> dstMacAddr {destination_mac:?}, src_mac {source_mac:?}, ethertype {ethertype:?}");
                     match sender
-                        .send_frame(destination_mac, source_mac, ethertype, &serialized)
+                        .enqueue_frame(destination_mac, source_mac, ethertype, serialized)
                         .await
                     {
                         Ok(()) => {
