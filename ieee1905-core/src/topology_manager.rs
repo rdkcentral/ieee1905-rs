@@ -39,7 +39,6 @@ use tui::{
     widgets::{Block, Borders, Paragraph, Row, Table},
     Terminal,
 };
-// use crate::task_registry::TASK_REGISTRY;
 // Standard library
 use std::{collections::HashMap, io, sync::Arc};
 
@@ -47,20 +46,19 @@ use std::{collections::HashMap, io, sync::Arc};
 use crate::{
     cmdu::IEEE1905Neighbor,
     interface_manager::{get_forwarding_interface_mac, get_interfaces},
-    //task_registry::TASK_REGISTRY,
 };
 use crate::lldpdu::PortId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateLocal {
     Idle,
-    ConvergingLocal,
+    ConvergingLocal(Instant),
     ConvergedLocal,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateRemote {
     Idle,
-    ConvergingRemote,
+    ConvergingRemote(Instant),
     ConvergedRemote,
 }
 
@@ -412,7 +410,7 @@ impl TopologyDatabase {
 
     pub async fn refresh_topology(&self) {
         let nodes_clone = Arc::clone(&self.nodes);
-        let _task_handle = spawn(async move {
+        spawn(async move {
             let mut ticker = interval(Duration::from_secs(5)); // Runs every 5 seconds
 
             loop {
@@ -421,37 +419,35 @@ impl TopologyDatabase {
                 let now = Instant::now();
 
                 nodes.retain(|al_mac, node| {
-                    let elapsed = now.duration_since(node.metadata.last_seen);
+                    // Remove nodes stuck in ConvergingLocal state
+                    if let Some(StateLocal::ConvergingLocal(when)) = node.metadata.node_state_local {
+                        if now.duration_since(when) >= Duration::from_secs(5) {
+                            debug!(
+                                al_mac = ?al_mac,
+                                state = ?node.metadata.last_update,
+                                "Removing node stuck in local convergence for too long"
+                            );
+                            return false; // Remove from database
+                        }
+                    }
 
-                    // **Remove nodes stuck in Converging state for 5+ seconds**
-                    if matches!(
-                        node.metadata.node_state_local,
-                        Some(StateLocal::ConvergingLocal)
-                    ) && elapsed >= Duration::from_secs(40)
-                    {
-                        tracing::debug!(
-                            al_mac = ?al_mac,
-                            state = ?node.metadata.last_update,
-                            "Removing node stuck in local convergence for too long"
-                        );
-                        return false; // **Remove from database**
+                    // Remove nodes stuck in ConvergingRemote state
+                    if let Some(StateRemote::ConvergingRemote(when)) = node.metadata.node_state_remote {
+                        if now.duration_since(when) >= Duration::from_secs(5) {
+                            debug!(
+                                al_mac = ?al_mac,
+                                state = ?node.metadata.last_update,
+                                "Removing node stuck in remote convergence for too long"
+                            );
+                            return false; // Remove from database
+                        }
                     }
-                    if matches!(
-                        node.metadata.node_state_remote,
-                        Some(StateRemote::ConvergingRemote)
-                    ) && elapsed >= Duration::from_secs(40)
-                    {
-                        tracing::debug!(
-                            al_mac = ?al_mac,
-                            state = ?node.metadata.last_update,
-                            "Removing node stuck in remote convergence for too long"
-                        );
-                        return false; // **Remove from database**
-                    }
-                    // **Remove nodes that have been inactive for 30+ seconds**
+
+                    // Remove nodes that have been inactive
+                    let elapsed = now.duration_since(node.metadata.last_seen);
                     if elapsed >= Duration::from_secs(60) {
                         tracing::debug!(al_mac = ?al_mac, "Removing node due to timeout");
-                        return false; // **Remove from database**
+                        return false; // Remove from database
                     }
 
                     debug!(
@@ -467,7 +463,6 @@ impl TopologyDatabase {
                 }
             }
         });
-        //TASK_REGISTRY.lock().await.push(task_handle);
     }
 
     pub async fn refresh_interfaces(&self) {
@@ -582,7 +577,7 @@ impl TopologyDatabase {
                                     msg_id,
                                     None,
                                     None,
-                                    Some(StateRemote::ConvergingRemote),
+                                    Some(StateRemote::ConvergingRemote(Instant::now())),
                                 );
                                 tracing::debug!("Event: Send Topology Response");
                                 TransmissionEvent::SendTopologyResponse(al_mac)
@@ -595,7 +590,7 @@ impl TopologyDatabase {
                         UpdateType::ResponseReceived => {
                             let local_state = node.metadata.node_state_local;
 
-                            if matches!(local_state, Some(StateLocal::ConvergingLocal)) {
+                            if matches!(local_state, Some(StateLocal::ConvergingLocal(_))) {
                                 node.metadata.update(
                                     Some(operation),
                                     msg_id,
@@ -641,7 +636,7 @@ impl TopologyDatabase {
                                 Some(operation),
                                 msg_id,
                                 None,
-                                Some(StateLocal::ConvergingLocal),
+                                Some(StateLocal::ConvergingLocal(Instant::now())),
                                 None,
                             );
                             TransmissionEvent::None
@@ -731,8 +726,7 @@ impl TopologyDatabase {
                         }
                         UpdateType::QueryReceived => {
                             new_node.metadata.node_state_local = Some(StateLocal::Idle);
-                            new_node.metadata.node_state_remote =
-                                Some(StateRemote::ConvergingRemote);
+                            new_node.metadata.node_state_remote = Some(StateRemote::ConvergingRemote(Instant::now()));
                             nodes.insert(al_mac, new_node);
                             tracing::debug!(al_mac = ?al_mac, "Inserted node from query");
                             return TransmissionEvent::SendTopologyResponse(al_mac);
