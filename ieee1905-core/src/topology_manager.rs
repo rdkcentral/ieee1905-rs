@@ -421,7 +421,7 @@ impl TopologyDatabase {
                 nodes.retain(|al_mac, node| {
                     // Remove nodes stuck in ConvergingLocal state
                     if let Some(StateLocal::ConvergingLocal(when)) = node.metadata.node_state_local {
-                        if now.duration_since(when) >= Duration::from_secs(40) {
+                        if now.duration_since(when) >= Duration::from_secs(5) {
                             debug!(
                                 al_mac = ?al_mac,
                                 state = ?node.metadata.last_update,
@@ -433,7 +433,7 @@ impl TopologyDatabase {
 
                     // Remove nodes stuck in ConvergingRemote state
                     if let Some(StateRemote::ConvergingRemote(when)) = node.metadata.node_state_remote {
-                        if now.duration_since(when) >= Duration::from_secs(40) {
+                        if now.duration_since(when) >= Duration::from_secs(5) {
                             debug!(
                                 al_mac = ?al_mac,
                                 state = ?node.metadata.last_update,
