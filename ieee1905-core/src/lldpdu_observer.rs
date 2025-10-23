@@ -173,6 +173,7 @@ impl EthernetFrameObserver for LLDPObserver {
                         UpdateType::LldpUpdate,
                         None,
                         Some(port_id),
+                        None,
                     ).await;
                 } else {
                     tracing::warn!("Device with AL-MAC {} not found!", neighbor_chassis_id);

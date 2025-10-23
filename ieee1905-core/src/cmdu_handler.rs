@@ -314,6 +314,7 @@ impl CMDUHandler {
                     UpdateType::DiscoveryReceived,
                     Some(message_id),
                     None,
+                    None,
                 )
                 .await;
 
@@ -369,7 +370,7 @@ impl CMDUHandler {
 
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut end_of_message_found = false;
-        let mut has_required_vendor_tlv = false;
+        let mut device_vendor = Ieee1905DeviceVendor::Unknown;
 
         for (index, tlv) in tlvs.iter().enumerate() {
             let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
@@ -404,7 +405,7 @@ impl CMDUHandler {
                             if parsed_vs.oui == COMCAST_OUI
                                 && parsed_vs.vendor_data.starts_with(COMCAST_QUERY_TAG)
                             {
-                                has_required_vendor_tlv = true;
+                                device_vendor = Ieee1905DeviceVendor::Rdk;
                                 tracing::debug!(
                                     "Matched Comcast VendorSpecific TLV (00:90:96 / 00 01 00)."
                                 );
@@ -425,10 +426,8 @@ impl CMDUHandler {
             return true;
         }
 
-        if !has_required_vendor_tlv {
-            tracing::warn!(
-                "Topology Query missing required Comcast VendorSpecific TLV → fallback to SDU."
-            );
+        if device_vendor != Ieee1905DeviceVendor::Rdk {
+            warn!("Topology Query missing required Comcast VendorSpecific TLV → fallback to SDU.");
             return false;
         }
 
@@ -462,6 +461,7 @@ impl CMDUHandler {
                 UpdateType::QueryReceived,
                 Some(message_id),
                 None,
+                Some(device_vendor),
             )
             .await;
 
@@ -512,7 +512,7 @@ impl CMDUHandler {
         let mut non_ieee_neighbors_map: HashMap<MacAddr, Vec<MacAddr>> = HashMap::new();
         let mut device_bridging_capability = None;
         let mut end_of_message_found = false;
-        let mut has_required_vendor_tlv = false;
+        let mut device_vendor = Ieee1905DeviceVendor::Unknown;
 
         for tlv in tlvs {
             match IEEE1905TLVType::from_u8(tlv.tlv_type) {
@@ -539,7 +539,7 @@ impl CMDUHandler {
                             if parsed_vs.oui == COMCAST_OUI
                                 && parsed_vs.vendor_data.starts_with(COMCAST_QUERY_TAG)
                             {
-                                has_required_vendor_tlv = true;
+                                device_vendor = Ieee1905DeviceVendor::Rdk;
                                 tracing::debug!(
                                     "Matched Comcast VendorSpecific TLV (00:90:96 / 00 01 00)."
                                 );
@@ -601,10 +601,8 @@ impl CMDUHandler {
             return true;
         }
 
-        if !has_required_vendor_tlv {
-            tracing::warn!(
-                "Topology Response missing required Comcast VendorSpecific TLV → fallback to SDU."
-            );
+        if device_vendor != Ieee1905DeviceVendor::Rdk {
+            warn!("Topology Response missing required Comcast VendorSpecific TLV → fallback to SDU.");
             return false;
         }
 
@@ -682,6 +680,7 @@ impl CMDUHandler {
                 UpdateType::ResponseReceived,
                 Some(message_id),
                 None,
+                Some(device_vendor),
             )
             .await;
 
@@ -731,7 +730,7 @@ impl CMDUHandler {
 
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut end_of_message_found = false;
-        let mut has_required_vendor_tlv = false;
+        let mut device_vendor = Ieee1905DeviceVendor::Unknown;
 
         for (index, tlv) in tlvs.iter().enumerate() {
             let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
@@ -766,7 +765,7 @@ impl CMDUHandler {
                             if parsed_vs.oui == COMCAST_OUI
                                 && parsed_vs.vendor_data.starts_with(COMCAST_QUERY_TAG)
                             {
-                                has_required_vendor_tlv = true;
+                                device_vendor = Ieee1905DeviceVendor::Rdk;
                                 tracing::debug!(
                                     "Matched Comcast VendorSpecific TLV (00:90:96 / 00 01 00)."
                                 );
@@ -789,10 +788,8 @@ impl CMDUHandler {
             return true;
         }
 
-        if !has_required_vendor_tlv {
-            tracing::warn!(
-                "Topology Notification missing required Comcast VendorSpecific TLV → fallback to SDU."
-            );
+        if device_vendor != Ieee1905DeviceVendor::Rdk {
+            warn!("Topology Notification missing required Comcast VendorSpecific TLV → fallback to SDU.");
             return false;
         }
 
@@ -819,6 +816,7 @@ impl CMDUHandler {
                 UpdateType::NotificationReceived,
                 Some(message_id),
                 None,
+                Some(device_vendor),
             )
             .await;
 
@@ -916,6 +914,7 @@ impl CMDUHandler {
                         UpdateType::AutoConfigSearch,
                         Some(message_id),
                         None,
+                        None,
                     )
                     .await
             };
@@ -994,6 +993,7 @@ impl CMDUHandler {
                         updated_device_data,
                         UpdateType::AutoConfigResponse,
                         Some(message_id),
+                        None,
                         None,
                     )
                     .await
