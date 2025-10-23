@@ -426,11 +426,6 @@ impl CMDUHandler {
             return true;
         }
 
-        if device_vendor != Ieee1905DeviceVendor::Rdk {
-            warn!("Topology Query missing required Comcast VendorSpecific TLV → fallback to SDU.");
-            return false;
-        }
-
         info!("Topology Query received from REMOTE_PORT_MAC={source_mac}");
 
         let topology_db = TopologyDatabase::get_instance(
@@ -601,11 +596,6 @@ impl CMDUHandler {
             return true;
         }
 
-        if device_vendor != Ieee1905DeviceVendor::Rdk {
-            warn!("Topology Response missing required Comcast VendorSpecific TLV → fallback to SDU.");
-            return false;
-        }
-
         let Some(remote_al_mac_address) = remote_al_mac else {
             tracing::warn!("Topology Response missing AL MAC. Discarding.");
             return true;
@@ -650,8 +640,9 @@ impl CMDUHandler {
         for interface in interfaces.iter_mut() {
             interface.ieee1905_neighbors = ieee_neighbors_map.remove(&interface.mac);
             interface.non_ieee1905_neighbors = non_ieee_neighbors_map.remove(&interface.mac);
-      }
-          if let Some(device_bridging_capability) = device_bridging_capability {
+        }
+
+        if let Some(device_bridging_capability) = device_bridging_capability {
             let mut bridge_index_by_interface = HashMap::new();
             for (index, macs) in device_bridging_capability.bridging_tuples_list.iter().enumerate() {
                 for mac in macs.bridging_mac_list.iter() {
