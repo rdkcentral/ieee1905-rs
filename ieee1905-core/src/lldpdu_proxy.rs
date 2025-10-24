@@ -91,7 +91,7 @@ pub async fn lldp_discovery_worker(
         let source_mac = port_id; // Use port_id as source MAC
         let ethertype = 0x88CC; // EtherType for LLDP
 
-        match sender.send_frame(destination_mac, source_mac, ethertype, &serialized_lldpdu).await {
+        match sender.enqueue_frame(destination_mac, source_mac, ethertype, serialized_lldpdu).await {
             Ok(()) => info!("LLDPDU sent successfully through {port_name}"),
             Err(e) => error!("Failed to send LLDPDU: {}", e),
         }

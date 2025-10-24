@@ -63,7 +63,6 @@ impl CMDUType {
             0x0003 => CMDUType::TopologyResponse,
             0x0005 => CMDUType::LinkMetricQuery,
             0x0006 => CMDUType::LinkMetricResponse,
-            //TO do remove this linkMetric
             0x0007 => CMDUType::ApAutoConfigSearch,
             0x0008 => CMDUType::ApAutoConfigResponse,
 
@@ -115,6 +114,11 @@ impl MessageVersion {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////
+//Comcast selector
+///////////////////////////////////////////////////////////////////////////
+pub const COMCAST_OUI: [u8; 3] = [0x00, 0x90, 0x96];
+pub const COMCAST_QUERY_TAG: &[u8] = &[0x00, 0x01, 0x00];
 ///////////////////////////////////////////////////////////////////////////
 //DEFINITION OF IEEE1905 TLV TYPES
 ///////////////////////////////////////////////////////////////////////////
@@ -994,7 +998,7 @@ impl CMDU {
             };
         }
         tracing::trace!("Returning CMDU. Might have incomplete TLV's due to size fragmentation");
-        Ok((&[],cmdu))
+        Ok((&[], cmdu))
     }
 
     // Convert the CMDU to bytes
@@ -1289,7 +1293,7 @@ pub mod tests {
             message_type: 0x0001,
             message_id: 42,
             fragment: 0,
-            flags: 0x80,  // Single not fragmented CMDU - set lastFragmentIndicator flag
+            flags: 0x80, // Single not fragmented CMDU - set lastFragmentIndicator flag
             payload: vec![],
         };
 
@@ -1364,7 +1368,10 @@ pub mod tests {
         let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
 
         // Compare with original
-        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
+        assert_eq!(
+            reassembled.payload, cmdu.payload,
+            "Original and reassembled payload should match"
+        );
     }
 
     // Verify the correctness of fragmentation and reassembly of CMDU with big TLVs
@@ -1382,12 +1389,20 @@ pub mod tests {
                 // Differentiate between last-first and the last-but-not-first CMDU fragments
                 if i == 0 {
                     // First and at the same time last CMDU fragment (the only fragment in CMDU chain) in case of size based fragmentation should have minimal size of CMDU header + TLV header without any TLV payload
-                    assert!(frag.total_size() >= 8 + 3, "Fragment {0} should be at least 8+3 bytes but is {1} bytes long",
-                        i, frag.total_size());
+                    assert!(
+                        frag.total_size() >= 8 + 3,
+                        "Fragment {0} should be at least 8+3 bytes but is {1} bytes long",
+                        i,
+                        frag.total_size()
+                    );
                 } else {
                     // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
-                    assert!(frag.total_size() >= 8 + 1, "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
-                        i, frag.total_size());
+                    assert!(
+                        frag.total_size() >= 8 + 1,
+                        "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
+                        i,
+                        frag.total_size()
+                    );
                 }
             }
             assert!(
@@ -1400,13 +1415,19 @@ pub mod tests {
         }
 
         // Check if the "last fragment" flag is set in last fragment
-        assert!(fragments.last().unwrap().flags & 0x80 != 0, "Last fragment must have lastFragmentIndicator flag set");
+        assert!(
+            fragments.last().unwrap().flags & 0x80 != 0,
+            "Last fragment must have lastFragmentIndicator flag set"
+        );
 
         // Reassembling CMDU fragments
         let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
 
         // Compare payloads of original CMDU and reassembled one
-        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
+        assert_eq!(
+            reassembled.payload, cmdu.payload,
+            "Original and reassembled payload should match"
+        );
     }
 
     // Verify the correctness of fragmentation and reassembly of CMDU with one TLV exceeding MTU
@@ -1424,7 +1445,10 @@ pub mod tests {
         let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
 
         // Compare payloads of original CMDU and reassembled one
-        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
+        assert_eq!(
+            reassembled.payload, cmdu.payload,
+            "Original and reassembled payload should match"
+        );
     }
 
     // Verify the correctness of fragmentation and reassembly of CMDU fitting exactly CMDU size
@@ -1447,13 +1471,17 @@ pub mod tests {
         assert!(
             fragments[0].total_size() <= 1500,
             "CMDU fragment should have maximum 1500 bytes but is {:?} bytes long",
-            fragments[0].total_size());
+            fragments[0].total_size()
+        );
 
         // Reassembly
         let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
 
         // Compare payloads of original CMDU and reassembled one
-        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
+        assert_eq!(
+            reassembled.payload, cmdu.payload,
+            "Original and reassembled payload should match"
+        );
     }
 
     // Verify fragmentation of CMDU with payload bigger than 1500 bytes
@@ -1496,7 +1524,7 @@ pub mod tests {
             message_type: CMDUType::Unknown(0x08).to_u16(),
             message_id: 0x1234,
             fragment: 0x01,
-            flags: 0x00,           // Bit 7 must not be set to be recognized as fragmented CMDU
+            flags: 0x00, // Bit 7 must not be set to be recognized as fragmented CMDU
             payload: whole_payload,
         };
         assert!(cmdu.is_fragmented());
@@ -1625,7 +1653,10 @@ pub mod tests {
         let parsed_discovery = CMDU::parse(&serialized_discovery).unwrap().1;
 
         // Assert that the parsed CMDU matches the original
-        assert_eq!(cmdu_topology_discovery.get_tlvs().unwrap(), parsed_discovery.get_tlvs().unwrap());
+        assert_eq!(
+            cmdu_topology_discovery.get_tlvs().unwrap(),
+            parsed_discovery.get_tlvs().unwrap()
+        );
     }
 
     // Verify serializing and parsing topology discovery CMDU
@@ -1964,8 +1995,8 @@ pub mod tests {
 
         // Subtest using LocalInterface::new()
         let mac: MacAddr = MacAddr(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02);
-        let media_type: u16 = 0x01;             // Set ethernet type
-        let special_info: Vec<u8> = vec![];     // Empty "special info" data
+        let media_type: u16 = 0x01; // Set ethernet type
+        let special_info: Vec<u8> = vec![]; // Empty "special info" data
         let local_interface = LocalInterface::new(mac, media_type, special_info);
 
         // Expect success comparing serialized data and original
@@ -1988,7 +2019,7 @@ pub mod tests {
         match DeviceInformation::parse(&serialized, len) {
             Ok((_, parsed)) => {
                 assert_eq!(serialized, parsed.serialize());
-            },
+            }
             Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) | Err(NomErr::Failure(_)) => {
                 panic!("Parsing of serialized data should succeed, but it didn't");
             }
@@ -2012,8 +2043,9 @@ pub mod tests {
             Ok((_, parsed)) => {
                 assert_eq!(serialized, parsed.serialize());
             }
-            Err(nom::Err::Incomplete(_)) | Err(NomErr::Failure(_)) | Err(nom::Err::Error(_)) =>
-                panic!("Parsing of serialized data should succeed, but it didn't"),
+            Err(nom::Err::Incomplete(_)) | Err(NomErr::Failure(_)) | Err(nom::Err::Error(_)) => {
+                panic!("Parsing of serialized data should succeed, but it didn't")
+            }
         };
     }
 
@@ -2036,10 +2068,16 @@ pub mod tests {
         bridging_capability.append(&mut serialized.clone());
 
         // Parse the vector of data as DeviceBridgingCapability
-        let parsed = DeviceBridgingCapability::parse(&bridging_capability).unwrap().1;
+        let parsed = DeviceBridgingCapability::parse(&bridging_capability)
+            .unwrap()
+            .1;
 
         // Expect that serialized DeviceBridgingCapability matches original bridging_capability
-        assert_eq!(parsed.serialize(), bridging_capability, "Serialized data should be equal to original");
+        assert_eq!(
+            parsed.serialize(),
+            bridging_capability,
+            "Serialized data should be equal to original"
+        );
     }
 
     // Verify serializing and parsing NonIEEE1905Neighbor data
@@ -2070,7 +2108,9 @@ pub mod tests {
         neighborhood.append(&mut neighbor_mac.clone());
 
         // Parse vector of raw bytes as NonIEEE1905LocalInterfaceNeighborhood
-        let parsed = NonIEEE1905LocalInterfaceNeighborhood::parse(&neighborhood[..], 1).unwrap().1;
+        let parsed = NonIEEE1905LocalInterfaceNeighborhood::parse(&neighborhood[..], 1)
+            .unwrap()
+            .1;
 
         // Expect that the serialized NonIEEE1905LocalInterfaceNeighborhood matches original neighborhood
         assert_eq!(parsed.serialize(), neighborhood);
@@ -2091,7 +2131,9 @@ pub mod tests {
         neighbor_devices.append(&mut neighbor_mac.clone());
 
         // Parse vector of raw bytes as NonIeee1905NeighborDevices
-        let parsed = NonIeee1905NeighborDevices::parse(&neighbor_devices, 1).unwrap().1;
+        let parsed = NonIeee1905NeighborDevices::parse(&neighbor_devices, 1)
+            .unwrap()
+            .1;
 
         // Expect that the serialized NonIeee1905NeighborDevices matches original neighbor_devices
         assert_eq!(parsed.serialize(), neighbor_devices);
@@ -2280,7 +2322,8 @@ pub mod tests {
     // Try to parse DeviceInformation data with redundant, not needed dummy byte: 0xFF
     #[test]
     fn test_device_information_try_to_parse_too_many_data() {
-        let mut local_interface_data: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02, 0x00, 0x01, 0x00];
+        let mut local_interface_data: Vec<u8> =
+            vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02, 0x00, 0x01, 0x00];
 
         // Compose DeviceInformation from: MAC address + number of local interfaces + list of local interfaces
         let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
@@ -2302,7 +2345,9 @@ pub mod tests {
             Err(NomErr::Failure(err)) => {
                 assert_eq!(err.code, ErrorKind::LengthValue);
             }
-            Ok((_, _)) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => panic!("Failure::LengthValue should be returned")
+            Ok((_, _)) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => {
+                panic!("Failure::LengthValue should be returned")
+            }
         };
     }
 
@@ -2320,7 +2365,9 @@ pub mod tests {
             Err(NomErr::Failure(err)) => {
                 assert_eq!(err.code, ErrorKind::Eof);
             }
-            Ok(_) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => panic!("ErrorKind::Eof should be returned")
+            Ok(_) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => {
+                panic!("ErrorKind::Eof should be returned")
+            }
         }
     }
 
@@ -2340,7 +2387,9 @@ pub mod tests {
                 println!("errcode___: {:?}", err.code);
                 assert_eq!(err.code, ErrorKind::Eof)
             }
-            Ok(_) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Failure(_)) => { panic!("ErrorKind::Eof should be returned"); }
+            Ok(_) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Failure(_)) => {
+                panic!("ErrorKind::Eof should be returned");
+            }
         }
     }
 
@@ -2365,7 +2414,9 @@ pub mod tests {
             Err(NomErr::Error(err)) => {
                 assert_eq!(err.code, ErrorKind::Eof)
             }
-            Ok(_) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Failure(_)) => { panic!("ErrorKind::Eof should be returned"); }
+            Ok(_) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Failure(_)) => {
+                panic!("ErrorKind::Eof should be returned");
+            }
         }
     }
 
@@ -2452,12 +2503,20 @@ pub mod tests {
                 // Differentiate between last-first and the last-but-not-first CMDU fragments
                 if i == 0 {
                     // First and at the same time last CMDU fragment (the only fragment in CMDU chain) in case of size based fragmentation should have minimal size of CMDU header + TLV header without any TLV payload
-                    assert!(frag.total_size() >= 8 + 3, "Fragment {0} should be at least 8+3 bytes but is {1} bytes long",
-                        i, frag.total_size());
+                    assert!(
+                        frag.total_size() >= 8 + 3,
+                        "Fragment {0} should be at least 8+3 bytes but is {1} bytes long",
+                        i,
+                        frag.total_size()
+                    );
                 } else {
                     // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
-                    assert!(frag.total_size() >= 8 + 1, "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
-                        i, frag.total_size());
+                    assert!(
+                        frag.total_size() >= 8 + 1,
+                        "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
+                        i,
+                        frag.total_size()
+                    );
                 }
             }
             assert!(
@@ -2470,13 +2529,19 @@ pub mod tests {
         }
 
         // Check if the "last fragment" flag is set in last fragment
-        assert!(fragments.last().unwrap().flags & 0x80 != 0, "Last fragment must have LastFragmentIndicator flag set");
+        assert!(
+            fragments.last().unwrap().flags & 0x80 != 0,
+            "Last fragment must have LastFragmentIndicator flag set"
+        );
 
         // Reassembling CMDU fragments
         let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
 
         // Compare payloads of original CMDU and reassembled one
-        assert_eq!(reassembled.payload, cmdu.payload, "Original and reassembled payload should match");
+        assert_eq!(
+            reassembled.payload, cmdu.payload,
+            "Original and reassembled payload should match"
+        );
     }
 
     // Verify recognizing and signalling of "empty fragments" condition
@@ -2485,7 +2550,8 @@ pub mod tests {
         let fragments: Vec<CMDU> = Vec::new();
 
         // Trying to reassemble empty fragment should return EmptyFragments error
-        let reassembled = CMDU::reassemble(fragments).expect_err("Reassembly shouldn't succeed on empty fragment list");
+        let reassembled = CMDU::reassemble(fragments)
+            .expect_err("Reassembly shouldn't succeed on empty fragment list");
 
         // Expect EmptyFragments error
         assert_eq!(reassembled, CmduReassemblyError::EmptyFragments);
@@ -2504,7 +2570,8 @@ pub mod tests {
         let fragments: Vec<CMDU> = vec![cmdu1, cmdu2];
 
         // Trying to reassemble inconsistent CMDU chain should return error: InconsistentMetadata
-        let reassembled = CMDU::reassemble(fragments).expect_err("Reassembly shouldn't succeed on inconsistent CMDUs");
+        let reassembled = CMDU::reassemble(fragments)
+            .expect_err("Reassembly shouldn't succeed on inconsistent CMDUs");
 
         // Expect InconsistentMetadata error
         assert_eq!(reassembled, CmduReassemblyError::InconsistentMetadata);
@@ -2572,7 +2639,8 @@ pub mod tests {
         let fragments: Vec<CMDU> = vec![cmdu1, cmdu2];
 
         // Trying to parse CMDU chain should result in error: MissingLastFragment
-        let reassembled = CMDU::reassemble(fragments).expect_err("Reassembly shouldn't succeed on missed LastFragment flag");
+        let reassembled = CMDU::reassemble(fragments)
+            .expect_err("Reassembly shouldn't succeed on missed LastFragment flag");
 
         // Expect MissingLastFragment error
         assert_eq!(reassembled, CmduReassemblyError::MissingLastFragment);
@@ -2601,7 +2669,10 @@ pub mod tests {
 
         // Verify the length of reassembled CMDU payload which is sum of 6 TLV headers and their payload
         // 6 TLVs data take 210 bytes and additional 6 TLV headers takes 3 bytes each
-        assert_eq!(reassembled.clone().unwrap().payload.len(), 10 + 20 + 30 + 40 + 50 + 60 + 6 * 3);
+        assert_eq!(
+            reassembled.clone().unwrap().payload.len(),
+            10 + 20 + 30 + 40 + 50 + 60 + 6 * 3
+        );
 
         // Verify if the data from out of order CMDUs are in proper order after reassembly.
         let mut offset = 0;
@@ -2630,7 +2701,7 @@ pub mod tests {
         // Create CMDU fragments chain with missing fragment No. 2
         cmdu0.fragment = 0;
         cmdu1.fragment = 1;
-        cmdu2.fragment = 3;         // Skip fragment 2 and set fragment to id = 3
+        cmdu2.fragment = 3; // Skip fragment 2 and set fragment to id = 3
         cmdu3.fragment = 4;
 
         // Set last fragment flag
@@ -2641,6 +2712,9 @@ pub mod tests {
         let reassembled = CMDU::reassemble(fragments);
 
         // Expect MissingFragments error
-        assert_eq!(CmduReassemblyError::MissingFragments, reassembled.unwrap_err());
+        assert_eq!(
+            CmduReassemblyError::MissingFragments,
+            reassembled.unwrap_err()
+        );
     }
 }

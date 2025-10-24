@@ -21,14 +21,16 @@ use pnet::datalink::MacAddr;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 use std::sync::Arc;
+use anyhow::anyhow;
 use tokio::task::JoinSet;
 
-#[derive(Debug, Clone)]
-pub struct Frame {
-    pub destination_mac: MacAddr,
-    pub source_mac: MacAddr,
-    pub ethertype: u16,
-    pub payload: Vec<u8>,
+#[derive(Debug)]
+struct Frame {
+    destination_mac: MacAddr,
+    source_mac: MacAddr,
+    ethertype: u16,
+    payload: Vec<u8>,
+    success_channel: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 pub struct EthernetSender {
@@ -91,7 +93,12 @@ impl EthernetSender {
                 buffer[14..].copy_from_slice(&frame.payload);
 
                 match tx.send_to(&buffer, None) {
-                    Some(Ok(())) => debug!("Frame sent successfully"),
+                    Some(Ok(())) => {
+                        if let Some(e) = frame.success_channel {
+                            let _ = e.send(());
+                        }
+                        debug!("Frame sent successfully")
+                    },
                     Some(Err(e)) => error!("Failed to send frame: {:?}", e),
                     None => warn!("No transmit descriptor available"),
                 }
@@ -106,21 +113,46 @@ impl EthernetSender {
         }
     }
 
-    /// **Enqueues a frame for transmission**
+    /// Enqueues a frame for transmission and waits for it to be actually sent
     pub async fn send_frame(
         &self,
         destination_mac: MacAddr,
         source_mac: MacAddr,
         ethertype: u16,
-        payload: &[u8],
-    ) -> Result<(), String> {
+        payload: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
         let frame = Frame {
             destination_mac,
             source_mac,
             ethertype,
-            payload: payload.to_vec(),
+            payload: payload.into(),
+            success_channel: Some(tx),
         };
+        self.enqueue_frame_internal(frame).await?;
+        rx.await.map_err(|e| anyhow!("Failed to send frame: {e}"))
+    }
 
+    /// Enqueues a frame for transmission
+    pub async fn enqueue_frame(
+        &self,
+        destination_mac: MacAddr,
+        source_mac: MacAddr,
+        ethertype: u16,
+        payload: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        let frame = Frame {
+            destination_mac,
+            source_mac,
+            ethertype,
+            payload,
+            success_channel: None,
+        };
+        self.enqueue_frame_internal(frame).await
+    }
+
+    /// Enqueues a frame for transmission
+    async fn enqueue_frame_internal(&self, frame: Frame) -> anyhow::Result<()> {
         debug!(
             destination_mac = ?frame.destination_mac,
             source_mac = ?frame.source_mac,
@@ -129,9 +161,9 @@ impl EthernetSender {
             "Enqueuing frame for transmission"
         );
 
-        self.tx_channel
-            .send(frame)
-            .await
-            .map_err(|e| format!("Failed to send frame to async sender task: {e}"))
+        self.tx_channel.send(frame).await.map_err(|e| {
+            anyhow!("Failed to send frame to async sender task: {e}")
+        })?;
+        Ok(())
     }
 }

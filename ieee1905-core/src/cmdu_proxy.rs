@@ -16,7 +16,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
-
+use std::collections::HashMap;
 use pnet::datalink::MacAddr;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, trace, warn};
@@ -94,11 +94,11 @@ pub async fn cmdu_topology_discovery_transmission_worker(
         let ethertype = 0x893A;
 
         match sender
-            .send_frame(
+            .enqueue_frame(
                 destination_mac,
                 interface_mac_address,
                 ethertype,
-                &serialized_cmdu,
+                serialized_cmdu,
             )
             .await
         {
@@ -159,15 +159,29 @@ pub async fn cmdu_topology_query_transmission(
             tlv_length: 6,
             tlv_value: Some(al_mac_address.octets().to_vec()),
         };
+        //Vendor Specific TLV (OUI 00:90:96, payload 00 01 00)
+        let vendor_info = VendorSpecificInfo {
+            oui: COMCAST_OUI,                            // Comcast OUI (per your request)
+            vendor_data: COMCAST_QUERY_TAG.to_vec(),     // Vendor payload
+        };
+        let vendor_value = vendor_info.serialize();
+        let vendor_specific_tlv = TLV {
+            tlv_type: IEEE1905TLVType::VendorSpecificInfo.to_u8(),
+            tlv_length: vendor_value.len() as u16,   // 3 (OUI) + payload length
+            tlv_value: Some(vendor_value),
+        };
 
         let end_of_message_tlv = TLV {
             tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
             tlv_length: 0,
             tlv_value: None,
         };
-        let mut serialized_payload: Vec<u8> = vec![];
-            serialized_payload.extend(al_mac_tlv.serialize() );
-            serialized_payload.extend( end_of_message_tlv.serialize() );
+
+        let mut serialized_payload = vec![];
+        serialized_payload.extend(al_mac_tlv.serialize());
+        serialized_payload.extend(vendor_specific_tlv.serialize());
+        serialized_payload.extend(end_of_message_tlv.serialize());
+
         // Construct CMDU
         let cmdu_topology_query = CMDU {
             message_version: 1,
@@ -191,7 +205,7 @@ pub async fn cmdu_topology_query_transmission(
 
         // Send the CMDU via EthernetSender
         match sender
-            .send_frame(destination_mac, source_mac, ethertype, &serialized_cmdu)
+            .enqueue_frame(destination_mac, source_mac, ethertype, serialized_cmdu)
             .await
         {
             Err(e) => {
@@ -214,6 +228,7 @@ pub async fn cmdu_topology_query_transmission(
                         device_data.clone(),
                         UpdateType::QuerySent,
                         Some(message_id),
+                        None,
                         None,
                     )
                     .await;
@@ -285,6 +300,41 @@ pub async fn cmdu_topology_response_transmission(
             })
             .unwrap_or_default();
 
+        // Construct DeviceBridgingCapability TLV
+        let device_bridging_capability_tlv = {
+            let mut tuples_by_bridge = HashMap::<u8, Vec<MacAddr>>::new();
+            for interface in topology_db.local_interface_list.read().await.iter().flatten() {
+                if let Some(bridging_tuple) = interface.bridging_tuple {
+                    tuples_by_bridge.entry(bridging_tuple).or_default().push(interface.mac);
+                }
+            }
+
+            let mut tuples = Vec::new();
+            for tuple in tuples_by_bridge.into_values() {
+                if tuple.len() > 1 {
+                    tuples.push(BridgingTuple {
+                        bridging_mac_count: tuple.len() as u8,
+                        bridging_mac_list: tuple,
+                    });
+                }
+            }
+
+            if !tuples.is_empty() {
+                let value = DeviceBridgingCapability {
+                    bridging_tuples_count: tuples.len() as u8,
+                    bridging_tuples_list: tuples,
+                }.serialize();
+
+                Some(TLV {
+                    tlv_type: IEEE1905TLVType::DeviceBridgingCapability.to_u8(),
+                    tlv_length: value.len() as u16,
+                    tlv_value: Some(value),
+                })
+            } else {
+                None
+            }
+        };
+
         // Construct AL MAC TLV
 
         let al_mac_address: MacAddr = local_al_mac_address;
@@ -294,14 +344,24 @@ pub async fn cmdu_topology_response_transmission(
             tlv_length: 6,
             tlv_value: Some(al_mac_address.octets().to_vec()),
         };
-
-        let device_information =
-            DeviceInformation::new(local_al_mac_address, ieee1905_local_interfaces);
+        let vendor_info = VendorSpecificInfo {
+            oui: COMCAST_OUI,                            // Comcast OUI (per your request)
+            vendor_data: COMCAST_QUERY_TAG.to_vec(),     // Vendor payload
+        };
+        let vendor_value = vendor_info.serialize();
+        let vendor_specific_tlv = TLV {
+            tlv_type: IEEE1905TLVType::VendorSpecificInfo.to_u8(),
+            tlv_length: vendor_value.len() as u16,   // 3 (OUI) + payload length
+            tlv_value: Some(vendor_value),
+        };
+        //Vendor Specific TLV (OUI 00:90:96, payload 00 01 00)
+        let device_information = DeviceInformation::new(local_al_mac_address, ieee1905_local_interfaces);
         let device_information_tlv = TLV {
             tlv_type: IEEE1905TLVType::DeviceInformation.to_u8(),
             tlv_length: device_information.serialize().len() as u16,
             tlv_value: Some(device_information.serialize()),
         };
+
         //TODO biridging TUPLE
         /*
         let mut bridging_tuples_list: Vec<BridgingTuple> = Vec::new();
@@ -369,11 +429,15 @@ pub async fn cmdu_topology_response_transmission(
             tlv_value: None,
         };
 
-        let mut serialized_payload: Vec<u8> = vec![];
-            serialized_payload.extend(al_mac_tlv.serialize() );
-            serialized_payload.extend( device_information_tlv.serialize() );
-            serialized_payload.extend( ieee_neighbors_tlv.serialize() );
-            serialized_payload.extend( end_of_message_tlv.serialize() );
+        let mut serialized_payload = vec![];
+        serialized_payload.extend(al_mac_tlv.serialize());
+        serialized_payload.extend(vendor_specific_tlv.serialize());
+        serialized_payload.extend(device_information_tlv.serialize());
+        serialized_payload.extend(ieee_neighbors_tlv.serialize());
+        if let Some(device_bridging_capability_tlv) = device_bridging_capability_tlv {
+            serialized_payload.extend(device_bridging_capability_tlv.serialize());
+        }
+        serialized_payload.extend(end_of_message_tlv.serialize());
 
         // Construct the CMDU
         let cmdu_topology_response = CMDU {
@@ -400,11 +464,8 @@ pub async fn cmdu_topology_response_transmission(
         let ethertype = 0x893A; // IEEE 1905 EtherType
 
         // Send the CMDU via EthernetSender
-        match sender
-            .send_frame(destination_mac, source_mac, ethertype, &serialized_cmdu)
-            .await
-        {
-            Ok(()) => {
+        match sender.send_frame(destination_mac, source_mac, ethertype, serialized_cmdu).await {
+            Ok(_) => {
                 info!(
                     interface = %interface,
                     message_id = message_id,
@@ -418,6 +479,7 @@ pub async fn cmdu_topology_response_transmission(
                         node.device_data.clone(),
                         UpdateType::ResponseSent,
                         Some(message_id),
+                        None,
                         None,
                     )
                     .await;
@@ -459,7 +521,6 @@ pub async fn cmdu_topology_notification_transmission(
 
         // Define the AL MAC TLV
         let al_mac_address: MacAddr = local_al_mac_address;
-
         let al_mac_tlv = TLV {
             tlv_type: IEEE1905TLVType::AlMacAddress.to_u8(),
             tlv_length: 6,
@@ -473,10 +534,22 @@ pub async fn cmdu_topology_notification_transmission(
             tlv_value: None,
         };
 
+        //Vendor Specific TLV (OUI 00:90:96, payload 00 01 00)
+        let vendor_info = VendorSpecificInfo {
+            oui: COMCAST_OUI,                            // Comcast OUI (per your request)
+            vendor_data: COMCAST_QUERY_TAG.to_vec(),     // Vendor payload
+        };
+        let vendor_value = vendor_info.serialize();
+        let vendor_specific_tlv = TLV {
+            tlv_type: IEEE1905TLVType::VendorSpecificInfo.to_u8(),
+            tlv_length: vendor_value.len() as u16,   // 3 (OUI) + payload length
+            tlv_value: Some(vendor_value),
+        };
 
-        let mut serialized_payload: Vec<u8> = vec![];
-            serialized_payload.extend(al_mac_tlv.serialize() );
-            serialized_payload.extend( end_of_message_tlv.serialize() );
+        let mut serialized_payload = vec![];
+        serialized_payload.extend(al_mac_tlv.serialize());
+        serialized_payload.extend(vendor_specific_tlv.serialize());
+        serialized_payload.extend(end_of_message_tlv.serialize());
 
         // Construct the Topology Notification CMDU
         let cmdu_topology_notification = CMDU {
@@ -504,7 +577,7 @@ pub async fn cmdu_topology_notification_transmission(
 
         // Send the CMDU via EthernetSender
         match sender
-            .send_frame(destination_mac, source_mac, ethertype, &serialized_cmdu)
+            .enqueue_frame(destination_mac, source_mac, ethertype, serialized_cmdu)
             .await
         {
             Ok(()) => info!(
@@ -587,7 +660,7 @@ pub async fn cmdu_from_sdu_transmission(
                     let fragment_id = fragment.fragment;
                     tracing::trace!("Sending CMDU fragment <{serialized:?}> dstMacAddr {destination_mac:?}, src_mac {source_mac:?}, ethertype {ethertype:?}");
                     match sender
-                        .send_frame(destination_mac, source_mac, ethertype, &serialized)
+                        .enqueue_frame(destination_mac, source_mac, ethertype, serialized)
                         .await
                     {
                         Ok(()) => {
