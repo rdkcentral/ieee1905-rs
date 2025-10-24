@@ -1,16 +1,25 @@
+# release.toml
 
-consolidate-commits = true
-push-remote = "origin"
+# Only allow releases from main
+allow-branch = ["main"]
 
-# Tag format & message
-tag-name = "v{{version}}"
-tag-message = "Release {{crate_name}} v{{version}}"
-
+# Do not publish to crates.io
 publish = false
 
+# Tagging according to Rust sandard
+tag-name = "v{{version}}"
+tag-message = "Release {{crate_name}} v{{version}}"
+push-remote = "origin"
+
+# Commit messages
+consolidate-commits = true
+shared-version = true
+pre-release-hook = ["git-cliff", "--tag", "v{{version}}", "-o", "CHANGELOG.md"]
+pre-release-commit-message = "chore(release): {{version}}"
+
+# Run checks before releasing (set to false if you don’t want tests to run)
 verify = false
 
-# Sign everything
+# We sign everything
 sign-commit = true
 sign-tag = true
-
