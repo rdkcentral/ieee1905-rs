@@ -94,6 +94,11 @@ Docker*
 # Ignore docker-compose files
 docker-*
 
+# Exception for docker files in "ieee1905-tests" subdirectory for github actions
+!ieee1905-tests/
+!ieee1905-tests/Dockerfile
+!ieee1905-tests/docker-compose.yaml
+
 # Ignore .dockignore files
 .dockerignore
 

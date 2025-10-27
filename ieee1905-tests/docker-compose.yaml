@@ -1,0 +1,56 @@
+services:
+  node1:
+    image: ieee1905
+    container_name: ieee1905_node1
+    build:
+      dockerfile: Dockerfile
+      context: .
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    privileged: true
+    stdin_open: true
+    tty: true
+    volumes:
+      - ${WORK_DIR:-.}/ieee1905/target/debug/ieee1905-core:/app/ieee1905
+      - ${WORK_DIR:-.}/ieee1905/target/debug/functional_tests_receiver:/app/functional_tests_receiver
+    command: ["/bin/sleep", "infinity"]
+    environment:
+      - PATH=$PATH:.
+    networks:
+      ieee1905_github_network:
+        ipv4_address: 192.168.100.2
+        mac_address: 02:42:c0:a8:64:02
+
+  node2:
+    image: ieee1905
+    container_name: ieee1905_node2
+    build:
+      dockerfile: Dockerfile
+      context: .
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    privileged: true
+    stdin_open: true
+    tty: true
+    volumes:
+      - ${WORK_DIR:-.}/ieee1905/target/debug/ieee1905-core:/app/ieee1905
+      - ${WORK_DIR:-.}/ieee1905/target/debug/functional_tests_transmitter:/app/functional_tests_transmitter
+
+    command: ["/bin/sleep", "infinity"]
+    environment:
+      - PATH=$PATH:.
+    networks:
+      ieee1905_github_network:
+        ipv4_address: 192.168.100.3
+        mac_address: 02:42:c0:a8:64:03
+
+networks:
+  ieee1905_github_network:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: ieee1905_bridge
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24

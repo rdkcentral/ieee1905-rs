@@ -20,3 +20,11 @@ pnet = "0.35.0"
 
 [features]
 enable_tokio_console = ["ieee1905-core/enable_tokio_console"]
+
+[[bin]]
+name="functional_tests_transmitter"
+path="src/functional_tests_transmitter.rs"
+
+[[bin]]
+name="functional_tests_receiver"
+path="src/functional_tests_receiver.rs"
