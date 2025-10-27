@@ -193,14 +193,14 @@ This ensures that the topology information remains current, even as devices join
 The topology graph shall contain no more than one registrar per network based on a tie-breaking policy defined temporary using AL_MAC address last 4 bytes.
 8. Path Performance monitoring.
 Since current IEEE1905 link-metric CMDUs relies strongly on WiFi parameters to calculate the performance of links, as part of the current project but separated from the IEEE1905 standard implementation we will create a simple performance monitoring protocol inspired on the etherate project, to measure quality parameters on the current forwarding path and store it in the topology map, this information will be exposed to the HLE's to make their decision in forwarding path selection:
-| **Metric**       | **How it’s Measured**                                |
-|------------------|------------------------------------------------------|
-| Reachability     | Send poll-stat messages and echo them                |
-| RTT              | Send timestamp – reply receipt                       |
-| Jitter           | Variance in measured RTTs                            |
-| Loss             | Gaps in sequence numbers                             |
-| Throughput       | Bytes sent/received per unit of time                 |
-| Out-of-order     | Detected via non-monotonic sequence numbers          |
+    | **Metric**       | **How it’s Measured**                                |
+    |------------------|------------------------------------------------------|
+    | Reachability     | Send poll-stat messages and echo them                |
+    | RTT              | Send timestamp – reply receipt                       |
+    | Jitter           | Variance in measured RTTs                            |
+    | Loss             | Gaps in sequence numbers                             |
+    | Throughput       | Bytes sent/received per unit of time                 |
+    | Out-of-order     | Detected via non-monotonic sequence numbers          |
 
 9. 1905 Layer Security Capability.
 According to EasyMesh specification chapters 13.1, 17.2.67, 17.2.68, 17.2.69, we will provide encryption and message integrity service for the TLV's.
