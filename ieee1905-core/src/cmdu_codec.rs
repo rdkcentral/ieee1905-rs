@@ -24,12 +24,13 @@ use nom::{
     bytes::complete::take,
     error::{Error, ErrorKind},
     number::complete::{be_u16, be_u8},
+    Parser,
     IResult,
 };
 
 use pnet::datalink::MacAddr;
 use std::fmt::Debug;
-
+use nom::multi::length_count;
 // Internal modules
 use crate::cmdu_reassembler::CmduReassemblyError;
 use crate::tlv_cmdu_codec::TLV;
@@ -163,6 +164,7 @@ pub enum IEEE1905TLVType {
     VendorSpecificInfo,
     SearchedRole,
     SupportedRole,
+    SupportedService,
     ClientAssociation,
     MultiApProfile,
     Unknown(u8), // To handle unknown or unsupported TLV types
@@ -182,6 +184,7 @@ impl IEEE1905TLVType {
             0x0b => IEEE1905TLVType::VendorSpecificInfo,
             0x0d => IEEE1905TLVType::SearchedRole,
             0x0f => IEEE1905TLVType::SupportedRole,
+            0x80 => IEEE1905TLVType::SupportedService,
             0x92 => IEEE1905TLVType::ClientAssociation,
             0xb3 => IEEE1905TLVType::MultiApProfile,
             _ => IEEE1905TLVType::Unknown(value), // For unrecognized types
@@ -201,6 +204,7 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::VendorSpecificInfo => 0x0b,
             IEEE1905TLVType::SearchedRole => 0x0d,
             IEEE1905TLVType::SupportedRole => 0x0f,
+            IEEE1905TLVType::SupportedService => 0x80,
             IEEE1905TLVType::ClientAssociation => 0x92,
             IEEE1905TLVType::MultiApProfile => 0xb3,
             IEEE1905TLVType::Unknown(value) => value, // Return the unknown value as-is
@@ -919,12 +923,14 @@ pub struct SupportedRole {
 }
 
 impl SupportedRole {
+    pub const REGISTRAR: u8 = 0x00;
+
     /// Parse `SupportedRole` from raw TLV data, ensuring the role is exactly 0x00
     pub fn parse(input: &[u8], _input_length: u16) -> IResult<&[u8], Self> {
         let (input, role_bytes) = take(1usize)(input)?;
         let role = role_bytes[0];
 
-        if role != 0x00 {
+        if role != Self::REGISTRAR {
             return Err(nom::Err::Failure(Error::new(input, ErrorKind::Verify)));
         }
 
@@ -936,6 +942,37 @@ impl SupportedRole {
         vec![self.role]
     }
 }
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct SupportedService {
+    pub services: Vec<u8>,
+}
+
+impl SupportedService {
+    pub const CONTROLLER: u8 = 0x00;
+    pub const AGENT: u8 = 0x01;
+
+    /// Parse `SupportedService` from raw TLV data
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, services) = length_count(u8, u8).parse(input)?;
+
+        Ok((input, Self { services }))
+    }
+
+    /// Serialize `SupportedService` into bytes
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        buffer.push(self.services.len() as u8);
+        for service in self.services.iter() {
+            buffer.push(*service);
+        }
+        buffer
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssociationState {
@@ -1385,6 +1422,10 @@ pub mod tests {
             IEEE1905TLVType::SupportedRole
         );
         assert_eq!(
+            IEEE1905TLVType::from_u8(0x80),
+            IEEE1905TLVType::SupportedService,
+        );
+        assert_eq!(
             IEEE1905TLVType::from_u8(0x92),
             IEEE1905TLVType::ClientAssociation,
         );
@@ -1409,6 +1450,7 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::VendorSpecificInfo.to_u8(), 0x0b);
         assert_eq!(IEEE1905TLVType::SearchedRole.to_u8(), 0x0d);
         assert_eq!(IEEE1905TLVType::SupportedRole.to_u8(), 0x0f);
+        assert_eq!(IEEE1905TLVType::SupportedService.to_u8(), 0x80);
         assert_eq!(IEEE1905TLVType::ClientAssociation.to_u8(), 0x92);
         assert_eq!(IEEE1905TLVType::MultiApProfile.to_u8(), 0xb3);
     }
@@ -2389,6 +2431,18 @@ pub mod tests {
             ),
             Err(e) => panic!("Expected Failure(Verify), but got different error: {:?}", e),
         }
+    }
+
+    #[test]
+    fn test_supported_service_parse_and_serialize() {
+        let original = SupportedService {
+            services: vec![SupportedService::CONTROLLER, SupportedService::AGENT],
+        };
+
+        let serialized = original.serialize();
+        let parsed = SupportedService::parse(&serialized);
+
+        assert_eq!(original, parsed.unwrap().1);
     }
 
     #[test]

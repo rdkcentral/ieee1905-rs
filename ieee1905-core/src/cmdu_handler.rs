@@ -108,9 +108,13 @@ impl CMDUHandler {
         } else {
             cmdu.clone()
         };
+
+        if !self.filter_incoming_cmdu(&cmdu).await {
+            return Ok(());
+        }
+
         tracing::trace!("Dispatching CMDU {cmdu_to_process:?} source mac {source_mac:?} destination_mac {destination_mac:?}");
-        self.dispatch_cmdu(cmdu_to_process, source_mac, destination_mac)
-            .await;
+        self.dispatch_cmdu(cmdu_to_process, source_mac, destination_mac).await;
         Ok(())
     }
 
@@ -466,6 +470,7 @@ impl CMDUHandler {
         let mut ieee_neighbors_map: HashMap<MacAddr, Vec<IEEE1905Neighbor>> = HashMap::new();
         let mut non_ieee_neighbors_map: HashMap<MacAddr, Vec<MacAddr>> = HashMap::new();
         let mut device_bridging_capability = None;
+        let mut supported_service = None;
         let mut end_of_message_found = false;
         let mut device_vendor = Ieee1905DeviceVendor::Unknown;
 
@@ -544,6 +549,13 @@ impl CMDUHandler {
                         }
                     }
                 }
+                IEEE1905TLVType::SupportedService => {
+                    if let Some(value) = tlv.tlv_value.as_ref() {
+                        if let Ok((_, parsed)) = SupportedService::parse(value) {
+                            supported_service = Some(parsed);
+                        }
+                    }
+                }
                 IEEE1905TLVType::EndOfMessage => {
                     end_of_message_found = true;
                 }
@@ -618,11 +630,21 @@ impl CMDUHandler {
             }
         }
 
+        let registry_role = supported_service.and_then(|e| {
+            if e.services.contains(&SupportedService::CONTROLLER) {
+                return Some(Role::Registrar);
+            }
+            if e.services.contains(&SupportedService::AGENT) {
+                return Some(Role::Enrollee);
+            }
+            None
+        });
+
         let updated_device_data = Ieee1905DeviceData {
             al_mac: remote_al_mac_address,
             destination_mac: None,
             local_interface_list: Some(interfaces.clone()),
-            registry_role: None,
+            registry_role,
         };
 
         let result = topology_db
@@ -899,6 +921,31 @@ impl CMDUHandler {
             trace!("Cannot find device for {} topology_db", source_mac);
         }
         Ok(())
+    }
+
+    async fn filter_incoming_cmdu(&self, cmdu: &CMDU) -> bool {
+        let db = TopologyDatabase::get_instance(
+            self.local_al_mac,
+            self.interface_name.clone(),
+        ).await;
+
+        let message_type = CMDUType::from_u16(cmdu.message_type);
+        match message_type {
+            CMDUType::ApAutoConfigResponse => {
+                if let Some(Role::Registrar) = db.get_actual_local_role().await {
+                    warn!("Registrar cannot receive ApAutoConfigResponse");
+                    return false;
+                }
+            }
+            CMDUType::ApAutoConfigSearch => {
+                if let Some(Role::Enrollee) = db.get_actual_local_role().await {
+                    warn!("Enrollee cannot receive ApAutoConfigSearch");
+                    return false;
+                }
+            }
+            _ => {},
+        }
+        true
     }
 }
 
