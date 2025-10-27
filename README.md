@@ -209,19 +209,20 @@ According to EasyMesh specification chapters 13.1, 17.2.67, 17.2.68, 17.2.69, we
 
 ### Protection against split brain scenario
 
-The protection against split brain scenraio will work as follow:
-    1. When the AL_SAP receives a registration request from the HLE to assume the controller role, the IEEE1905 entity shall verify whether a registrar is already present in the network.
-    2. If no registrar is detected, the HLE shall assume the registrar role. In this case, AL_SAP shall:
-        2.1 Accept incoming ServiceRequest SDUs containing AP_Autoconfig_Search messages.
-        2.2 Transmit outgoing SDUs containing AP_Autoconfig_Response messages.
-        2.3 A topology Notification will be generated and as part of the Toplogy convergence flow.
-    3. If a registrar is detected, the AL_SAP shall perform the tie-breaking procedure:
-        3.1 If the local entity wins, AL_SAP shall accept incoming ServiceRequest SDUs containing AP_Autoconfig_Search messages and transmit outgoing CMDUs containing AP_Autoconfig_Response messages.
-        3.2 If the remote entity wins, AL_SAP shall filter all AP_Autoconfig SDUs.
-        3.3 In case the topology map changes we will proceed as in point 2.3 to propagate the new role.
-    4. If the current registrar becomes unavailable, as determined through topology convergence flow, a new registrar shall be selected as part of the network convergence process, following steps 1 through 3.
-    5. If a new registrar is detected through topology-discovery-triggered convergence, registrar selection shall again be performed as part of the network convergence process, following steps 1 through 3.
-    6. When the AL_SAP receives a registration request from the HLE to assume the agent role, the IEEE1905 will propagate it as part of the topology convergence flow.
+The protection against split brain scenraio will work as follow:  
+
+1. When the AL_SAP receives a registration request from the HLE to assume the controller role, the IEEE1905 entity shall verify whether a registrar is already present in the network.  
+2. If no registrar is detected, the HLE shall assume the registrar role. In this case, AL_SAP shall:  
+    2.1 Accept incoming ServiceRequest SDUs containing AP_Autoconfig_Search messages.  
+    2.2 Transmit outgoing SDUs containing AP_Autoconfig_Response messages.  
+    2.3 A topology Notification will be generated and as part of the Toplogy convergence flow.  
+3. If a registrar is detected, the AL_SAP shall perform the tie-breaking procedure:  
+    3.1 If the local entity wins, AL_SAP shall accept incoming ServiceRequest SDUs containing AP_Autoconfig_Search messages and transmit outgoing CMDUs containing AP_Autoconfig_Response messages.  
+    3.2 If the remote entity wins, AL_SAP shall filter all AP_Autoconfig SDUs.  
+    3.3 In case the topology map changes we will proceed as in point 2.3 to propagate the new role.  
+4. If the current registrar becomes unavailable, as determined through topology convergence flow, a new registrar shall be selected as part of the network convergence process, following steps 1 through 3.  
+5. If a new registrar is detected through topology-discovery-triggered convergence, registrar selection shall again be performed as part of the network convergence process, following steps 1 through 3.  
+6. When the AL_SAP receives a registration request from the HLE to assume the agent role, the IEEE1905 will propagate it as part of the topology convergence flow.  
 
 ---
 
