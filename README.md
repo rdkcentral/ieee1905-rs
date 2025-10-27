@@ -156,88 +156,6 @@ IEEE1905 has been specified to work in multiple topologies but it is specially u
 
 2. **Topology construction**
 
-    The topology construction process in IEEE1905 consists of the following steps:
-
-    1. LLDP discovery:
-
-        Before CMDU packet exchange, IEEE1905 will trigger LLDP protocol to discover neighbors with bridging capabilities, and include it as part of the topology graph. LLDPDU's use a link local multicast address being consumed by the linux bridge so in RDK-B use case will not reach the IEEE1905 service.
-
-    2. Topology Discovery Advertisement:
-
-        Each IEEE1905 device periodically broadcasts 1905 Topology Discovery Messages on all its available network interfaces (Wi-Fi, Ethernet, MoCA, PLC).
-        These messages include the AL_MAC address as well as the device's Media Access Control (MAC) address and details about the specific interface over which the message is sent.
-
-    3. Neighbor Discovery:
-
-        Devices that receive the topology discovery messages recognize the sender as a neighboring IEEE1905 device.
-        The receiving device stores this information, including the AL_MAC address of the sender and the MAC address of the interface on which the message was sent, in its local topology map.
-
-    4. Topology Query and Report:
-
-        To get a more detailed view of the network, a device will send a Topology Query Message to any of its neighboring devices.
-        The queried device responds with a Topology Response Message, which contains more comprehensive information about the network topology, including all the devices it knows and their interconnections.
-
-    5. Topology Map Update:
-
-        As devices exchange topology information, each IEEE1905 device updates its local topology map.
-        This map contains information about all known devices in the network, the technologies they are using, the interfaces through which they are connected, and the quality of the paths used to reach them.
-        As result of updates in the topology map, IEEE1905 devices will broadcast Topology Notification to all their neighbors, and their neighbors will retrieve the information using Topology Query/Report messages from teh originator of the modification.
-
-    6. Periodic Refresh:
-
-        The topology discovery process is continuous, with devices periodically re-broadcasting their presence and updating their topology databases as they receive new information.
-        This ensures that the topology information remains current, even as devices join, leave, or move within the network.
-
-    7. Split Brain scenario protection.
-
-        As part of the topology graph construction process, the IEEE1905 agent shall inspect the AP Autoconfig Search CMDU and AP Autoconfig Response CMDU delivered to the EM-HLE in order to identify and record the AL_MAC address of the registrar in the topology graph.
-
-        The topology graph shall contain no more than one registrar per network based on a tie-breaking policy defined temporary using AL_MAC address last 4 bytes.
-        Registrar management shall follow the procedure below:
-
-        1. When the AL_SAP receives a registration request from the HLE to assume the controller role, the IEEE1905 entity shall verify whether a registrar is already present in the network.
-
-        2. If no registrar is detected, the HLE shall assume the registrar role. In this case, AL_SAP shall:
-
-            2.1 Accept incoming ServiceRequest SDUs containing AP_Autoconfig_Search messages.
-
-            2.2 Transmit outgoing SDUs containing AP_Autoconfig_Response messages.
-
-            2.3 A topology Notification will be generated and as part of the Toplogy convergence flow we will include in the Toplogy Response the Supported Service TLV (0x80).
-
-        3. If a registrar is detected, the AL_SAP shall perform the tie-breaking procedure:
-
-            3.1 If the local entity wins, AL_SAP shall accept incoming ServiceRequest SDUs containing AP_Autoconfig_Search messages and transmit outgoing CMDUs containing AP_Autoconfig_Response messages.
-
-            3.2 If the remote entity wins, AL_SAP shall filter all AP_Autoconfig SDUs.
-
-            3.3 In case the topology map changes we will proceed as in point 2.3 to propagate the new role.
-
-        4. If the current registrar becomes unavailable, as determined through topology-notification-triggered convergence, a new registrar shall be selected as part of the network convergence process, following steps 1 through 3.
-
-        5. If a new registrar is detected through topology-discovery-triggered convergence, registrar selection shall again be performed as part of the network convergence process, following steps 1 through 3.
-
-        6. When the AL_SAP receives a registration request from the HLE to assume the agent role, the IEEE1905 will propagate it as part of the topology convergence flow, including the role of the node in the topology reponses into the Supported Service TLV (0x80).
-
-    8. Path Performance monitoring.
-
-        Since current IEEE1905 link-metric CMDUs relies strongly on WiFi parameters to calculate the performance of links, as part of the current project but separated from the IEEE1905 standard implementation we will create a simple performance monitoring protocol inspired on the etherate project, to measure quality parameters on the current forwarding path and store it in the topology map, this information will be exposed to the HLE's to make their decision in forwarding path selection:
-
-        | **Metric**       | **How it’s Measured**                                |
-        |------------------|------------------------------------------------------|
-        | Reachability     | Send poll-stat messages and echo them                |
-        | RTT              | Send timestamp – reply receipt                       |
-        | Jitter           | Variance in measured RTTs                            |
-        | Loss             | Gaps in sequence numbers                             |
-        | Throughput       | Bytes sent/received per unit of time                 |
-        | Out-of-order     | Detected via non-monotonic sequence numbers          |
-
-    9. 1905 Layer Security Capability.
-
-        According to EasyMesh specification chapters 13.1, 17.2.67, 17.2.68, 17.2.69, we will provide encryption and message integrity service for the TLV's.
-
----
-
 ### Topology build Call Flow
 
 ---
@@ -245,8 +163,65 @@ IEEE1905 has been specified to work in multiple topologies but it is specially u
 ![ARCH](docs/architecture/call_flow_diagram/IEEE1905_call_flow.jpg)
 
 ---
+The topology construction process in IEEE1905 consists of the following steps:
+
+1. LLDP discovery:
+Before CMDU packet exchange, IEEE1905 will trigger LLDP protocol to discover neighbors with bridging capabilities, and include it as part of the topology graph. LLDPDU's use a link local multicast address being consumed by the linux bridge so in RDK-B use case will not reach the IEEE1905 service.
+
+2. Topology Discovery Advertisement:
+Each IEEE1905 device periodically broadcasts 1905 Topology Discovery Messages on all its available network interfaces (Wi-Fi, Ethernet, MoCA, PLC).
+These messages include the AL_MAC address as well as the device's Media Access Control (MAC) address and details about the specific interface over which the message is sent.
+
+3. Neighbor Discovery:
+Devices that receive the topology discovery messages recognize the sender as a neighboring IEEE1905 device.
+The receiving device stores this information, including the AL_MAC address of the sender and the MAC address of the interface on which the message was sent, in its local topology map.
+
+4. Topology Query and Report:
+To get a more detailed view of the network, a device will send a Topology Query Message to any of its neighboring devices.
+The queried device responds with a Topology Response Message, which contains more comprehensive information about the network topology, including all the devices it knows and their interconnections.
+
+5. Topology Map Update:
+As devices exchange topology information, each IEEE1905 device updates its local topology map.
+This map contains information about all known devices in the network, the technologies they are using, the interfaces through which they are connected, and the quality of the paths used to reach them.
+As result of updates in the topology map, IEEE1905 devices will broadcast Topology Notification to all their neighbors, and their neighbors will retrieve the information using Topology Query/Report messages from teh originator of the modification.
+
+6. Periodic Refresh:
+The topology discovery process is continuous, with devices periodically re-broadcasting their presence and updating their topology databases as they receive new information.
+This ensures that the topology information remains current, even as devices join, leave, or move within the network.
+
+7. Split Brain scenario protection.
+The topology graph shall contain no more than one registrar per network based on a tie-breaking policy defined temporary using AL_MAC address last 4 bytes.
+8. Path Performance monitoring.
+Since current IEEE1905 link-metric CMDUs relies strongly on WiFi parameters to calculate the performance of links, as part of the current project but separated from the IEEE1905 standard implementation we will create a simple performance monitoring protocol inspired on the etherate project, to measure quality parameters on the current forwarding path and store it in the topology map, this information will be exposed to the HLE's to make their decision in forwarding path selection:
+| **Metric**       | **How it’s Measured**                                |
+|------------------|------------------------------------------------------|
+| Reachability     | Send poll-stat messages and echo them                |
+| RTT              | Send timestamp – reply receipt                       |
+| Jitter           | Variance in measured RTTs                            |
+| Loss             | Gaps in sequence numbers                             |
+| Throughput       | Bytes sent/received per unit of time                 |
+| Out-of-order     | Detected via non-monotonic sequence numbers          |
+
+9. 1905 Layer Security Capability.
+According to EasyMesh specification chapters 13.1, 17.2.67, 17.2.68, 17.2.69, we will provide encryption and message integrity service for the TLV's.
+
+---
 
 ### Protection against split brain scenario
+
+The protection against split brain scenraio will work as follow:
+    1. When the AL_SAP receives a registration request from the HLE to assume the controller role, the IEEE1905 entity shall verify whether a registrar is already present in the network.
+    2. If no registrar is detected, the HLE shall assume the registrar role. In this case, AL_SAP shall:
+        2.1 Accept incoming ServiceRequest SDUs containing AP_Autoconfig_Search messages.
+        2.2 Transmit outgoing SDUs containing AP_Autoconfig_Response messages.
+        2.3 A topology Notification will be generated and as part of the Toplogy convergence flow.
+    3. If a registrar is detected, the AL_SAP shall perform the tie-breaking procedure:
+        3.1 If the local entity wins, AL_SAP shall accept incoming ServiceRequest SDUs containing AP_Autoconfig_Search messages and transmit outgoing CMDUs containing AP_Autoconfig_Response messages.
+        3.2 If the remote entity wins, AL_SAP shall filter all AP_Autoconfig SDUs.
+        3.3 In case the topology map changes we will proceed as in point 2.3 to propagate the new role.
+    4. If the current registrar becomes unavailable, as determined through topology convergence flow, a new registrar shall be selected as part of the network convergence process, following steps 1 through 3.
+    5. If a new registrar is detected through topology-discovery-triggered convergence, registrar selection shall again be performed as part of the network convergence process, following steps 1 through 3.
+    6. When the AL_SAP receives a registration request from the HLE to assume the agent role, the IEEE1905 will propagate it as part of the topology convergence flow.
 
 ---
 
