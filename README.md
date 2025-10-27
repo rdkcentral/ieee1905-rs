@@ -192,7 +192,7 @@ IEEE1905 has been specified to work in multiple topologies but it is specially u
 
         As part of the topology graph construction process, the IEEE1905 agent shall inspect the AP Autoconfig Search CMDU and AP Autoconfig Response CMDU delivered to the EM-HLE in order to identify and record the AL_MAC address of the registrar in the topology graph.
 
-        The IEEE1905 entity shall not participate in the registrar selection process. However, the topology graph shall contain no more than one registrar per network.
+        The topology graph shall contain no more than one registrar per network based on a tie-breaking policy defined temporary using AL_MAC address last 4 bytes.
         Registrar management shall follow the procedure below:
 
         1. When the AL_SAP receives a registration request from the HLE to assume the controller role, the IEEE1905 entity shall verify whether a registrar is already present in the network.
@@ -203,14 +203,21 @@ IEEE1905 has been specified to work in multiple topologies but it is specially u
 
             2.2 Transmit outgoing SDUs containing AP_Autoconfig_Response messages.
 
+            2.3 A topology Notification will be generated and as part of the Toplogy convergence flow we will include in the Toplogy Response the Supported Service TLV (0x80).
+
         3. If a registrar is detected, the AL_SAP shall perform the tie-breaking procedure:
+
             3.1 If the local entity wins, AL_SAP shall accept incoming ServiceRequest SDUs containing AP_Autoconfig_Search messages and transmit outgoing CMDUs containing AP_Autoconfig_Response messages.
 
             3.2 If the remote entity wins, AL_SAP shall filter all AP_Autoconfig SDUs.
 
+            3.3 In case the topology map changes we will proceed as in point 2.3 to propagate the new role.
+
         4. If the current registrar becomes unavailable, as determined through topology-notification-triggered convergence, a new registrar shall be selected as part of the network convergence process, following steps 1 through 3.
 
         5. If a new registrar is detected through topology-discovery-triggered convergence, registrar selection shall again be performed as part of the network convergence process, following steps 1 through 3.
+
+        6. When the AL_SAP receives a registration request from the HLE to assume the agent role, the IEEE1905 will propagate it as part of the topology convergence flow, including the role of the node in the topology reponses into the Supported Service TLV (0x80).
 
     8. Path Performance monitoring.
 
