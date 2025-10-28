@@ -308,7 +308,7 @@ impl CMDUHandler {
                 registry_role: None,
             };
 
-            let event = topology_db
+            let result = topology_db
                 .update_ieee1905_topology(
                     device_data,
                     UpdateType::DiscoveryReceived,
@@ -324,7 +324,7 @@ impl CMDUHandler {
             );
 
             // Now react to the event
-            match event {
+            match result.transmission_event {
                 TransmissionEvent::SendTopologyQuery(destination_mac) => {
                     let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
 
@@ -450,7 +450,7 @@ impl CMDUHandler {
         };
 
         let remote_al_mac = device_data.al_mac;
-        let event = topology_db
+        let result = topology_db
             .update_ieee1905_topology(
                 device_data,
                 UpdateType::QueryReceived,
@@ -462,7 +462,7 @@ impl CMDUHandler {
 
         debug!("Topology Database updated: AL_MAC={remote_al_mac} set to QueryReceived");
 
-        match event {
+        match result.transmission_event {
             TransmissionEvent::SendTopologyResponse(destination_mac) => {
                 debug!(
                     remote = %remote_al_mac,
@@ -490,7 +490,7 @@ impl CMDUHandler {
             _ => {}
         };
 
-        true
+        !result.converged // don't consume message if we have converged
     }
 
     /// Handles and logs TLVs for Topology Response.
@@ -665,7 +665,7 @@ impl CMDUHandler {
             registry_role: None,
         };
 
-        let event = topology_db
+        let result = topology_db
             .update_ieee1905_topology(
                 updated_device_data,
                 UpdateType::ResponseReceived,
@@ -681,7 +681,7 @@ impl CMDUHandler {
             message_id
         );
 
-        match event {
+        match result.transmission_event {
             TransmissionEvent::SendTopologyNotification(_destination_mac) => {
                 tracing::debug!(
                     al_mac = %remote_al_mac_address,
@@ -708,7 +708,7 @@ impl CMDUHandler {
             _ => {}
         };
 
-        true
+        !result.converged // don't consume message if we have converged
     }
 
     /// Handles and logs TLVs from the CMDU payload for Topology Notification.
@@ -801,7 +801,7 @@ impl CMDUHandler {
             registry_role: None,
         };
 
-        let event = topology_db
+        let result = topology_db
             .update_ieee1905_topology(
                 received_device_data,
                 UpdateType::NotificationReceived,
@@ -816,7 +816,7 @@ impl CMDUHandler {
             remote_al_mac_address
         );
 
-        match event {
+        match result.transmission_event {
             TransmissionEvent::SendTopologyQuery(dest_mac) => {
                 let forwarding_interface = topology_db.get_forwarding_interface_mac().await;
 
@@ -838,8 +838,9 @@ impl CMDUHandler {
             }
         };
 
-        true
+        !result.converged // don't consume message if we have converged
     }
+
     /// Handles APAutoconfigSearchCMDU
     async fn handle_ap_auto_config_search(&self, tlvs: &[TLV], message_id: u16) -> bool {
         tracing::debug!(
