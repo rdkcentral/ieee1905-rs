@@ -490,7 +490,10 @@ impl CMDUHandler {
             _ => {}
         };
 
-        true
+        // don't consume message if we have converged
+        topology_db.get_device(remote_al_mac).await
+            .map(|e| !e.metadata.has_converged())
+            .unwrap_or(false)
     }
 
     /// Handles and logs TLVs for Topology Response.
@@ -708,7 +711,10 @@ impl CMDUHandler {
             _ => {}
         };
 
-        true
+        // don't consume message if we have converged
+        topology_db.get_device(remote_al_mac_address).await
+            .map(|e| !e.metadata.has_converged())
+            .unwrap_or(false)
     }
 
     /// Handles and logs TLVs from the CMDU payload for Topology Notification.
@@ -838,8 +844,12 @@ impl CMDUHandler {
             }
         };
 
-        true
+        // don't consume message if we have converged
+        topology_db.get_device(remote_al_mac_address).await
+            .map(|e| !e.metadata.has_converged())
+            .unwrap_or(false)
     }
+
     /// Handles APAutoconfigSearchCMDU
     async fn handle_ap_auto_config_search(&self, tlvs: &[TLV], message_id: u16) -> bool {
         tracing::debug!(

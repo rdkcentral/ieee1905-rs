@@ -213,6 +213,11 @@ impl Ieee1905NodeInfo {
 
         self.last_seen = Instant::now();
     }
+
+    pub fn has_converged(&self) -> bool {
+        self.node_state_local == Some(StateLocal::ConvergedLocal)
+            && self.node_state_remote == Some(StateRemote::ConvergedRemote)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
