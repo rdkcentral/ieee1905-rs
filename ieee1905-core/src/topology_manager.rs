@@ -77,6 +77,11 @@ pub enum UpdateType {
     AutoConfigResponse,
 }
 
+pub struct UpdateTopologyResult {
+    pub converged: bool,
+    pub transmission_event: TransmissionEvent,
+}
+
 pub enum TransmissionEvent {
     SendTopologyQuery(MacAddr),
     SendTopologyResponse(MacAddr),
@@ -524,16 +529,18 @@ impl TopologyDatabase {
         msg_id: Option<u16>,
         lldp_neighbor: Option<PortId>,
         device_vendor: Option<Ieee1905DeviceVendor>,
-    ) -> TransmissionEvent {
+    ) -> UpdateTopologyResult {
         let al_mac = device_data.al_mac;
-        let event;
+        let converged;
+        let transmission_event;
+
         //TODO: use new update types.
         tracing::debug!("WAITING for write lock");
         {
             let mut nodes = self.nodes.write().await;
             tracing::debug!("ACQUIRED write lock");
 
-            event = match nodes.get_mut(&al_mac) {
+            match nodes.get_mut(&al_mac) {
                 Some(node) => {
                     tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Updating existing node");
 
@@ -541,7 +548,7 @@ impl TopologyDatabase {
                         node.metadata.device_vendor = device_vendor;
                     }
 
-                    match operation {
+                    transmission_event = match operation {
                         UpdateType::DiscoveryReceived => {
                             let local_state = node.metadata.node_state_local;
                             let remote_state = node.metadata.node_state_remote;
@@ -703,7 +710,9 @@ impl TopologyDatabase {
                             tracing::warn!(al_mac = ?al_mac, operation = ?operation, "Unhandled update for existing node");
                             TransmissionEvent::None
                         }
-                    }
+                    };
+
+                    converged = node.metadata.has_converged();
                 }
                 None => {
                     tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Node not found — inserting");
@@ -721,33 +730,36 @@ impl TopologyDatabase {
                         device_data,
                     };
 
-                    match operation {
+                    converged = false;
+                    transmission_event = match operation {
                         UpdateType::DiscoveryReceived => {
                             new_node.metadata.node_state_local = Some(StateLocal::Idle);
                             new_node.metadata.node_state_remote = Some(StateRemote::Idle);
                             nodes.insert(al_mac, new_node);
                             tracing::debug!(al_mac = ?al_mac, "Inserted node from Discovery");
-                            return TransmissionEvent::SendTopologyQuery(al_mac);
+                            TransmissionEvent::SendTopologyQuery(al_mac)
                         }
                         UpdateType::QueryReceived => {
                             new_node.metadata.node_state_local = Some(StateLocal::Idle);
                             new_node.metadata.node_state_remote = Some(StateRemote::ConvergingRemote(Instant::now()));
                             nodes.insert(al_mac, new_node);
                             tracing::debug!(al_mac = ?al_mac, "Inserted node from query");
-                            return TransmissionEvent::SendTopologyResponse(al_mac);
+                            TransmissionEvent::SendTopologyResponse(al_mac)
                         }
                         _ => {
                             tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
+                            TransmissionEvent::None
                         }
-                    }
-
-                    TransmissionEvent::None
+                    };
                 }
             };
         }
 
-        tracing::debug!("Lock released — function continues safely");
-        event
+        debug!("Lock released — function continues safely");
+        UpdateTopologyResult {
+            converged,
+            transmission_event,
+        }
     }
     pub async fn start_topology_cli(self: Arc<Self>) -> io::Result<()> {
         enable_raw_mode()?;
