@@ -592,19 +592,26 @@ impl TopologyDatabase {
                             }
                         }
                         UpdateType::QueryReceived => {
-                            if let Some(StateRemote::Idle) = node.metadata.node_state_remote {
-                                node.metadata.update(
-                                    Some(operation),
-                                    msg_id,
-                                    None,
-                                    None,
-                                    Some(StateRemote::ConvergingRemote(Instant::now())),
-                                );
-                                tracing::debug!("Event: Send Topology Response");
-                                TransmissionEvent::SendTopologyResponse(al_mac)
-                            } else {
-                                tracing::debug!("Conditions not met: No transmission needed after QueryReceived");
-                                TransmissionEvent::None
+                            match node.metadata.node_state_remote {
+                                Some(StateRemote::Idle) => {
+                                    node.metadata.update(
+                                        Some(operation),
+                                        msg_id,
+                                        None,
+                                        None,
+                                        Some(StateRemote::ConvergingRemote(Instant::now())),
+                                    );
+                                    debug!("Event: Send Topology Response From Idle");
+                                    TransmissionEvent::SendTopologyResponse(al_mac)
+                                }
+                                Some(StateRemote::ConvergedRemote) => {
+                                    debug!("Event: Send Topology Response From Converged");
+                                    TransmissionEvent::SendTopologyResponse(al_mac)
+                                }
+                                _ => {
+                                    debug!("Conditions not met: No transmission needed after QueryReceived");
+                                    TransmissionEvent::None
+                                }
                             }
                         }
 
