@@ -247,6 +247,7 @@ pub async fn cmdu_topology_response_transmission(
     local_al_mac_address: MacAddr,
     remote_al_mac_address: MacAddr,
     interface_mac_address: MacAddr,
+    message_id: u16,
 ) {
     task::spawn(async move {
         //let message_id = message_id_generator.next_id();
@@ -266,7 +267,7 @@ pub async fn cmdu_topology_response_transmission(
             return;
         };
 
-        let message_id: u16 = node.metadata.message_id.unwrap_or(0);
+        // let message_id: u16 = node.metadata.message_id.unwrap_or(0);
 
         // Retrieve Forwarding MAC Address from Database
         let forwarding_mac_address = match node.device_data.destination_mac {

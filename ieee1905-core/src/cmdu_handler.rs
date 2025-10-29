@@ -478,6 +478,7 @@ impl CMDUHandler {
                     self.local_al_mac,
                     destination_mac,
                     forwarding_interface_mac,
+                    message_id,
                 )
                 .await;
             }
@@ -612,30 +613,30 @@ impl CMDUHandler {
         let topology_db =
             TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
 
-        // let expected_id = topology_db
-        //     .get_device(remote_al_mac_address)
-        //     .await
-        //     .and_then(|n| n.metadata.message_id);
-        //
-        // match expected_id {
-        //     Some(exp) if exp == message_id => {}
-        //     Some(exp) => {
-        //         tracing::warn!(
-        //             expected = exp,
-        //             got = message_id,
-        //             al_mac = %remote_al_mac_address,
-        //             "Topology Response message_id mismatch → fallback to SDU"
-        //         );
-        //         return false;
-        //     }
-        //     None => {
-        //         tracing::warn!(
-        //             al_mac = %remote_al_mac_address,
-        //             "No in-flight query for this node (missing expected message_id) → fallback to SDU"
-        //         );
-        //         return false;
-        //     }
-        // }
+        let expected_id = topology_db
+            .get_device(remote_al_mac_address)
+            .await
+            .and_then(|n| n.metadata.message_id);
+
+        match expected_id {
+            Some(exp) if exp == message_id => {}
+            Some(exp) => {
+                tracing::warn!(
+                    expected = exp,
+                    got = message_id,
+                    al_mac = %remote_al_mac_address,
+                    "Topology Response message_id mismatch → fallback to SDU"
+                );
+                return false;
+            }
+            None => {
+                tracing::warn!(
+                    al_mac = %remote_al_mac_address,
+                    "No in-flight query for this node (missing expected message_id) → fallback to SDU"
+                );
+                return false;
+            }
+        }
 
         for interface in interfaces.iter_mut() {
             interface.ieee1905_neighbors = ieee_neighbors_map.remove(&interface.mac);
