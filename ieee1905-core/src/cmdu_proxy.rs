@@ -73,7 +73,7 @@ pub async fn cmdu_topology_discovery_transmission_worker(
 
         // Construct CMDU
         let cmdu_topology_discovery = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::TopologyDiscovery.to_u16(),
             message_id,
@@ -184,7 +184,7 @@ pub async fn cmdu_topology_query_transmission(
 
         // Construct CMDU
         let cmdu_topology_query = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::TopologyQuery.to_u16(),
             message_id,
@@ -441,7 +441,7 @@ pub async fn cmdu_topology_response_transmission(
 
         // Construct the CMDU
         let cmdu_topology_response = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::TopologyResponse.to_u16(),
             message_id,
@@ -553,7 +553,7 @@ pub async fn cmdu_topology_notification_transmission(
 
         // Construct the Topology Notification CMDU
         let cmdu_topology_notification = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::TopologyNotification.to_u16(),
             message_id,
