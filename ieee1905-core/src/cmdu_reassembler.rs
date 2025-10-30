@@ -129,6 +129,7 @@ pub mod tests {
     use crate::cmdu::TLV;
     use crate::cmdu_codec::tests::make_dummy_cmdu;
     use tokio::time::sleep;
+    use crate::cmdu_codec::MessageVersion;
     use super::*;
 
     // Create CMDU reassembler instance but don't push any fragments to it
@@ -155,7 +156,7 @@ pub mod tests {
 
         // Create only one CMDU
         let cmdu = CMDU {
-            message_version: 0,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: 0x04,
             message_id: 0x1122,
@@ -199,7 +200,7 @@ pub mod tests {
         // Create chain of 2 CMDUs. Both CMDUs have no last fragment flag set to simulate
         // lost of fragment 3
         let cmdu1 = CMDU {
-            message_version: 0,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: 0x04,
             message_id: 0x1122,
@@ -209,7 +210,7 @@ pub mod tests {
         };
 
         let cmdu2 = CMDU {
-            message_version: 0,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: 0x04,
             message_id: 0x1122,

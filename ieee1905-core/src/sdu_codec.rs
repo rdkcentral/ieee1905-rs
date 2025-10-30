@@ -186,7 +186,7 @@ mod tests {
 
         // Prepare CMDU with only EndOfMessage TLV
         let cmdu_topology_query = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::TopologyQuery.to_u16(),
             message_id: 789,
@@ -251,7 +251,7 @@ mod tests {
 
         // Prepare CMDU
         let cmdu = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::TopologyQuery.to_u16(),
             message_id: 789,

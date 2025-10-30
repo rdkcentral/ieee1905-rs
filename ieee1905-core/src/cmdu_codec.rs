@@ -1147,7 +1147,7 @@ pub mod tests {
         }
 
         CMDU {
-            message_version: 0x01,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0x00,
             message_type: 0x0001,
             message_id: 0x1234,
@@ -1202,7 +1202,7 @@ pub mod tests {
         let cmdu = make_dummy_cmdu(vec![100]);
 
         // Expect success getting message version of CMDU
-        assert_eq!(cmdu.get_message_version(), MessageVersion::from_u8(1));
+        assert_eq!(cmdu.get_message_version(), Some(MessageVersion::Version2013));
     }
 
     // Verify the correctness of conversion to u16 from CMDUType
@@ -1519,7 +1519,7 @@ pub mod tests {
 
         // Make fragmented CMDU with bit 7 unset in flags field
         let cmdu = CMDU {
-            message_version: 0x01,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0x00,
             message_type: CMDUType::Unknown(0x08).to_u16(),
             message_id: 0x1234,
@@ -1634,7 +1634,7 @@ pub mod tests {
 
         // Construct the CMDU
         let cmdu_topology_discovery = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::TopologyDiscovery.to_u16(),
             message_id: 123,
@@ -1679,7 +1679,7 @@ pub mod tests {
         serialized_payload.extend(end_of_message_tlv.clone().serialize());
         // Construct the CMDU
         let cmdu_topology_discovery = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::TopologyDiscovery.to_u16(),
             message_id: 123,
@@ -1717,7 +1717,7 @@ pub mod tests {
         serialized_payload.extend(end_of_message_tlv.clone().serialize());
 
         let cmdu_topology_notification = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::TopologyNotification.to_u16(),
             message_id: 456,
@@ -1742,7 +1742,7 @@ pub mod tests {
         };
 
         let cmdu_topology_query = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::TopologyQuery.to_u16(),
             message_id: 789,
@@ -1810,7 +1810,7 @@ pub mod tests {
         serialized_payload.extend(end_of_message_tlv.clone().serialize());
 
         let cmdu_topology_response = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::TopologyResponse.to_u16(),
             message_id: 123,
@@ -1849,7 +1849,7 @@ pub mod tests {
 
         // we build the CMDU
         let cmdu_autoconfig_search = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::ApAutoConfigSearch.to_u16(),
             message_id: 42,
@@ -1889,7 +1889,7 @@ pub mod tests {
         serialized_payload.extend(end_of_message_tlv.clone().serialize());
         // we build ApAutoConfigResponse
         let cmdu_autoconfig_response = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::ApAutoConfigResponse.to_u16(),
             message_id: 99,
@@ -1925,7 +1925,7 @@ pub mod tests {
         serialized_payload.extend(searched_role_tlv.clone().serialize());
         serialized_payload.extend(end_of_message_tlv.clone().serialize());
         let cmdu = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::ApAutoConfigSearch.to_u16(),
             message_id: 43,
@@ -2211,7 +2211,7 @@ pub mod tests {
         serialized_payload.extend(searched_role_tlv.clone().serialize());
         serialized_payload.extend(end_of_message_tlv.clone().serialize());
         let cmdu = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::ApAutoConfigSearch.to_u16(),
             message_id: 43,
@@ -2287,7 +2287,7 @@ pub mod tests {
 
         // Create CMDU of unknown type
         let cmdu_unknown = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: 0xFFFF, // Unknown CMDUType
             message_id: 999,
@@ -2606,7 +2606,7 @@ pub mod tests {
         };
 
         let cmdu_topology_query = CMDU {
-            message_version: 1,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: CMDUType::TopologyQuery.to_u16(),
             message_id: 789,
