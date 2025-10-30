@@ -592,26 +592,27 @@ impl TopologyDatabase {
                             }
                         }
                         UpdateType::QueryReceived => {
-                            match node.metadata.node_state_remote {
-                                Some(StateRemote::Idle) => {
-                                    node.metadata.update(
-                                        Some(operation),
-                                        msg_id,
-                                        None,
-                                        None,
-                                        Some(StateRemote::ConvergingRemote(Instant::now())),
-                                    );
-                                    debug!("Event: Send Topology Response From Idle");
-                                    TransmissionEvent::SendTopologyResponse(al_mac)
-                                }
-                                Some(StateRemote::ConvergedRemote) => {
-                                    debug!("Event: Send Topology Response From Converged");
-                                    TransmissionEvent::SendTopologyResponse(al_mac)
-                                }
-                                _ => {
-                                    debug!("Conditions not met: No transmission needed after QueryReceived");
-                                    TransmissionEvent::None
-                                }
+                            let local_state = node.metadata.node_state_local;
+                            let remote_state = node.metadata.node_state_remote;
+
+                            if matches!((local_state, remote_state), (Some(_), Some(_))) {
+                                // move to ConvergingRemote is only allowed from Idle
+                                let new_state = match node.metadata.node_state_remote == Some(StateRemote::Idle) {
+                                    true => Some(StateRemote::ConvergingRemote(Instant::now())),
+                                    false => None,
+                                };
+                                node.metadata.update(
+                                    Some(operation),
+                                    msg_id,
+                                    None,
+                                    None,
+                                    new_state,
+                                );
+                                debug!("Event: Send Topology Response");
+                                TransmissionEvent::SendTopologyResponse(al_mac)
+                            } else {
+                                debug!("Conditions not met: No transmission needed after QueryReceived");
+                                TransmissionEvent::None
                             }
                         }
 
