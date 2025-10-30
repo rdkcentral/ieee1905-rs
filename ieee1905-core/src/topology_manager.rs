@@ -31,7 +31,7 @@ use tokio::{
     task::{spawn, yield_now},
     time::{interval, Duration, Instant},
 };
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use tui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -162,6 +162,7 @@ pub enum Ieee1905DeviceVendor {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ieee1905NodeInfo {
+    pub al_mac: MacAddr,
     pub last_update: UpdateType,
     pub last_seen: Instant,
     pub message_id: Option<u16>,
@@ -174,6 +175,7 @@ pub struct Ieee1905NodeInfo {
 impl Ieee1905NodeInfo {
     /// **Create a new `Ieee1905NodeInfo` instance**
     pub fn new(
+        al_mac: MacAddr,
         last_update: UpdateType,
         message_id: Option<u16>,
         lldp_neighbor: Option<PortId>,
@@ -181,6 +183,7 @@ impl Ieee1905NodeInfo {
         node_state_remote: Option<StateRemote>,
     ) -> Self {
         Self {
+            al_mac,
             last_update,
             last_seen: Instant::now(), // Set current time at creation
             message_id,
@@ -209,11 +212,19 @@ impl Ieee1905NodeInfo {
         if let Some(lldp_neighbor) = new_lldp_neighbor {
             self.lldp_neighbor = Some(lldp_neighbor);
         }
+
         if let Some(local) = new_node_state_local {
-            self.node_state_local = Some(local);
+            if self.node_state_local != Some(local) {
+                self.node_state_local = Some(local);
+                info!("{} local state changed: {:?} -> {local:?}", self.al_mac, self.node_state_local);
+            }
         }
+
         if let Some(remote) = new_node_state_remote {
-            self.node_state_remote = Some(remote);
+            if self.node_state_remote != Some(remote) {
+                self.node_state_remote = Some(remote);
+                info!("{} remote state changed: {:?} -> {remote:?}", self.al_mac, self.node_state_local);
+            }
         }
 
         self.last_seen = Instant::now();
@@ -568,6 +579,7 @@ impl TopologyDatabase {
                         UpdateType::NotificationReceived => {
                             let local_state = node.metadata.node_state_local;
                             let remote_state = node.metadata.node_state_remote;
+
                             if matches!(
                                 (local_state, remote_state),
                                 (Some(StateLocal::ConvergedLocal), Some(_))
@@ -584,17 +596,22 @@ impl TopologyDatabase {
                             let remote_state = node.metadata.node_state_remote;
 
                             if matches!((local_state, remote_state), (Some(_), Some(_))) {
+                                // move to ConvergingRemote is only allowed from Idle
+                                let new_state = match remote_state != Some(StateRemote::ConvergedRemote) {
+                                    true => Some(StateRemote::ConvergingRemote(Instant::now())),
+                                    false => None,
+                                };
                                 node.metadata.update(
                                     Some(operation),
                                     msg_id,
                                     None,
                                     None,
-                                    Some(StateRemote::ConvergingRemote(Instant::now())),
+                                    new_state,
                                 );
-                                tracing::debug!("Event: Send Topology Response");
+                                debug!("Event: Send Topology Response");
                                 TransmissionEvent::SendTopologyResponse(al_mac)
                             } else {
-                                tracing::debug!("Conditions not met: No transmission needed after QueryReceived");
+                                debug!("Conditions not met: No transmission needed after QueryReceived");
                                 TransmissionEvent::None
                             }
                         }
@@ -719,6 +736,7 @@ impl TopologyDatabase {
 
                     let mut new_node = Ieee1905Node {
                         metadata: Ieee1905NodeInfo {
+                            al_mac: device_data.al_mac,
                             last_update: operation,
                             last_seen: Instant::now(),
                             message_id: msg_id,

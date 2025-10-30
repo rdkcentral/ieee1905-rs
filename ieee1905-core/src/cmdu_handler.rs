@@ -478,6 +478,7 @@ impl CMDUHandler {
                     self.local_al_mac,
                     destination_mac,
                     forwarding_interface_mac,
+                    message_id,
                 )
                 .await;
             }
