@@ -1081,7 +1081,7 @@ impl CMDUHandler {
                     is_last_fragment: 0,
                     fragment_id: 0,
                     payload: CMDU {
-                        message_version: 0x01,
+                        message_version: MessageVersion::Version2013.to_u8(),
                         reserved: 0x00,
                         message_type,
                         message_id,
