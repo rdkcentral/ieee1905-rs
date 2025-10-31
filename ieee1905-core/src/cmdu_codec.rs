@@ -113,6 +113,36 @@ impl MessageVersion {
         self as u8
     }
 }
+///////////////////////////////////////////////////////////////////////////
+//DEFINITION OF MESSAGE VERSION
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MultiApProfile {
+    Profile1,        // 0x01
+    Profile2,        // 0x02
+    Profile3,        // 0x03
+    Reserved(u8),    // 0x04..=0xFF
+}
+impl MultiApProfile {
+    pub fn to_u8(self) -> u8 {
+        match self {
+            MultiApProfile::Profile1   => 0x01,
+            MultiApProfile::Profile2   => 0x02,
+            MultiApProfile::Profile3   => 0x03,
+            MultiApProfile::Reserved(v)=> v,
+        }
+    }
+    pub fn from_u8(v: u8) -> Result<Self, ()> {
+        Ok(match v {
+            0x01 => MultiApProfile::Profile1,
+            0x02 => MultiApProfile::Profile2,
+            0x03 => MultiApProfile::Profile3,
+            0x04..=0xFF => MultiApProfile::Reserved(v),
+            _ => return Err(()), // 0x00 is invalid for Multi-AP Profile
+        })
+    }
+}
 
 ///////////////////////////////////////////////////////////////////////////
 //Comcast selector
@@ -901,6 +931,89 @@ impl SupportedRole {
         vec![self.role]
     }
 }
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssociationState {
+    LeftBss,
+    JoinedBss,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ClientAssociation {
+    pub sta_mac: MacAddr,
+    pub ap_mac: MacAddr,
+    pub association_state: AssociationState,
+}
+
+impl ClientAssociation {
+    pub fn parse(input: &[u8], _input_length: u16) -> IResult<&[u8], Self> {
+        let (input, sta_bytes) = take(6usize)(input)?;
+        let (input, ap_bytes) = take(6usize)(input)?;
+        let (input, assoc_byte) = take(1usize)(input)?;
+
+        let sta_mac = MacAddr::new(
+            sta_bytes[0], sta_bytes[1], sta_bytes[2],
+            sta_bytes[3], sta_bytes[4], sta_bytes[5],
+        );
+        let ap_mac = MacAddr::new(
+            ap_bytes[0], ap_bytes[1], ap_bytes[2],
+            ap_bytes[3], ap_bytes[4], ap_bytes[5],
+        );
+
+        let assoc_bits = assoc_byte[0];
+
+        // Only bit7 may be 1, bits 0–6 must be 0
+        if assoc_bits & 0x7F != 0 {
+            return Err(nom::Err::Failure(Error::new(input, ErrorKind::Verify)));
+        }
+
+        let association_state = if (assoc_bits & 0x80) != 0 {
+            AssociationState::JoinedBss
+        } else {
+            AssociationState::LeftBss
+        };
+
+        Ok((input, Self { sta_mac, ap_mac, association_state }))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(13);
+        buf.extend_from_slice(&self.sta_mac.octets());
+        buf.extend_from_slice(&self.ap_mac.octets());
+
+        // we need to check with a real client bit7 = 1 → joined, bit7 = 0 → left
+        let assoc_byte = match self.association_state {
+            AssociationState::LeftBss => 0x00,
+            AssociationState::JoinedBss => 0x80,
+        };
+
+        buf.push(assoc_byte);
+        buf
+    }
+}
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct MultiApProfileValue {
+    pub profile: MultiApProfile,
+}
+
+impl MultiApProfileValue {
+    pub fn parse(input: &[u8], _input_length: u16) -> IResult<&[u8], Self> {
+        let (rest, bytes) = take(1usize)(input)?;
+        let v = bytes[0];
+
+        match MultiApProfile::from_u8(v) {
+            Ok(profile) => Ok((rest, Self { profile })),
+            Err(_) => Err(nom::Err::Failure(Error::new(rest, ErrorKind::Verify))),
+        }
+    }
+
+    /// Serialize the value to a single byte.
+    pub fn serialize(&self) -> Vec<u8> {
+        vec![self.profile.to_u8()]
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CMDU {
