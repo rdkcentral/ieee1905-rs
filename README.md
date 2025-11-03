@@ -71,6 +71,21 @@ The IEEE1905_AL_SAP will provide the following API abstraction to use the servic
 
 ![ARCH](docs/architecture/fsm_diagram/ieee1905_fsm.jpg)
 
+Input Event                     | Precondition                               | New Local             | New Remote                 | Output event                               |
+|----------------------------|--------------------------------------------|-----------------------|----------------------------|---------------------------------------------|
+| **DiscoveryReceived (node_new)** | —                                          | Idle                  | Idle                       | `SendTopologyQuery(al_mac)`                 |
+| **DiscoveryReceived (Idle)** | Local == Idle                             | (unchanged)           | (unchanged)                | `SendTopologyQuery(al_mac)`                 |
+| **DiscoveryReceived (conv)** | Local == ConvergedLocal                   | (unchanged)           | (unchanged)                | None                                        |
+| **NotificationReceived (conv)**| Local == ConvergedLocal                 | Idle                  | (unchanged)                | `SendTopologyQuery(al_mac)`                 |
+| **NotificationReceived**    | !Local == ConvergedLocal                    | (unchanged)           | (unchanged)                | None               |
+| **QueryReceived (node_new)**     | —                                          | Idle                  | ConvergingRemote(now)      | `SendTopologyResponse(al_mac)`              |
+| **QueryReceived (node_present)** |!Remote == ConvergedLocal             | (unchanged)           | ConvergingRemote(now)\*    | `SendTopologyResponse(al_mac)`              |
+| **QuerySent**               | !Local == ConvergedLocal                    | ConvergingLocal(now)  | (unchanged)                | None                                        |
+| **ResponseReceived**        | Local == ConvergingLocal                | ConvergedLocal        | (unchanged)                | _Maybe_ `SendTopologyNotification(multic)`  |
+| **ResponseSent**            | Remote= ConvergingRemote                  | (unchanged)           | ConvergedRemote            | None                                        |
+
+\* Only if remote wasn’t already `ConvergedRemote`.
+
 ## AL Primitives Call Flow
 
 ### Registration service
