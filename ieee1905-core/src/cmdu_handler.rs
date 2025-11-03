@@ -331,6 +331,7 @@ impl CMDUHandler {
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut end_of_message_found = false;
         let mut device_vendor = Ieee1905DeviceVendor::Unknown;
+        let mut multi_ap_profile = None;
 
         for (index, tlv) in tlvs.iter().enumerate() {
             let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
@@ -373,6 +374,13 @@ impl CMDUHandler {
                         }
                     }
                 }
+                IEEE1905TLVType::MultiApProfile => {
+                    if let Some(value) = tlv.tlv_value.as_ref() {
+                        if let Ok((_, parsed)) = MultiApProfileValue::parse(value, tlv.tlv_length) {
+                            multi_ap_profile = Some(parsed);
+                        }
+                    }
+                }
                 IEEE1905TLVType::EndOfMessage => {
                     end_of_message_found = true;
                     tracing::trace!("End of CMDU Message found");
@@ -384,6 +392,11 @@ impl CMDUHandler {
         if !end_of_message_found {
             tracing::error!("Topology Query CMDU missing EndOfMessage TLV → discarding message.");
             return true;
+        }
+
+        if multi_ap_profile.is_some() {
+            warn!("Topology Query has Comcast MultiApProfile TLV → fallback to SDU.");
+            return false;
         }
 
         info!("Topology Query received from REMOTE_PORT_MAC={source_mac}");
@@ -467,6 +480,7 @@ impl CMDUHandler {
         let mut ieee_neighbors_map: HashMap<MacAddr, Vec<IEEE1905Neighbor>> = HashMap::new();
         let mut non_ieee_neighbors_map: HashMap<MacAddr, Vec<MacAddr>> = HashMap::new();
         let mut device_bridging_capability = None;
+        let mut multi_ap_profile = None;
         let mut end_of_message_found = false;
         let mut device_vendor = Ieee1905DeviceVendor::Unknown;
 
@@ -545,6 +559,13 @@ impl CMDUHandler {
                         }
                     }
                 }
+                IEEE1905TLVType::MultiApProfile => {
+                    if let Some(value) = tlv.tlv_value.as_ref() {
+                        if let Ok((_, parsed)) = MultiApProfileValue::parse(value, tlv.tlv_length) {
+                            multi_ap_profile = Some(parsed);
+                        }
+                    }
+                }
                 IEEE1905TLVType::EndOfMessage => {
                     end_of_message_found = true;
                 }
@@ -555,6 +576,11 @@ impl CMDUHandler {
         if !end_of_message_found {
             tracing::warn!("Missing EndOfMessage TLV. Discarding Topology Response.");
             return true;
+        }
+
+        if multi_ap_profile.is_some() {
+            warn!("Topology Response has Comcast MultiApProfile TLV → fallback to SDU.");
+            return false;
         }
 
         let Some(remote_al_mac_address) = remote_al_mac else {

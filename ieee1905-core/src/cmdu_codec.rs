@@ -164,6 +164,7 @@ pub enum IEEE1905TLVType {
     VendorSpecificInfo,
     SearchedRole,
     SupportedRole,
+    MultiApProfile,
     Unknown(u8), // To handle unknown or unsupported TLV types
 }
 
@@ -181,6 +182,7 @@ impl IEEE1905TLVType {
             0x0b => IEEE1905TLVType::VendorSpecificInfo,
             0x0d => IEEE1905TLVType::SearchedRole,
             0x0f => IEEE1905TLVType::SupportedRole,
+            0xb3 => IEEE1905TLVType::MultiApProfile,
             _ => IEEE1905TLVType::Unknown(value), // For unrecognized types
         }
     }
@@ -198,6 +200,7 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::VendorSpecificInfo => 0x0b,
             IEEE1905TLVType::SearchedRole => 0x0d,
             IEEE1905TLVType::SupportedRole => 0x0f,
+            IEEE1905TLVType::MultiApProfile => 0xb3,
             IEEE1905TLVType::Unknown(value) => value, // Return the unknown value as-is
         }
     }
@@ -1378,6 +1381,10 @@ pub mod tests {
             IEEE1905TLVType::from_u8(0x0f),
             IEEE1905TLVType::SupportedRole
         );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0xb3),
+            IEEE1905TLVType::MultiApProfile
+        );
     }
 
     // Verify the correctness of conversion from IEEE1905TLVType enum to u8
@@ -1395,6 +1402,7 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::VendorSpecificInfo.to_u8(), 0x0b);
         assert_eq!(IEEE1905TLVType::SearchedRole.to_u8(), 0x0d);
         assert_eq!(IEEE1905TLVType::SupportedRole.to_u8(), 0x0f);
+        assert_eq!(IEEE1905TLVType::MultiApProfile.to_u8(), 0xb3);
     }
 
     // Verify changing version by using set_message_version function
