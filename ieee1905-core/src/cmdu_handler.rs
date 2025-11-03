@@ -683,6 +683,7 @@ impl CMDUHandler {
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut end_of_message_found = false;
         let mut device_vendor = Ieee1905DeviceVendor::Unknown;
+        let mut client_association = None;
 
         for (index, tlv) in tlvs.iter().enumerate() {
             let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
@@ -725,6 +726,13 @@ impl CMDUHandler {
                         }
                     }
                 }
+                IEEE1905TLVType::ClientAssociation => {
+                    if let Some(value) = tlv.tlv_value.as_ref() {
+                        if let Ok((_, parsed)) = ClientAssociation::parse(value, tlv.tlv_length) {
+                            client_association = Some(parsed);
+                        }
+                    }
+                }
                 IEEE1905TLVType::EndOfMessage => {
                     end_of_message_found = true;
                     tracing::debug!("End of CMDU Message found");
@@ -734,21 +742,17 @@ impl CMDUHandler {
         }
 
         if !end_of_message_found {
-            tracing::error!(
-                "Topology Notification CMDU missing EndOfMessage TLV → discarding message."
-            );
+            error!("Topology Notification CMDU missing EndOfMessage TLV → discarding message.");
             return true;
         }
 
-        if device_vendor != Ieee1905DeviceVendor::Rdk {
-            warn!("Topology Notification missing required Comcast VendorSpecific TLV → fallback to SDU.");
+        if client_association.is_some() {
+            warn!("Topology Notification has Comcast ClientAssociation TLV → fallback to SDU.");
             return false;
         }
 
         let Some(remote_al_mac_address) = remote_al_mac else {
-            tracing::warn!(
-                "Topology Notification has Comcast VendorSpecific TLV but missing AL MAC → fallback to SDU."
-            );
+            warn!("Topology Notification has Comcast VendorSpecific TLV but missing AL MAC → fallback to SDU.");
             return false;
         };
 
