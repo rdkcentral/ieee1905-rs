@@ -184,49 +184,13 @@ impl CMDUHandler {
                     }
                 }
             }
-            CMDUType::ApAutoConfigSearch => {
-                debug!("Handling ApAutoConfigSearch CMDU");
-                let allowed = self.handle_ap_auto_config_search(&tlvs, message_id).await;
-                if allowed {
-                    if let Err(e) = self
-                        .handle_sdu_from_cmdu_reception(
-                            &tlvs,
-                            message_id,
-                            cmdu.message_type,
-                            source_mac,
-                            destination_mac,
-                        )
-                        .await
-                    {
-                        error!("Error forwarding SDU from ApAutoConfigSearch (msg_id={message_id}): {e:?}");
-                    }
-                }
-            }
-            CMDUType::ApAutoConfigResponse => {
-                debug!("Handling ApAutoConfigResponse CMDU");
-                let allowed = self.handle_ap_auto_config_response(&tlvs, message_id, source_mac).await;
-                if allowed {
-                    if let Err(e) = self
-                        .handle_sdu_from_cmdu_reception(
-                            &tlvs,
-                            message_id,
-                            cmdu.message_type,
-                            source_mac,
-                            destination_mac,
-                        )
-                        .await
-                    {
-                        error!("Error forwarding SDU from ApAutoConfigResponse (msg_id={message_id}): {e:?}");
-                    }
-                }
-            }
             CMDUType::LinkMetricQuery => {
                 tracing::info!("Handling Link Metric Query CMDU");
             }
             CMDUType::LinkMetricResponse => {
                 tracing::info!("Handling Link Metric Response CMDU");
             }
-            CMDUType::Unknown(_) => {
+            _ => {
                 if let Err(e) = self
                     .handle_sdu_from_cmdu_reception(
                         &tlvs,
@@ -237,11 +201,7 @@ impl CMDUHandler {
                     )
                     .await
                 {
-                    tracing::error!(
-                        "Error forwarding SDU from CMDU (msg_id={}): {:?}",
-                        message_id,
-                        e
-                    );
+                    error!("Error forwarding SDU from CMDU (msg_id={message_id}): {e:?}");
                 }
             }
         }
@@ -840,170 +800,6 @@ impl CMDUHandler {
         };
 
         !result.converged // don't consume message if we have converged
-    }
-
-    /// Handles APAutoconfigSearchCMDU
-    async fn handle_ap_auto_config_search(&self, tlvs: &[TLV], message_id: u16) -> bool {
-        tracing::debug!(
-            "Handling Ap Auto Config Response CMDU with Message ID: {} from interface {}",
-            message_id,
-            self.interface_name
-        );
-
-        let mut remote_al_mac: Option<MacAddr> = None;
-        let mut end_of_message_found = false;
-        let mut ap_auto_config_search_found = false;
-        let mut registry_role: Option<Role> = None;
-
-        for tlv in tlvs {
-            match IEEE1905TLVType::from_u8(tlv.tlv_type) {
-                IEEE1905TLVType::AlMacAddress => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
-                            remote_al_mac = Some(parsed.al_mac_address);
-                        }
-                    }
-                }
-                IEEE1905TLVType::SearchedRole => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, _parsed)) = SearchedRole::parse(value, tlv.tlv_length) {
-                            registry_role = Some(Role::Enrollee);
-                            ap_auto_config_search_found = true;
-                        }
-                    }
-                }
-                IEEE1905TLVType::EndOfMessage => {
-                    end_of_message_found = true;
-                }
-                _ => {}
-            }
-        }
-
-        if !end_of_message_found {
-            tracing::warn!("Missing EndOfMessage TLV. Ignoring.");
-            return true;
-        }
-        if !ap_auto_config_search_found {
-            tracing::warn!("Missing Ap Auto Config search TLV. Ignoring.");
-            return true;
-        }
-
-        if let (Some(remote_al_mac_address), Some(reg_role)) = (remote_al_mac, registry_role) {
-            let topology_db =
-                TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
-                    .await;
-
-            let updated_device_data = Ieee1905DeviceData {
-                al_mac: remote_al_mac_address,
-                destination_mac: None,
-                local_interface_list: None,
-                registry_role: Some(reg_role),
-            };
-
-            let _event = {
-                topology_db
-                    .update_ieee1905_topology(
-                        updated_device_data,
-                        UpdateType::AutoConfigSearch,
-                        Some(message_id),
-                        None,
-                        None,
-                    )
-                    .await
-            };
-
-            debug!(
-                "Topology Database updated: AL_MAC={} ROLE={:?}",
-                remote_al_mac_address, reg_role
-            );
-        } else {
-            tracing::warn!(
-                "AP auto config  search CMDU processing failed: AL_MAC or Role not found in TLVs"
-            );
-        }
-        true
-    }
-
-    /// Handle APAutconfigResposne CMDU
-    async fn handle_ap_auto_config_response(
-        &self,
-        tlvs: &[TLV],
-        message_id: u16,
-        source_mac: MacAddr,
-    ) -> bool {
-        tracing::debug!(
-            "Handling Ap Auto Config Response CMDU with Message ID: {} from interface {}",
-            message_id,
-            self.interface_name
-        );
-
-        let remote_al_mac: Option<MacAddr> = Some(source_mac);
-        let mut end_of_message_found = false;
-        let mut ap_auto_config_response_found = false;
-        let mut registry_role: Option<Role> = None;
-
-        for tlv in tlvs {
-            match IEEE1905TLVType::from_u8(tlv.tlv_type) {
-                IEEE1905TLVType::SupportedRole => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, _parsed)) = SupportedRole::parse(value, tlv.tlv_length) {
-                            registry_role = Some(Role::Registrar);
-                            ap_auto_config_response_found = true;
-                        }
-                    }
-                }
-                IEEE1905TLVType::EndOfMessage => {
-                    end_of_message_found = true;
-                }
-                _ => {}
-            }
-        }
-
-        if !end_of_message_found {
-            tracing::warn!("Missing EndOfMessage TLV. Ignoring.");
-            return true;
-        }
-        if !ap_auto_config_response_found {
-            tracing::warn!("Missing Ap Auto Config Response TLV. Ignoring.");
-            return true;
-        }
-
-        if let (Some(remote_al_mac_address), Some(reg_role)) = (remote_al_mac, registry_role) {
-            let topology_db =
-                TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
-                    .await;
-
-            let updated_device_data = Ieee1905DeviceData {
-                al_mac: remote_al_mac_address,
-                destination_mac: None,
-                local_interface_list: None,
-                registry_role: Some(reg_role),
-            };
-
-            let _event = {
-                topology_db
-                    .update_ieee1905_topology(
-                        updated_device_data,
-                        UpdateType::AutoConfigResponse,
-                        Some(message_id),
-                        None,
-                        None,
-                    )
-                    .await
-            };
-
-            tracing::info!(
-                "Topology Response Processed: Updated Node → AL_MAC={} MESSAGE_ID={} ROLE={:?}",
-                remote_al_mac_address,
-                message_id,
-                reg_role
-            );
-        } else {
-            tracing::warn!(
-                "AP auto config  response CMDU processing failed: AL_MAC or Registry Role not found in TLVs"
-            );
-        }
-        true
     }
 
     pub async fn handle_sdu_from_cmdu_reception(
