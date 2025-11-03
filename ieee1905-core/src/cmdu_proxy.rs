@@ -623,10 +623,10 @@ pub async fn cmdu_from_sdu_transmission(
                     let Some(node) = topology_db.get_device(sdu.destination_al_mac_address).await else {
                         return warn!("No destination_mac found for AL-MAC {destination_al_mac}");
                     };
-                    if node.metadata.node_state_local != Some(StateLocal::ConvergedLocal) {
+                    if node.metadata.node_state_local != StateLocal::ConvergedLocal {
                         return warn!("node has not locally converged, AL-MAC={destination_al_mac}");
                     }
-                    if node.metadata.node_state_remote != Some(StateRemote::ConvergedRemote) {
+                    if node.metadata.node_state_remote != StateRemote::ConvergedRemote {
                         return warn!("node has not remotely converged, AL-MAC={destination_al_mac}");
                     }
 

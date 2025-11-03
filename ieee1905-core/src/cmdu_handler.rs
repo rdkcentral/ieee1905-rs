@@ -1063,9 +1063,7 @@ impl CMDUHandler {
 
         if let Some(updated_node) = topology_db.get_device(source_mac).await {
             trace!("Node: {updated_node:?}");
-            if updated_node.metadata.node_state_local == Some(StateLocal::ConvergedLocal)
-                && updated_node.metadata.node_state_remote == Some(StateRemote::ConvergedRemote)
-                && updated_node.device_data.al_mac != self.local_al_mac
+            if updated_node.metadata.has_converged() && updated_node.device_data.al_mac != self.local_al_mac
             {
                 debug!(remote= %source_mac,
                         metadata = ?updated_node.metadata,
