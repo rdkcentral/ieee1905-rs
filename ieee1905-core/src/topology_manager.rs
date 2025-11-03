@@ -73,8 +73,6 @@ pub enum UpdateType {
     QueryReceived,
     ResponseSent,
     ResponseReceived,
-    AutoConfigSearch,
-    AutoConfigResponse,
 }
 
 pub struct UpdateTopologyResult {
@@ -572,7 +570,13 @@ impl TopologyDatabase {
                             let local_state = node.metadata.node_state_local;
 
                             if local_state == StateLocal::ConvergedLocal {
-                                node.metadata.update(Some(operation), msg_id, None, None, None);
+                                node.metadata.update(
+                                    Some(operation),
+                                    msg_id,
+                                    None,
+                                    Some(StateLocal::Idle),
+                                    None,
+                                );
                                 TransmissionEvent::SendTopologyQuery(al_mac)
                             } else {
                                 TransmissionEvent::None
@@ -581,19 +585,15 @@ impl TopologyDatabase {
                         UpdateType::QueryReceived => {
                             let remote_state = node.metadata.node_state_remote;
 
-                            // move to ConvergingRemote is only allowed from Idle
-                            let mut new_state = None;
                             if remote_state != StateRemote::ConvergedRemote {
-                                new_state = Some(StateRemote::ConvergingRemote(Instant::now()));
+                                node.metadata.update(
+                                    Some(operation),
+                                    msg_id,
+                                    None,
+                                    None,
+                                    Some(StateRemote::ConvergingRemote(Instant::now())),
+                                );
                             }
-
-                            node.metadata.update(
-                                Some(operation),
-                                msg_id,
-                                None,
-                                None,
-                                new_state,
-                            );
 
                             debug!("Event: Send Topology Response");
                             TransmissionEvent::SendTopologyResponse(al_mac)
@@ -644,23 +644,27 @@ impl TopologyDatabase {
                         }
 
                         UpdateType::QuerySent => {
-                            node.metadata.update(
-                                Some(operation),
-                                msg_id,
-                                None,
-                                Some(StateLocal::ConvergingLocal(Instant::now())),
-                                None,
-                            );
+                            if node.metadata.node_state_local != StateLocal::ConvergedLocal {
+                                node.metadata.update(
+                                    Some(operation),
+                                    msg_id,
+                                    None,
+                                    Some(StateLocal::ConvergingLocal(Instant::now())),
+                                    None,
+                                );
+                            }
                             TransmissionEvent::None
                         }
                         UpdateType::ResponseSent => {
-                            node.metadata.update(
-                                Some(operation),
-                                msg_id,
-                                None,
-                                None,
-                                Some(StateRemote::ConvergedRemote),
-                            );
+                            if let StateRemote::ConvergingRemote(_) = node.metadata.node_state_remote {
+                                node.metadata.update(
+                                    Some(operation),
+                                    msg_id,
+                                    None,
+                                    None,
+                                    Some(StateRemote::ConvergedRemote),
+                                );
+                            }
                             TransmissionEvent::None
                         }
                         UpdateType::LldpUpdate => {
@@ -675,18 +679,6 @@ impl TopologyDatabase {
                             TransmissionEvent::None
                             //If needed we can indicate here a notification event to update topology data base in al neighbors but for now it is not needed
                             //initial DB snapshot covers current uses cases for RDK-B but we can update this part if needed in the future
-                        }
-                        UpdateType::AutoConfigResponse => {
-                            if node.metadata.has_converged() {
-                                node.metadata.update(Some(operation), msg_id, None, None, None);
-                            }
-                            TransmissionEvent::None
-                        }
-                        UpdateType::AutoConfigSearch => {
-                            if node.metadata.has_converged() {
-                                node.metadata.update(Some(operation), msg_id, None, None, None);
-                            }
-                            TransmissionEvent::None
                         }
                         _ => {
                             tracing::warn!(al_mac = ?al_mac, operation = ?operation, "Unhandled update for existing node");
