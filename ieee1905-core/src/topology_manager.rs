@@ -593,10 +593,14 @@ impl TopologyDatabase {
                                     None,
                                     Some(StateRemote::ConvergingRemote(Instant::now())),
                                 );
-                            }
-
+                            
                             debug!("Event: Send Topology Response");
                             TransmissionEvent::SendTopologyResponse(al_mac)
+                            } else {
+                                    debug!("Event: Send Topology Response");
+                                    TransmissionEvent::None
+
+                            }
                         }
 
                         UpdateType::ResponseReceived => {
