@@ -518,6 +518,11 @@ pub async fn cmdu_topology_notification_transmission(
             message_id
         );
 
+        let topology_db = TopologyDatabase::get_instance(
+            local_al_mac_address,
+            interface.clone(),
+        ).await;
+
         // Define the AL MAC TLV
         let al_mac_address: MacAddr = local_al_mac_address;
         let al_mac_tlv = TLV {
@@ -575,15 +580,15 @@ pub async fn cmdu_topology_notification_transmission(
         let ethertype = 0x893A; // IEEE 1905 EtherType
 
         // Send the CMDU via EthernetSender
-        match sender
-            .enqueue_frame(destination_mac, source_mac, ethertype, serialized_cmdu)
-            .await
-        {
-            Ok(()) => info!(
-                interface = %interface,
-                message_id = message_id,
-                "CMDU Topology Notification sent successfully"
-            ),
+        match sender.send_frame(destination_mac, source_mac, ethertype, serialized_cmdu).await {
+            Ok(()) => {
+                info!(
+                    interface = %interface,
+                    message_id = message_id,
+                    "CMDU Topology Notification sent successfully"
+                );
+                topology_db.handle_notification_sent().await;
+            },
             Err(e) => error!(
                 message_id = message_id,
                 "Failed to send CMDU Topology Notification: {}", e
