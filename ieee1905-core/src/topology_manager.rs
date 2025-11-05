@@ -67,7 +67,6 @@ pub enum StateRemote {
 pub enum UpdateType {
     LldpUpdate,
     DiscoveryReceived,
-    NotificationSent,
     NotificationReceived,
     QuerySent,
     QueryReceived,
@@ -593,13 +592,10 @@ impl TopologyDatabase {
                                     None,
                                     Some(StateRemote::ConvergingRemote(Instant::now())),
                                 );
-                            
-                            debug!("Event: Send Topology Response");
-                            TransmissionEvent::SendTopologyResponse(al_mac)
+                                debug!("Event: Send Topology Response");
+                                TransmissionEvent::SendTopologyResponse(al_mac)
                             } else {
-                                    debug!("Event: Send Topology Response");
-                                    TransmissionEvent::None
-
+                                TransmissionEvent::None
                             }
                         }
 
@@ -629,14 +625,11 @@ impl TopologyDatabase {
                                         device_data.local_interface_list,
                                     );
 
-                                    let multicast_mac =
-                                        MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13);
-                                    tracing::debug!("Event: Send Topology Notification");
+                                    let multicast_mac = MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13);
+                                    debug!("Event: Send Topology Notification");
                                     TransmissionEvent::SendTopologyNotification(multicast_mac)
                                 } else {
-                                    tracing::debug!(
-                                        "Device data unchanged — no transmission needed"
-                                    );
+                                    debug!("Device data unchanged — no transmission needed");
                                     TransmissionEvent::None
                                 }
                             } else {
@@ -683,10 +676,6 @@ impl TopologyDatabase {
                             TransmissionEvent::None
                             //If needed we can indicate here a notification event to update topology data base in al neighbors but for now it is not needed
                             //initial DB snapshot covers current uses cases for RDK-B but we can update this part if needed in the future
-                        }
-                        _ => {
-                            tracing::warn!(al_mac = ?al_mac, operation = ?operation, "Unhandled update for existing node");
-                            TransmissionEvent::None
                         }
                     };
 
@@ -737,6 +726,16 @@ impl TopologyDatabase {
             transmission_event,
         }
     }
+
+    pub async fn handle_notification_sent(&self) {
+        let mut nodes = self.nodes.write().await;
+        for node in nodes.values_mut() {
+            if let StateRemote::ConvergedRemote = node.metadata.node_state_remote {
+                node.metadata.update(None, None, None, None, Some(StateRemote::Idle));
+            }
+        }
+    }
+
     pub async fn start_topology_cli(self: Arc<Self>) -> io::Result<()> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
