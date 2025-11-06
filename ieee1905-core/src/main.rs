@@ -29,7 +29,7 @@ use ieee1905::interface_manager::*;
 use ieee1905::lldpdu_observer::LLDPObserver;
 use ieee1905::lldpdu_proxy::lldp_discovery_worker;
 use ieee1905::topology_manager::*;
-use ieee1905::CMDUObserver;
+use ieee1905::{next_task_id, CMDUObserver};
 //use ieee1905::crypto_engine::CRYPTO_CONTEXT;
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,8 +37,10 @@ use anyhow::anyhow;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing::instrument;
+use tracing_subscriber::{prelude::*, EnvFilter};
 use tracing_appender::rolling;
+use tracing_subscriber::fmt::format::FmtSpan;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -81,28 +83,19 @@ fn main() -> anyhow::Result<()> {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(cli.filter.clone())); //add 'tokio=trace' to debug the runtime
 
     // To show logs in stdout
-    let fmt_layer: fmt::Layer<
-        tracing_subscriber::layer::Layered<
-            EnvFilter,
-            tracing_subscriber::layer::Layered<
-                fmt::Layer<
-                    tracing_subscriber::Registry,
-                    fmt::format::DefaultFields,
-                    fmt::format::Format,
-                    tracing_appender::non_blocking::NonBlocking,
-                >,
-                tracing_subscriber::Registry,
-            >,
-        >,
-    > = fmt::layer().with_target(true).with_level(true);
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_level(true)
+        .with_span_events(FmtSpan::CLOSE);
 
     let file_appender = rolling::daily("logs", "app.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
-    let file_layer = fmt::layer()
+    let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_target(true)
-        .with_level(true);
+        .with_level(true)
+        .with_span_events(FmtSpan::CLOSE);
 
     #[cfg(feature = "enable_tokio_console")]
     {
@@ -196,6 +189,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[instrument(skip_all, name = "main", fields(task = next_task_id()))]
 async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     let mut join_sets = Vec::new();
 

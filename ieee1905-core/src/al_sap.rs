@@ -27,7 +27,7 @@ use crate::registration_codec::{
 };
 use crate::sdu_codec::SDU;
 use crate::topology_manager::Role;
-use crate::TopologyDatabase;
+use crate::{next_task_id, TopologyDatabase};
 use anyhow::{bail, Context, Result};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
@@ -48,6 +48,7 @@ use tokio::sync::oneshot;
 use once_cell::sync::Lazy;
 
 use thiserror::Error;
+use tracing::instrument;
 
 pub static SAP_INSTANCE: Lazy<Mutex<Option<Arc<Mutex<AlServiceAccessPoint>>>>> =
     Lazy::new(|| Mutex::new(None));
@@ -94,6 +95,7 @@ pub struct AlServiceAccessPoint {
 }
 
 impl AlServiceAccessPoint {
+    #[instrument(skip_all, name = "al_sap_init", fields(task = next_task_id()))]
     pub async fn initialize_and_store(
         control_socket_path: impl AsRef<Path>,
         data_socket_path: impl AsRef<Path>,
@@ -601,11 +603,11 @@ async fn send_cmdu_from_sdu(sdu: SDU) -> Result<()> {
             ));
         }
         tracing::debug!("Sending CMDU part from SDU via network");
-        tokio::task::spawn(cmdu_from_sdu_transmission(
+        cmdu_from_sdu_transmission(
             sap_guard.interface_name.clone(),
             sap_guard.sender.clone(),
             sdu.clone(),
-        ));
+        );
         Ok(())
     } else {
         tracing::warn!("SAP instance not ready, skipping registration");

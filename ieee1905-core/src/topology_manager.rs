@@ -28,10 +28,10 @@ use crossterm::{
 use pnet::datalink::MacAddr;
 use tokio::{
     sync::{OnceCell, RwLock},
-    task::{spawn, yield_now},
+    task::{yield_now},
     time::{interval, Duration, Instant},
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 use tui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -43,10 +43,7 @@ use tui::{
 use std::{collections::HashMap, io, sync::Arc};
 
 // Internal modules
-use crate::{
-    cmdu::IEEE1905Neighbor,
-    interface_manager::{get_forwarding_interface_mac, get_interfaces},
-};
+use crate::{cmdu::IEEE1905Neighbor, interface_manager::{get_forwarding_interface_mac, get_interfaces}, next_task_id};
 use crate::lldpdu::PortId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -313,7 +310,7 @@ impl Ieee1905Node {
 
 pub static TOPOLOGY_DATABASE: OnceCell<Arc<TopologyDatabase>> = OnceCell::const_new();
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TopologyDatabase {
     pub al_mac_address: Arc<RwLock<MacAddr>>,
     pub local_mac: Arc<RwLock<MacAddr>>,
@@ -325,7 +322,7 @@ pub struct TopologyDatabase {
 
 impl TopologyDatabase {
     /// **Creates a new `TopologyDatabase` instance**
-    pub async fn new(al_mac_address: MacAddr, interface_name: String) -> Self {
+    pub async fn new(al_mac_address: MacAddr, interface_name: String) -> Arc<Self> {
         debug!(al_mac = %al_mac_address, "Database initialized");
 
         // TODO singletons initialization must not be failable. this db should be
@@ -334,17 +331,17 @@ impl TopologyDatabase {
         // Get local MAC address from forwarding interface
         let local_mac = Arc::new(RwLock::new(get_forwarding_interface_mac(interface_name.clone()).unwrap()));
 
-        let db = TopologyDatabase {
+        let db = Arc::new(TopologyDatabase {
             al_mac_address: Arc::new(RwLock::new(al_mac_address)), // Wrapped in Arc<RwLock<T>>
             local_mac,
             local_interface_list: Arc::new(RwLock::new(None)),
             nodes: Arc::new(RwLock::new(HashMap::new())),
             interface_name: Arc::new(RwLock::new(Some(interface_name))),
             local_role: Arc::new(RwLock::new(None)),
-        };
+        });
 
-        db.refresh_topology().await;
-        db.refresh_interfaces().await;
+        tokio::spawn(db.clone().refresh_topology_worker());
+        tokio::spawn(db.clone().refresh_interfaces_worker());
         db
     }
 
@@ -369,9 +366,7 @@ impl TopologyDatabase {
         interface_name: String,
     ) -> Arc<TopologyDatabase> {
         TOPOLOGY_DATABASE
-            .get_or_init(|| async {
-                Arc::new(TopologyDatabase::new(al_mac_address, interface_name).await)
-            })
+            .get_or_init(|| TopologyDatabase::new(al_mac_address, interface_name))
             .await
             .clone()
     }
@@ -423,99 +418,91 @@ impl TopologyDatabase {
         ))
     }
 
-    pub async fn refresh_topology(&self) {
-        let nodes_clone = Arc::clone(&self.nodes);
-        spawn(async move {
-            let mut ticker = interval(Duration::from_secs(5)); // Runs every 5 seconds
+    #[instrument(skip_all, name = "topo_db_refresh_topology", fields(task = next_task_id()))]
+    async fn refresh_topology_worker(self: Arc<Self>) {
+        let mut ticker = interval(Duration::from_secs(5)); // Runs every 5 seconds
 
-            loop {
-                ticker.tick().await; // Wait for the next tick
-                let mut nodes = nodes_clone.write().await;
-                let now = Instant::now();
+        loop {
+            ticker.tick().await; // Wait for the next tick
+            let mut nodes = self.nodes.write().await;
+            let now = Instant::now();
 
-                nodes.retain(|al_mac, node| {
-                    // Remove nodes stuck in ConvergingLocal state
-                    if let StateLocal::ConvergingLocal(when) = node.metadata.node_state_local {
-                        if now.duration_since(when) >= Duration::from_secs(5) {
-                            debug!(
-                                al_mac = ?al_mac,
-                                state = ?node.metadata.last_update,
-                                "Removing node stuck in local convergence for too long"
-                            );
-                            return false; // Remove from database
-                        }
-                    }
-
-                    // Remove nodes stuck in ConvergingRemote state
-                    if let StateRemote::ConvergingRemote(when) = node.metadata.node_state_remote {
-                        if now.duration_since(when) >= Duration::from_secs(5) {
-                            debug!(
-                                al_mac = ?al_mac,
-                                state = ?node.metadata.last_update,
-                                "Removing node stuck in remote convergence for too long"
-                            );
-                            return false; // Remove from database
-                        }
-                    }
-
-                    // Remove nodes that have been inactive
-                    let elapsed = now.duration_since(node.metadata.last_seen);
-                    if elapsed >= Duration::from_secs(60) {
-                        tracing::debug!(al_mac = ?al_mac, "Removing node due to timeout");
+            nodes.retain(|al_mac, node| {
+                // Remove nodes stuck in ConvergingLocal state
+                if let StateLocal::ConvergingLocal(when) = node.metadata.node_state_local {
+                    if now.duration_since(when) >= Duration::from_secs(5) {
+                        debug!(
+                            al_mac = ?al_mac,
+                            state = ?node.metadata.last_update,
+                            "Removing node stuck in local convergence for too long"
+                        );
                         return false; // Remove from database
                     }
-
-                    debug!(
-                        al_mac = ?al_mac,
-                        elapsed_time = elapsed.as_secs_f64(),
-                        "Node Last Seen"
-                    );
-                    true // Keep the node
-                });
-
-                if nodes.is_empty() {
-                    debug!("No nodes in the topology, waiting for updates...");
                 }
+
+                // Remove nodes stuck in ConvergingRemote state
+                if let StateRemote::ConvergingRemote(when) = node.metadata.node_state_remote {
+                    if now.duration_since(when) >= Duration::from_secs(5) {
+                        debug!(
+                            al_mac = ?al_mac,
+                            state = ?node.metadata.last_update,
+                            "Removing node stuck in remote convergence for too long"
+                        );
+                        return false; // Remove from database
+                    }
+                }
+
+                // Remove nodes that have been inactive
+                let elapsed = now.duration_since(node.metadata.last_seen);
+                if elapsed >= Duration::from_secs(60) {
+                    tracing::debug!(al_mac = ?al_mac, "Removing node due to timeout");
+                    return false; // Remove from database
+                }
+
+                debug!(
+                    al_mac = ?al_mac,
+                    elapsed_time = elapsed.as_secs_f64(),
+                    "Node Last Seen"
+                );
+                true // Keep the node
+            });
+
+            if nodes.is_empty() {
+                debug!("No nodes in the topology, waiting for updates...");
             }
-        });
+        }
     }
 
-    pub async fn refresh_interfaces(&self) {
-        let local_interfaces = Arc::clone(&self.local_interface_list);
-        let interface_name = Arc::clone(&self.interface_name);
-        let forwarding_mac = Arc::clone(&self.local_mac);
+    #[instrument(skip_all, name = "topo_db_refresh_interfaces", fields(task = next_task_id()))]
+    async fn refresh_interfaces_worker(self: Arc<Self>) {
+        let mut interval = tokio::time::interval(Duration::from_secs(100));
 
-        let _task_handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(100));
+        loop {
+            interval.tick().await;
 
-            loop {
-                interval.tick().await;
+            match tokio::task::spawn_blocking(get_interfaces).await {
+                Ok(interfaces) => {
+                    let mut list = self.local_interface_list.write().await;
 
-                match tokio::task::spawn_blocking(get_interfaces).await {
-                    Ok(interfaces) => {
-                        let mut list = local_interfaces.write().await;
-
-                        if interfaces.is_empty() {
-                            *list = None;
-                            tracing::debug!("No interfaces found — set to None");
-                        } else {
-                            *list = Some(interfaces);
-                            tracing::debug!("Updated local interfaces");
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Interface scan task panicked: {:?}", e);
+                    if interfaces.is_empty() {
+                        *list = None;
+                        tracing::debug!("No interfaces found — set to None");
+                    } else {
+                        *list = Some(interfaces);
+                        tracing::debug!("Updated local interfaces");
                     }
                 }
-                if let Some(int_name) = interface_name.read().await.clone() {
-                    match get_forwarding_interface_mac(int_name) {
-                        Some(e) => *forwarding_mac.write().await = e,
-                        None => warn!("Failed to fetch forwarding mac address"),
-                    }
+                Err(e) => {
+                    tracing::error!("Interface scan task panicked: {:?}", e);
                 }
             }
-        });
-        //TASK_REGISTRY.lock().await.push(task_handle);
+            if let Some(int_name) = self.interface_name.read().await.clone() {
+                match get_forwarding_interface_mac(int_name) {
+                    Some(e) => *self.local_mac.write().await = e,
+                    None => warn!("Failed to fetch forwarding mac address"),
+                }
+            }
+        }
     }
 
     /// Tie breaker function in case we need to give priority in case of collision

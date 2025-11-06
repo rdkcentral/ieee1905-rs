@@ -17,13 +17,14 @@
  * limitations under the License.
 */
 
-use tracing::{error, trace, warn};
+use tracing::{error, info_span, trace, warn, Instrument};
 use async_trait::async_trait;
 use pnet::datalink::MacAddr;
 use std::sync::Arc;
 use crate::cmdu::{CMDU, CMDUType};
 use crate::cmdu_handler::CMDUHandler;
 use crate::ethernet_subject_reception::EthernetFrameObserver;
+use crate::next_task_id;
 
 #[derive(Clone)]
 pub struct CMDUObserver {
@@ -63,7 +64,7 @@ impl EthernetFrameObserver for CMDUObserver {
                     if let Err(e) = handler.handle_cmdu(&cmdu, source_mac, destination_mac).await {
                         error!("Failed to handle CMDU: {e:?}");
                     }
-                });
+                }.instrument(info_span!(parent: None, "handle_cmdu", task = next_task_id())));
             }
             Err(e) => {
                 error!("Failed to parse CMDU: {:?}", e);

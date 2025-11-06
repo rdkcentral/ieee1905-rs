@@ -19,17 +19,17 @@
 use std::collections::HashMap;
 use pnet::datalink::MacAddr;
 use tokio::time::{interval, Duration};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, info_span, instrument, trace, warn, Instrument};
 use std::sync::Arc;
-use tokio::task;
 use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
 use crate::topology_manager::{StateLocal, StateRemote, TopologyDatabase, UpdateType};
-use crate::MessageIdGenerator;
+use crate::{next_task_id, MessageIdGenerator};
 use crate::SDU;
 
+#[instrument(skip_all, name = "cmdu_discovery_transmission", fields(task = next_task_id()))]
 pub async fn cmdu_topology_discovery_transmission_worker(
     interface: String,
     sender: Arc<EthernetSender>,
@@ -119,8 +119,8 @@ pub async fn cmdu_topology_query_transmission(
     local_al_mac_address: MacAddr,
     remote_al_mac_address: MacAddr,
     interface_mac_address: MacAddr,
-    ) {
-    task::spawn(async move {
+) {
+    tokio::spawn(async move {
         let message_id = message_id_generator.next_id();
         debug!(
             interface = %interface,
@@ -238,10 +238,10 @@ pub async fn cmdu_topology_query_transmission(
                 );
             }
         }
-    });
+    }.instrument(info_span!(parent: None, "cmdu_query_transmission", task = next_task_id())));
 }
 
-pub async fn cmdu_topology_response_transmission(
+pub fn cmdu_topology_response_transmission(
     interface: String,
     sender: Arc<EthernetSender>,
     local_al_mac_address: MacAddr,
@@ -249,7 +249,7 @@ pub async fn cmdu_topology_response_transmission(
     interface_mac_address: MacAddr,
     message_id: u16,
 ) {
-    task::spawn(async move {
+    tokio::spawn(async move {
         //let message_id = message_id_generator.next_id();
         trace!(
             interface = %interface,
@@ -495,17 +495,17 @@ pub async fn cmdu_topology_response_transmission(
                 );
             }
         }
-    });
+    }.instrument(info_span!(parent: None, "cmdu_response_transmission", task = next_task_id())));
 }
 
-pub async fn cmdu_topology_notification_transmission(
+pub fn cmdu_topology_notification_transmission(
     interface: String,
     sender: Arc<EthernetSender>,
     message_id_generator: Arc<MessageIdGenerator>,
     local_al_mac_address: MacAddr,
     forwarding_interface_mac: MacAddr
 ) {
-    task::spawn(async move {
+    tokio::spawn(async move {
         let message_id = message_id_generator.next_id();
         trace!(
             interface = %interface,
@@ -594,15 +594,15 @@ pub async fn cmdu_topology_notification_transmission(
                 "Failed to send CMDU Topology Notification: {}", e
             ),
         }
-    });
+    }.instrument(info_span!(parent: None, "cmdu_notification_transmission", task = next_task_id())));
 }
 
-pub async fn cmdu_from_sdu_transmission(
+pub fn cmdu_from_sdu_transmission(
     interface: String,
     sender: Arc<EthernetSender>,
     sdu: SDU,
 ) {
-    task::spawn(async move {
+    tokio::spawn(async move {
         trace!(?sdu, "Parsing CMDU from SDU payload");
         let destination_al_mac = sdu.destination_al_mac_address;
         match CMDU::parse(&sdu.payload) {
@@ -683,5 +683,5 @@ pub async fn cmdu_from_sdu_transmission(
                 error!("Failed to parse CMDU from SDU payload!");
             }
         }
-    });
+    }.instrument(info_span!(parent: None, "cmdu_from_sdu_transmission", task = next_task_id())));
 }
