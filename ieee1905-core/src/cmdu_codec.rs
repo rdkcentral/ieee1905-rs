@@ -113,8 +113,7 @@ impl MessageVersion {
         self as u8
     }
 }
-///////////////////////////////////////////////////////////////////////////
-//DEFINITION OF MESSAGE VERSION
+
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -944,6 +943,7 @@ pub enum AssociationState {
     JoinedBss,
 }
 
+///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq)]
 pub struct ClientAssociation {
     pub sta_mac: MacAddr,
@@ -2389,6 +2389,55 @@ pub mod tests {
             ),
             Err(e) => panic!("Expected Failure(Verify), but got different error: {:?}", e),
         }
+    }
+
+    #[test]
+    fn test_client_association_serialization() {
+        let original = ClientAssociation {
+            sta_mac: MacAddr::new(1, 2, 3, 4, 5, 6),
+            ap_mac: MacAddr::new(6, 5, 4, 3, 2, 1),
+            association_state: AssociationState::JoinedBss,
+        };
+
+        let bytes = original.serialize();
+        assert_eq!(bytes, [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, // sta_mac
+            0x06, 0x05, 0x04, 0x03, 0x02, 0x01, // ap_mac
+            0x80,                               // association_state
+        ]);
+
+        let parsed = ClientAssociation::parse(&bytes, bytes.len() as u16).unwrap().1;
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn test_multi_ap_profile_value_serialization() {
+        let original = MultiApProfileValue {
+            profile: MultiApProfile::Profile1,
+        };
+
+        let bytes = original.serialize();
+        assert_eq!(bytes, [0x01]);
+
+        let parsed = MultiApProfileValue::parse(&bytes, bytes.len() as u16).unwrap().1;
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn test_multi_ap_profile_serialization() {
+        assert_eq!(MultiApProfile::Profile1.to_u8(), 0x01);
+        assert_eq!(MultiApProfile::Profile2.to_u8(), 0x02);
+        assert_eq!(MultiApProfile::Profile3.to_u8(), 0x03);
+        assert_eq!(MultiApProfile::Reserved(0x80).to_u8(), 0x80);
+    }
+
+    #[test]
+    fn test_multi_ap_profile_deserialization() {
+        assert_eq!(MultiApProfile::from_u8(0x01), Ok(MultiApProfile::Profile1));
+        assert_eq!(MultiApProfile::from_u8(0x02), Ok(MultiApProfile::Profile2));
+        assert_eq!(MultiApProfile::from_u8(0x03), Ok(MultiApProfile::Profile3));
+        assert_eq!(MultiApProfile::from_u8(0x80), Ok(MultiApProfile::Reserved(0x80)));
+        assert_eq!(MultiApProfile::from_u8(0x00), Err(()));
     }
 
     // Try to serialize and parse unknown CMDU type
