@@ -40,7 +40,6 @@ pub mod tlv_lldpdu_codec;
 pub mod topology_manager;
 pub mod crypto_engine;
 
-
 // ───── Submodules: TLVs grouped under namespaces ─────
 pub mod lldpdu {
     pub use crate::tlv_lldpdu_codec::TLV;
@@ -60,6 +59,7 @@ pub mod cmdu {
     };
 }
 
+use std::sync::atomic::{AtomicU32, Ordering};
 // ───── Reexports: commonly used components ─────
 pub use sdu_codec::SDU;
 pub use ethernet_subject_transmission::EthernetSender;
@@ -68,3 +68,8 @@ pub use lldpdu_observer::LLDPObserver;
 pub use cmdu_observer::CMDUObserver;
 pub use cmdu_message_id_generator::MessageIdGenerator;
 pub use topology_manager::TopologyDatabase;
+
+pub fn next_task_id() -> u32 {
+    static TASK_ID: AtomicU32 = AtomicU32::new(0);
+    TASK_ID.fetch_add(1, Ordering::Relaxed)
+}

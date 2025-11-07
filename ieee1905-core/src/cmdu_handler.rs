@@ -439,8 +439,7 @@ impl CMDUHandler {
                     destination_mac,
                     forwarding_interface_mac,
                     message_id,
-                )
-                .await;
+                );
             }
             TransmissionEvent::None => {
                 debug!(
@@ -657,8 +656,7 @@ impl CMDUHandler {
                     Arc::clone(&self.message_id_generator),
                     self.local_al_mac,
                     forwarding_interface_mac,
-                )
-                .await;
+                );
             }
             TransmissionEvent::None => {
                 tracing::debug!(

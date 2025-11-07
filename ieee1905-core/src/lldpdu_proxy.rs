@@ -21,9 +21,11 @@ use pnet::datalink::MacAddr;
 use crate::lldpdu::{LLDPDU, LLDPTLVType, TLV, ChassisId, PortId, TimeToLiveTLV};
 use crate::ethernet_subject_transmission::EthernetSender;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, info, error};
+use tracing::{debug, info, error, instrument};
+use crate::next_task_id;
 
 /// Launches the discovery process for L2 devices using LLDP.
+#[instrument(skip_all, name = "lldp_discovery_transmission", fields(task = next_task_id()))]
 pub async fn lldp_discovery_worker(
     sender: EthernetSender,
     chassis_id: MacAddr,

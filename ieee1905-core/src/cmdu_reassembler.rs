@@ -25,7 +25,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::time::Instant;
+use tracing::{info_span, Instrument};
 use crate::cmdu::CMDU;
+use crate::next_task_id;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CmduReassemblyError {
@@ -87,7 +89,8 @@ impl CmduReassembler {
                     }
                 });
             }
-        });
+        }.instrument(info_span!(parent: None, "cmdu_reassembler_cleaner", task = next_task_id())));
+
         Self { _join_set: join_set, buffer }
     }
 

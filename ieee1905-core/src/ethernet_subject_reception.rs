@@ -28,10 +28,12 @@ use pnet::packet::Packet;
 use pnet::util::MacAddr;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::task::{yield_now, JoinSet};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, info_span, warn, Instrument};
+use crate::next_task_id;
 
 /// Observer trait for handling specific Ethernet frame types
 #[async_trait]
@@ -114,7 +116,7 @@ impl EthernetReceiver {
                 // respect to the arrival of packets.
                 yield_now().await;
             }
-        });
+        }.instrument(info_span!(parent: None, "ethernet_receiver_dispatch", task = next_task_id())));
     }
 
     /// **Start receiving Ethernet frames**
@@ -147,12 +149,16 @@ impl EthernetReceiver {
         };
 
         self.join_set.spawn_blocking(move || {
+            let _span = info_span!(parent: None, "ethernet_receiver_reader", task = next_task_id()).entered();
+
             info!("Listening for Ethernet frames...");
             while !notify_tx.is_closed() {
                 let packet = match datalink_rx.next() {
                     Ok(e) => e,
                     Err(e) => {
-                        error!("Error receiving Ethernet frame: {e:?}");
+                        if e.kind() != ErrorKind::TimedOut {
+                            error!("Error receiving Ethernet frame: {e:?}");
+                        }
                         continue;
                     }
                 };
@@ -198,7 +204,7 @@ impl EthernetReceiver {
                     error!("Failed to notify observer for EtherType: 0x{ether_type:04X}");
                 }
             }
-        });
+        }.instrument(info_span!(parent: None, "ethernet_receiver_intermediate", task = next_task_id())));
         Ok(self.join_set)
     }
 }

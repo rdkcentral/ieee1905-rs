@@ -16,13 +16,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
-
 use pnet::datalink::MacAddr;
 use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, info_span, warn, Instrument};
 use std::sync::Arc;
 use anyhow::anyhow;
 use tokio::task::JoinSet;
+use crate::next_task_id;
 
 #[derive(Debug)]
 struct Frame {
@@ -105,7 +105,7 @@ impl EthernetSender {
             }
 
             warn!("Async sender task exiting.");
-        });
+        }.instrument(info_span!(parent: None, "ethernet_sender", task = next_task_id())));
 
         Self {
             _join_set: join_set,
