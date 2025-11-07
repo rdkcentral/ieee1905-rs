@@ -37,6 +37,9 @@ systemd/
 *.bkup
 .$*
 
+# Ignore Copilot instructions for AI agents
+.github/copilot-instructions.md
+
 # Ignore IDE/project-specific files
 .idea/            # JetBrains IDE (CLion, WebStorm, etc.) settings
 *.swp             # vi swap files
