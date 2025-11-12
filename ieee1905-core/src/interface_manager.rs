@@ -210,7 +210,7 @@ pub fn get_interfaces() -> Vec<Ieee1905InterfaceData> {
                 // Determine media type
                 let media_type = match net_iface.if_type {
                     InterfaceType::Ethernet => 0x01,        // Ethernet
-                    InterfaceType::Wireless80211 => 0x02,   // Wi-Fi
+                    InterfaceType::Wireless80211 => 0x0100, // Wi-Fi
                     _ => continue,                          // Skip non-Ethernet/Wi-Fi interfaces
                 };
 
