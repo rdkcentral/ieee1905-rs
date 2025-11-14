@@ -42,6 +42,7 @@ use tui::{
 // Standard library
 use std::{collections::HashMap, io, sync::Arc};
 use std::collections::HashSet;
+use tokio::task::JoinSet;
 // Internal modules
 use crate::{cmdu::IEEE1905Neighbor, interface_manager::{get_forwarding_interface_mac, get_interfaces}, next_task_id};
 use crate::lldpdu::PortId;
@@ -331,7 +332,7 @@ impl TopologyDatabase {
         // Get local MAC address from forwarding interface
         let local_mac = Arc::new(RwLock::new(get_forwarding_interface_mac(interface_name.clone()).unwrap()));
 
-        let db = Arc::new(TopologyDatabase {
+        Arc::new(TopologyDatabase {
             al_mac_address: Arc::new(RwLock::new(al_mac_address)), // Wrapped in Arc<RwLock<T>>
             local_mac,
             local_interface_list: Arc::new(RwLock::new(None)),
@@ -339,11 +340,14 @@ impl TopologyDatabase {
             interface_name: Arc::new(RwLock::new(Some(interface_name))),
             local_role: Arc::new(RwLock::new(None)),
             remote_controllers_cache: Default::default(),
-        });
+        })
+    }
 
-        tokio::spawn(db.clone().refresh_topology_worker());
-        tokio::spawn(db.clone().refresh_interfaces_worker());
-        db
+    pub fn start_workers(self: &Arc<Self>) -> JoinSet<()> {
+        let mut set = JoinSet::new();
+        set.spawn(self.clone().refresh_topology_worker());
+        set.spawn(self.clone().refresh_interfaces_worker());
+        set
     }
 
     /// ** Returns the actual local role

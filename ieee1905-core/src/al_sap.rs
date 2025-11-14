@@ -101,7 +101,7 @@ impl AlServiceAccessPoint {
         data_socket_path: impl AsRef<Path>,
         sender: Arc<EthernetSender>,
         interface_name: String,
-        shutdown_tx: Option<oneshot::Sender<()>>,
+        shutdown_tx: oneshot::Sender<()>,
     ) {
         let sap = AlServiceAccessPoint::start_server(
             control_socket_path,
@@ -585,7 +585,7 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
 }
 
 // Do the downward forwarding: unix stream socket -> network
-pub async fn sap_data_request_handler(mut shutdown_tx: Option<oneshot::Sender<()>>) {
+pub async fn sap_data_request_handler(shutdown_tx: oneshot::Sender<()>) {
     loop {
         match service_access_point_data_request().await {
             Ok(_) => {
@@ -593,10 +593,7 @@ pub async fn sap_data_request_handler(mut shutdown_tx: Option<oneshot::Sender<()
             }
             Err(AlSapError::SocketClosed) => {
                 tracing::error!("Connection closed. Need to trigger restart!");
-
-                if let Some(tx) = shutdown_tx.take() {
-                    let _ = tx.send(());
-                }
+                let _ = shutdown_tx.send(());
                 break;
             }
             Err(e) => {

@@ -213,6 +213,7 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     // // Initialize Database
 
     let topology_db = TopologyDatabase::get_instance(al_mac, cli.interface.clone()).await;
+    let _db_workers = topology_db.start_workers();
 
     // Upon every loop restart topology database role can change
     topology_db.set_local_role(None).await;
@@ -257,7 +258,7 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
         sap_data_path,
         sender_clone,
         forwarding_interface_clone,
-        Some(shutdown_tx),
+        shutdown_tx,
     ));
 
     // Initialization of the CMDU handler
