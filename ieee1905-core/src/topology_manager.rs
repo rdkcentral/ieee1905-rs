@@ -428,15 +428,15 @@ impl TopologyDatabase {
         ))
     }
 
-    async fn add_remote_controller(&self, al_mac: MacAddr) {
+    async fn add_remote_controller(&self, remote_al_mac: MacAddr) {
         let local_al_mac = *self.al_mac_address.read().await;
-        if Self::tiebreaker(al_mac, local_al_mac) {
-            self.remote_controllers_cache.write().await.insert(local_al_mac);
+        if Self::tiebreaker(remote_al_mac, local_al_mac) {
+            self.remote_controllers_cache.write().await.insert(remote_al_mac);
         }
     }
 
-    async fn remove_remote_controller(&self, al_mac: MacAddr) {
-        self.remote_controllers_cache.write().await.remove(&al_mac);
+    async fn remove_remote_controller(&self, remote_al_mac: MacAddr) {
+        self.remote_controllers_cache.write().await.remove(&remote_al_mac);
     }
 
     #[instrument(skip_all, name = "topo_db_refresh_topology", fields(task = next_task_id()))]
@@ -446,72 +446,62 @@ impl TopologyDatabase {
         loop {
             ticker.tick().await; // Wait for the next tick
 
-            let removed_nodes = self.remove_inoperable_nodes().await;
-            for al_mac in removed_nodes {
-                self.remove_remote_controller(al_mac).await;
-            }
-        }
-    }
+            let mut nodes = self.nodes.write().await;
+            let mut removed_nodes = Vec::new();
 
-    async fn remove_inoperable_nodes(&self) -> Vec<MacAddr> {
-        let mut nodes = self.nodes.write().await;
-        let mut removed_nodes = Vec::new();
+            let now = Instant::now();
 
-        let now = Instant::now();
+            nodes.retain(|al_mac, node| {
+                // Remove nodes stuck in ConvergingLocal state
+                if let StateLocal::ConvergingLocal(when) = node.metadata.node_state_local {
+                    if now.duration_since(when) >= Duration::from_secs(5) {
+                        debug!(
+                            al_mac = ?al_mac,
+                            state = ?node.metadata.last_update,
+                            "Removing node stuck in local convergence for too long"
+                        );
+                        removed_nodes.push(*al_mac);
+                        return false; // Remove from database
+                    }
+                }
 
-        // TODO change to extract_if to avoid allocations after upgrade to MSRV 1.88
-        nodes.retain(|al_mac, node| {
-            let valid = Self::check_if_node_valid(*al_mac, node, now);
-            if !valid {
-                removed_nodes.push(*al_mac);
-            }
-            valid
-        });
+                // Remove nodes stuck in ConvergingRemote state
+                if let StateRemote::ConvergingRemote(when) = node.metadata.node_state_remote {
+                    if now.duration_since(when) >= Duration::from_secs(5) {
+                        debug!(
+                            al_mac = ?al_mac,
+                            state = ?node.metadata.last_update,
+                            "Removing node stuck in remote convergence for too long"
+                        );
+                        removed_nodes.push(*al_mac);
+                        return false; // Remove from database
+                    }
+                }
 
-        if nodes.is_empty() {
-            debug!("No nodes in the topology, waiting for updates...");
-        }
-        removed_nodes
-    }
+                // Remove nodes that have been inactive
+                let elapsed = now.duration_since(node.metadata.last_seen);
+                if elapsed >= Duration::from_secs(60) {
+                    debug!(al_mac = ?al_mac, "Removing node due to timeout");
+                    removed_nodes.push(*al_mac);
+                    return false; // Remove from database
+                }
 
-    fn check_if_node_valid(al_mac: MacAddr, node: &Ieee1905Node, now: Instant) -> bool {
-        // Remove nodes stuck in ConvergingLocal state
-        if let StateLocal::ConvergingLocal(when) = node.metadata.node_state_local {
-            if now.duration_since(when) >= Duration::from_secs(5) {
                 debug!(
                     al_mac = ?al_mac,
-                    state = ?node.metadata.last_update,
-                    "Removing node stuck in local convergence for too long"
+                    elapsed_time = elapsed.as_secs_f64(),
+                    "Node Last Seen"
                 );
-                return false; // Remove from database
+                true // Keep the node
+            });
+
+            if nodes.is_empty() {
+                debug!("No nodes in the topology, waiting for updates...");
+            }
+
+            for node in removed_nodes {
+                self.remove_remote_controller(node).await;
             }
         }
-
-        // Remove nodes stuck in ConvergingRemote state
-        if let StateRemote::ConvergingRemote(when) = node.metadata.node_state_remote {
-            if now.duration_since(when) >= Duration::from_secs(5) {
-                debug!(
-                    al_mac = ?al_mac,
-                    state = ?node.metadata.last_update,
-                    "Removing node stuck in remote convergence for too long"
-                );
-                return false; // Remove from database
-            }
-        }
-
-        // Remove nodes that have been inactive
-        let elapsed = now.duration_since(node.metadata.last_seen);
-        if elapsed >= Duration::from_secs(60) {
-            debug!(al_mac = ?al_mac, "Removing node due to timeout");
-            return false; // Remove from database
-        }
-
-        debug!(
-            al_mac = ?al_mac,
-            elapsed_time = elapsed.as_secs_f64(),
-            "Node Last Seen"
-        );
-        true // Keep the node
     }
 
     #[instrument(skip_all, name = "topo_db_refresh_interfaces", fields(task = next_task_id()))]
@@ -571,6 +561,7 @@ impl TopologyDatabase {
         tracing::debug!("WAITING for write lock");
         {
             let mut nodes = self.nodes.write().await;
+
             tracing::debug!("ACQUIRED write lock");
 
             match nodes.get_mut(&al_mac) {
