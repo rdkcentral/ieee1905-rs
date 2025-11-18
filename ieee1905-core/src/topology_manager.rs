@@ -384,6 +384,9 @@ impl TopologyDatabase {
     pub async fn find_device_by_port(&self, mac: MacAddr) -> Option<Ieee1905Node> {
         let nodes = self.nodes.read().await;
         nodes.values().find(|node| {
+            if node.device_data.al_mac == mac {
+                return true;
+            }
             if node.device_data.destination_mac == Some(mac) {
                 return true;
             }
@@ -874,5 +877,39 @@ impl TopologyDatabase {
         disable_raw_mode()?;
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pnet::datalink::MacAddr;
+    use crate::topology_manager::{Ieee1905DeviceData, Ieee1905InterfaceData, UpdateType};
+    use crate::TopologyDatabase;
+
+    #[tokio::test]
+    async fn test_remote_controller_won() {
+        let db = TopologyDatabase::new(MacAddr::new(0, 0, 0, 0, 0, 0), "en1".to_string()).await;
+
+        let device_mac = MacAddr::new(0, 0, 0, 0, 0, 1);
+        let device_al_mac = MacAddr::new(0, 0, 0, 0, 0, 2);
+        let device_if_mac = MacAddr::new(0, 0, 0, 0, 0, 3);
+
+        let interface = Ieee1905InterfaceData {
+            mac: device_if_mac,
+            media_type: 0,
+            bridging_flag: false,
+            bridging_tuple: None,
+            vlan: None,
+            metric: None,
+            non_ieee1905_neighbors: None,
+            ieee1905_neighbors: None,
+        };
+        let device = Ieee1905DeviceData::new(device_al_mac, Some(device_mac), Some(vec!(interface)), None);
+        db.update_ieee1905_topology(device.clone(), UpdateType::DiscoveryReceived, None, None, None).await;
+
+        assert!(db.find_device_by_port(device_mac).await.is_some());
+        assert!(db.find_device_by_port(device_al_mac).await.is_some());
+        assert!(db.find_device_by_port(device_if_mac).await.is_some());
+        assert!(db.find_device_by_port(MacAddr::new(0, 0, 0, 0, 0, 4)).await.is_none());
     }
 }
