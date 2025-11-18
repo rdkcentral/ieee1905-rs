@@ -152,23 +152,11 @@ pub async fn cmdu_topology_query_transmission(
         });
 
         // Define TLVs
-        let al_mac_address = local_al_mac_address;
-
-        let al_mac_tlv = TLV {
-            tlv_type: IEEE1905TLVType::AlMacAddress.to_u8(),
-            tlv_length: 6,
-            tlv_value: Some(al_mac_address.octets().to_vec()),
-        };
-
         let end_of_message_tlv = TLV {
             tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
             tlv_length: 0,
             tlv_value: None,
         };
-
-        let mut serialized_payload = vec![];
-        serialized_payload.extend(al_mac_tlv.serialize());
-        serialized_payload.extend(end_of_message_tlv.serialize());
 
         // Construct CMDU
         let cmdu_topology_query = CMDU {
@@ -178,7 +166,7 @@ pub async fn cmdu_topology_query_transmission(
             message_id,
             fragment: 0,
             flags: 0x80,
-            payload: serialized_payload,
+            payload: end_of_message_tlv.serialize(),
         };
 
         let serialized_cmdu = cmdu_topology_query.serialize();
