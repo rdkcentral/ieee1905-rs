@@ -152,11 +152,25 @@ pub async fn cmdu_topology_query_transmission(
         });
 
         // Define TLVs
+        let multi_ap_profile = MultiApProfileValue {
+            profile: MultiApProfile::Profile3,
+        };
+        let multi_ap_profile_bytes = multi_ap_profile.serialize();
+        let multi_ap_profile_tlv = TLV {
+            tlv_type: IEEE1905TLVType::MultiApProfile.to_u8(),
+            tlv_length: multi_ap_profile_bytes.len() as u16,
+            tlv_value: Some(multi_ap_profile_bytes),
+        };
+
         let end_of_message_tlv = TLV {
             tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
             tlv_length: 0,
             tlv_value: None,
         };
+
+        let mut payload = Vec::new();
+        payload.extend(multi_ap_profile_tlv.serialize());
+        payload.extend(end_of_message_tlv.serialize());
 
         // Construct CMDU
         let cmdu_topology_query = CMDU {
@@ -166,7 +180,7 @@ pub async fn cmdu_topology_query_transmission(
             message_id,
             fragment: 0,
             flags: 0x80,
-            payload: end_of_message_tlv.serialize(),
+            payload,
         };
 
         let serialized_cmdu = cmdu_topology_query.serialize();
