@@ -142,15 +142,6 @@ pub async fn cmdu_topology_query_transmission(
         // Clone the device data (without modifying metadata)
         let device_data = node.device_data.clone();
 
-        // **Retrieve Destination MAC Address**
-        let destination_mac = device_data.destination_mac.unwrap_or_else(|| {
-            debug!(
-                "Node AL_MAC={} has no destination MAC address, using default IEEE 1905 multicast",
-                remote_al_mac_address
-            );
-            MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13) // Default IEEE 1905 multicast
-        });
-
         // Define TLVs
         let multi_ap_profile = MultiApProfileValue {
             profile: MultiApProfile::Profile3,
@@ -195,7 +186,7 @@ pub async fn cmdu_topology_query_transmission(
 
         // Send the CMDU via EthernetSender
         match sender
-            .enqueue_frame(destination_mac, source_mac, ethertype, serialized_cmdu)
+            .enqueue_frame(device_data.al_mac, source_mac, ethertype, serialized_cmdu)
             .await
         {
             Err(e) => {
