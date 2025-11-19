@@ -129,7 +129,7 @@ impl CMDUHandler {
 
         match CMDUType::from_u16(cmdu.message_type) {
             CMDUType::TopologyDiscovery => {
-                self.handle_topology_discovery(&tlvs, message_id).await;
+                self.handle_topology_discovery(&tlvs, message_id, source_mac).await;
             }
             CMDUType::TopologyNotification => {
                 let handled = self.handle_topology_notification(&tlvs, message_id).await;
@@ -208,7 +208,7 @@ impl CMDUHandler {
     }
 
     /// Handles and logs TLVs from the CMDU payload for Topology Discovery.
-    async fn handle_topology_discovery(&self, tlvs: &[TLV], message_id: u16) {
+    async fn handle_topology_discovery(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) {
         debug!(
             "Handling Topology Discovery CMDU with Message ID: {}, from interface {}",
             message_id, self.interface_name
@@ -257,13 +257,17 @@ impl CMDUHandler {
         if let (Some(remote_al_mac_address), Some(neighbor_interface_mac_address)) =
             (remote_al_mac, remote_interface_mac)
         {
+            if neighbor_interface_mac_address != source_mac {
+                warn!("MacAddress TLV {neighbor_interface_mac_address} doesn't match source MAC {source_mac}");
+            }
+
             let topology_db =
                 TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
                     .await;
 
             let device_data = Ieee1905DeviceData {
                 al_mac: remote_al_mac_address,
-                destination_mac: Some(neighbor_interface_mac_address),
+                destination_mac: Some(source_mac),
                 local_interface_list: None,
                 registry_role: None,
             };
@@ -279,8 +283,8 @@ impl CMDUHandler {
                 .await;
 
             info!(
-                "Topology Discovery Processed: AL_MAC={} INTERFACE_MAC={}",
-                remote_al_mac_address, neighbor_interface_mac_address
+                "Topology Discovery Processed: AL_MAC={} INTERFACE_MAC={} SOURCE_MAC={}",
+                remote_al_mac_address, neighbor_interface_mac_address, source_mac,
             );
 
             // Now react to the event
