@@ -176,15 +176,6 @@ impl EthernetReceiver {
                     destination_mac: eth_packet.get_destination(),
                 };
 
-                debug!(
-                    ethertype = format!("0x{:04X}", message.ether_type),
-                    source_mac = ?message.source_mac,
-                    destination_mac = ?message.destination_mac,
-                    packet_length = eth_packet.packet().len(),
-                    "Received Ethernet frame"
-                );
-
-                // Notify observers with interface MAC included
                 if notify_tx.blocking_send(message).is_err() {
                     warn!("Packet dropped: failed to send to async observer handler");
                 }
@@ -198,6 +189,15 @@ impl EthernetReceiver {
                 let Some(observer) = self.observers.get(&ether_type) else {
                     continue;
                 };
+
+                debug!(
+                    eth_type = format!("0x{ether_type:04X}"),
+                    src = %message.source_mac,
+                    dst = %message.destination_mac,
+                    payload_len = message.payload.len(),
+                    "Received Ethernet frame"
+                );
+
                 if observer.send(message).await.is_ok() {
                     debug!("Notified observer for EtherType: 0x{ether_type:04X}");
                 } else {
