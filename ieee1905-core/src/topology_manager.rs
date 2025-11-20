@@ -209,15 +209,15 @@ impl Ieee1905NodeInfo {
 
         if let Some(local) = new_node_state_local {
             if self.node_state_local != local {
-                self.node_state_local = local;
                 info!("{} local state changed: {:?} -> {local:?}", self.al_mac, self.node_state_local);
+                self.node_state_local = local;
             }
         }
 
         if let Some(remote) = new_node_state_remote {
             if self.node_state_remote != remote {
+                info!("{} remote state changed: {:?} -> {remote:?}", self.al_mac, self.node_state_remote);
                 self.node_state_remote = remote;
-                info!("{} remote state changed: {:?} -> {remote:?}", self.al_mac, self.node_state_local);
             }
         }
 

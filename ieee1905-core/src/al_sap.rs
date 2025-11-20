@@ -326,15 +326,15 @@ pub async fn service_access_point_data_indication(sdu: &SDU) -> Result<()> {
         let serialized = single_sdu.serialize();
         let mut data_unix_write = LAZY_WRITER.lock().await;
         let Some(ref mut writer) = *data_unix_write else {
-            bail!("Error while dereferencing LAZY_WRITER");
+            bail!("LAZY_WRITER is not yet initialized");
         };
 
         match writer.send(Bytes::from(serialized)).await {
             Ok(_res) => {
-                tracing::trace!("SDU send success");
+                tracing::trace!("SDU from CMDU send success");
             }
             Err(e) => {
-                tracing::error!("SDU send ERROR: {e:?}");
+                tracing::error!("SDU from CMDU send ERROR: {e:?}");
             }
         }
 
@@ -360,15 +360,15 @@ pub async fn service_access_point_data_indication(sdu: &SDU) -> Result<()> {
         let serialized = fragment.serialize();
         let mut data_unix_write = LAZY_WRITER.lock().await;
         let Some(ref mut writer) = *data_unix_write else {
-            bail!("Error while dereferencing LAZY_WRITER");
+            bail!("LAZY_WRITER is not yet initialized");
         };
 
         match writer.send(Bytes::from(serialized)).await {
             Ok(_res) => {
-                tracing::trace!("SDU send success");
+                tracing::trace!("SDU from CMDU send success");
             }
             Err(e) => {
-                tracing::error!("SDU send error: {e:?}");
+                tracing::error!("SDU from CMDU send ERROR: {e:?}");
             }
         }
     }
