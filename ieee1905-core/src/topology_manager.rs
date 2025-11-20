@@ -618,9 +618,8 @@ impl TopologyDatabase {
                                         device_data.local_interface_list,
                                     );
 
-                                    let multicast_mac = MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13);
-                                    debug!("Event: Send Topology Notification");
-                                    TransmissionEvent::SendTopologyNotification(multicast_mac)
+                                    debug!("Device data changed — no transmission is sent");
+                                    TransmissionEvent::None
                                 } else {
                                     debug!("Device data unchanged — no transmission needed");
                                     TransmissionEvent::None
