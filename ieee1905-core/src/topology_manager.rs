@@ -159,7 +159,12 @@ pub struct Ieee1905NodeInfo {
     pub al_mac: MacAddr,
     pub last_update: UpdateType,
     pub last_seen: Instant,
-    pub message_id: Option<u16>,
+    /// last msg id sent to this node
+    /// this excludes response ids, those are always copied from the query
+    pub local_message_id: Option<u16>,
+    /// last msg id received from this node
+    /// this excludes response ids, those are always copied from the query
+    pub remote_message_id: Option<u16>,
     pub lldp_neighbor: Option<PortId>,
     pub node_state_local: StateLocal,
     pub node_state_remote: StateRemote,
@@ -171,7 +176,6 @@ impl Ieee1905NodeInfo {
     pub fn new(
         al_mac: MacAddr,
         last_update: UpdateType,
-        message_id: Option<u16>,
         lldp_neighbor: Option<PortId>,
         node_state_local: StateLocal,
         node_state_remote: StateRemote,
@@ -180,7 +184,8 @@ impl Ieee1905NodeInfo {
             al_mac,
             last_update,
             last_seen: Instant::now(), // Set current time at creation
-            message_id,
+            local_message_id: None,
+            remote_message_id: None,
             lldp_neighbor,
             node_state_local,
             node_state_remote,
@@ -192,7 +197,8 @@ impl Ieee1905NodeInfo {
     pub fn update(
         &mut self,
         new_state: Option<UpdateType>,
-        new_message_id: Option<u16>,
+        new_local_message_id: Option<u16>,
+        new_remote_message_id: Option<u16>,
         new_lldp_neighbor: Option<PortId>,
         new_node_state_local: Option<StateLocal>,
         new_node_state_remote: Option<StateRemote>,
@@ -200,8 +206,11 @@ impl Ieee1905NodeInfo {
         if let Some(message_type) = new_state {
             self.last_update = message_type;
         }
-        if let Some(message_id) = new_message_id {
-            self.message_id = Some(message_id);
+        if let Some(message_id) = new_local_message_id {
+            self.local_message_id = Some(message_id);
+        }
+        if let Some(message_id) = new_remote_message_id {
+            self.remote_message_id = Some(message_id);
         }
         if let Some(lldp_neighbor) = new_lldp_neighbor {
             self.lldp_neighbor = Some(lldp_neighbor);
@@ -524,7 +533,8 @@ impl TopologyDatabase {
         &self,
         device_data: Ieee1905DeviceData,
         operation: UpdateType,
-        msg_id: Option<u16>,
+        local_msg_id: Option<u16>,
+        remote_msg_id: Option<u16>,
         lldp_neighbor: Option<PortId>,
         device_vendor: Option<Ieee1905DeviceVendor>,
     ) -> UpdateTopologyResult {
@@ -550,7 +560,7 @@ impl TopologyDatabase {
                         UpdateType::DiscoveryReceived => {
                             let local_state = node.metadata.node_state_local;
 
-                            node.metadata.update(Some(operation), msg_id, None, None, None);
+                            node.metadata.update(Some(operation), local_msg_id, remote_msg_id, None, None, None);
 
                             if local_state == StateLocal::Idle {
                                 TransmissionEvent::SendTopologyQuery(al_mac)
@@ -564,7 +574,8 @@ impl TopologyDatabase {
                             if local_state == StateLocal::ConvergedLocal {
                                 node.metadata.update(
                                     Some(operation),
-                                    msg_id,
+                                    local_msg_id,
+                                    remote_msg_id,
                                     None,
                                     Some(StateLocal::Idle),
                                     None,
@@ -580,7 +591,8 @@ impl TopologyDatabase {
                             if remote_state != StateRemote::ConvergedRemote {
                                 node.metadata.update(
                                     Some(operation),
-                                    msg_id,
+                                    local_msg_id,
+                                    remote_msg_id,
                                     None,
                                     None,
                                     Some(StateRemote::ConvergingRemote(Instant::now())),
@@ -598,7 +610,8 @@ impl TopologyDatabase {
                             if let StateLocal::ConvergingLocal(_) = local_state {
                                 node.metadata.update(
                                     Some(operation),
-                                    msg_id,
+                                    local_msg_id,
+                                    remote_msg_id,
                                     None,
                                     Some(StateLocal::ConvergedLocal),
                                     None,
@@ -637,7 +650,8 @@ impl TopologyDatabase {
                             if node.metadata.node_state_local != StateLocal::ConvergedLocal {
                                 node.metadata.update(
                                     Some(operation),
-                                    msg_id,
+                                    local_msg_id,
+                                    remote_msg_id,
                                     None,
                                     Some(StateLocal::ConvergingLocal(Instant::now())),
                                     None,
@@ -649,7 +663,8 @@ impl TopologyDatabase {
                             if let StateRemote::ConvergingRemote(_) = node.metadata.node_state_remote {
                                 node.metadata.update(
                                     Some(operation),
-                                    msg_id,
+                                    local_msg_id,
+                                    remote_msg_id,
                                     None,
                                     None,
                                     Some(StateRemote::ConvergedRemote),
@@ -660,7 +675,8 @@ impl TopologyDatabase {
                         UpdateType::LldpUpdate => {
                             node.metadata.update(
                                 Some(operation),
-                                msg_id,
+                                local_msg_id,
+                                remote_msg_id,
                                 lldp_neighbor.clone(),
                                 None,
                                 None,
@@ -682,7 +698,8 @@ impl TopologyDatabase {
                             al_mac: device_data.al_mac,
                             last_update: operation,
                             last_seen: Instant::now(),
-                            message_id: msg_id,
+                            local_message_id: local_msg_id,
+                            remote_message_id: remote_msg_id,
                             lldp_neighbor,
                             node_state_local: StateLocal::Idle,
                             node_state_remote: StateRemote::Idle,
@@ -724,7 +741,7 @@ impl TopologyDatabase {
         let mut nodes = self.nodes.write().await;
         for node in nodes.values_mut() {
             if let StateRemote::ConvergedRemote = node.metadata.node_state_remote {
-                node.metadata.update(None, None, None, None, Some(StateRemote::Idle));
+                node.metadata.update(None, None, None, None, None, Some(StateRemote::Idle));
             }
         }
     }
@@ -905,7 +922,7 @@ mod tests {
             ieee1905_neighbors: None,
         };
         let device = Ieee1905DeviceData::new(device_al_mac, Some(device_mac), Some(vec!(interface)), None);
-        db.update_ieee1905_topology(device.clone(), UpdateType::DiscoveryReceived, None, None, None).await;
+        db.update_ieee1905_topology(device.clone(), UpdateType::DiscoveryReceived, None,  None, None, None).await;
 
         assert!(db.find_device_by_port(device_mac).await.is_some());
         assert!(db.find_device_by_port(device_al_mac).await.is_some());
