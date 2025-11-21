@@ -152,14 +152,23 @@ pub async fn cmdu_topology_query_transmission(
         });
 
         // Define TLVs
-        let multi_ap_profile = MultiApProfileValue {
-            profile: MultiApProfile::Profile3,
+        let al_mac_address = local_al_mac_address;
+
+        let al_mac_tlv = TLV {
+            tlv_type: IEEE1905TLVType::AlMacAddress.to_u8(),
+            tlv_length: 6,
+            tlv_value: Some(al_mac_address.octets().to_vec()),
         };
-        let multi_ap_profile_bytes = multi_ap_profile.serialize();
-        let multi_ap_profile_tlv = TLV {
-            tlv_type: IEEE1905TLVType::MultiApProfile.to_u8(),
-            tlv_length: multi_ap_profile_bytes.len() as u16,
-            tlv_value: Some(multi_ap_profile_bytes),
+        //Vendor Specific TLV (OUI 00:90:96, payload 00 01 00)
+        let vendor_info = VendorSpecificInfo {
+            oui: COMCAST_OUI,                            // Comcast OUI (per your request)
+            vendor_data: COMCAST_QUERY_TAG.to_vec(),     // Vendor payload
+        };
+        let vendor_value = vendor_info.serialize();
+        let vendor_specific_tlv = TLV {
+            tlv_type: IEEE1905TLVType::VendorSpecificInfo.to_u8(),
+            tlv_length: vendor_value.len() as u16,   // 3 (OUI) + payload length
+            tlv_value: Some(vendor_value),
         };
 
         let end_of_message_tlv = TLV {
@@ -168,9 +177,10 @@ pub async fn cmdu_topology_query_transmission(
             tlv_value: None,
         };
 
-        let mut payload = Vec::new();
-        payload.extend(multi_ap_profile_tlv.serialize());
-        payload.extend(end_of_message_tlv.serialize());
+        let mut serialized_payload = vec![];
+        serialized_payload.extend(al_mac_tlv.serialize());
+        serialized_payload.extend(vendor_specific_tlv.serialize());
+        serialized_payload.extend(end_of_message_tlv.serialize());
 
         // Construct CMDU
         let cmdu_topology_query = CMDU {
@@ -180,7 +190,7 @@ pub async fn cmdu_topology_query_transmission(
             message_id,
             fragment: 0,
             flags: 0x80,
-            payload,
+            payload: serialized_payload,
         };
 
         let serialized_cmdu = cmdu_topology_query.serialize();
