@@ -18,9 +18,10 @@
 */
 use std::collections::HashMap;
 use pnet::datalink::MacAddr;
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, sleep, Duration};
 use tracing::{debug, error, info, info_span, instrument, trace, warn, Instrument};
 use std::sync::Arc;
+use rand::Rng;
 use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
@@ -496,6 +497,10 @@ pub fn cmdu_topology_notification_transmission(
     forwarding_interface_mac: MacAddr
 ) {
     tokio::spawn(async move {
+        let delay = Duration::from_secs_f32(rand::rng().random_range(1.0..10.0));
+        trace!("Delaying Topology Notification transmission by {delay:?}");
+        sleep(delay).await;
+
         let message_id = message_id_generator.next_id();
         trace!(
             interface = %interface,
