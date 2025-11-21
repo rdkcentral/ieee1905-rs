@@ -283,6 +283,7 @@ impl CMDUHandler {
                 .update_ieee1905_topology(
                     device_data,
                     UpdateType::DiscoveryReceived,
+                    None,
                     Some(message_id),
                     None,
                     None,
@@ -422,6 +423,7 @@ impl CMDUHandler {
             .update_ieee1905_topology(
                 device_data,
                 UpdateType::QueryReceived,
+                None,
                 Some(message_id),
                 None,
                 Some(device_vendor),
@@ -585,7 +587,7 @@ impl CMDUHandler {
         let expected_id = topology_db
             .get_device(remote_al_mac_address)
             .await
-            .and_then(|n| n.metadata.message_id);
+            .and_then(|n| n.metadata.local_message_id);
 
         match expected_id {
             Some(exp) if exp == message_id => {}
@@ -639,7 +641,8 @@ impl CMDUHandler {
             .update_ieee1905_topology(
                 updated_device_data,
                 UpdateType::ResponseReceived,
-                Some(message_id),
+                None,
+                None,
                 None,
                 Some(device_vendor),
             )
@@ -779,6 +782,7 @@ impl CMDUHandler {
             .update_ieee1905_topology(
                 received_device_data,
                 UpdateType::NotificationReceived,
+                None,
                 Some(message_id),
                 None,
                 Some(device_vendor),

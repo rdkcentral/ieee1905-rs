@@ -172,6 +172,7 @@ impl EthernetFrameObserver for LLDPObserver {
                         node.device_data.clone(),
                         UpdateType::LldpUpdate,
                         None,
+                        None,
                         Some(port_id),
                         None,
                     ).await;
