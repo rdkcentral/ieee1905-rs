@@ -248,6 +248,7 @@ pub enum Role {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ieee1905DeviceData {
     pub al_mac: MacAddr,
+    pub destination_frame_mac: MacAddr,
     pub destination_mac: Option<MacAddr>,
     pub local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
     pub registry_role: Option<Role>,
@@ -257,12 +258,14 @@ impl Ieee1905DeviceData {
     /// **Create a new `Ieee1905DeviceData`**
     pub fn new(
         al_mac: MacAddr,
+        destination_frame_mac: MacAddr,
         destination_mac: Option<MacAddr>,
         local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
         registry_role: Option<Role>,
     ) -> Self {
         Self {
             al_mac,
+            destination_frame_mac,
             destination_mac,
             local_interface_list,
             registry_role,
@@ -394,6 +397,9 @@ impl TopologyDatabase {
         let nodes = self.nodes.read().await;
         nodes.values().find(|node| {
             if node.device_data.al_mac == mac {
+                return true;
+            }
+            if node.device_data.destination_frame_mac == mac {
                 return true;
             }
             if node.device_data.destination_mac == Some(mac) {
@@ -560,6 +566,7 @@ impl TopologyDatabase {
                         UpdateType::DiscoveryReceived => {
                             let local_state = node.metadata.node_state_local;
 
+                            node.device_data.update(device_data.destination_mac, None);
                             node.metadata.update(Some(operation), local_msg_id, remote_msg_id, None, None, None);
 
                             if local_state == StateLocal::Idle {
@@ -921,7 +928,7 @@ mod tests {
             non_ieee1905_neighbors: None,
             ieee1905_neighbors: None,
         };
-        let device = Ieee1905DeviceData::new(device_al_mac, Some(device_mac), Some(vec!(interface)), None);
+        let device = Ieee1905DeviceData::new(device_al_mac, device_al_mac, Some(device_mac), Some(vec!(interface)), None);
         db.update_ieee1905_topology(device.clone(), UpdateType::DiscoveryReceived, None,  None, None, None).await;
 
         assert!(db.find_device_by_port(device_mac).await.is_some());

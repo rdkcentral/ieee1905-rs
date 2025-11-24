@@ -143,13 +143,7 @@ pub async fn cmdu_topology_query_transmission(
         let device_data = node.device_data.clone();
 
         // **Retrieve Destination MAC Address**
-        let destination_mac = device_data.destination_mac.unwrap_or_else(|| {
-            debug!(
-                "Node AL_MAC={} has no destination MAC address, using default IEEE 1905 multicast",
-                remote_al_mac_address
-            );
-            MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13) // Default IEEE 1905 multicast
-        });
+        let destination_mac = device_data.destination_frame_mac;
 
         // Define TLVs
         let al_mac_address = local_al_mac_address;
@@ -269,16 +263,7 @@ pub fn cmdu_topology_response_transmission(
         };
 
         // Retrieve Forwarding MAC Address from Database
-        let forwarding_mac_address = match node.device_data.destination_mac {
-            Some(mac) => mac,
-            None => {
-                warn!(
-                    "Node AL_MAC={} has no forwarding MAC address, using default IEEE 1905 multicast",
-                    remote_al_mac_address
-                );
-                MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13) // we put all zeros
-            }
-        };
+        let destination_mac = node.device_data.destination_frame_mac;
 
         // Construct DeviceInformation TLV
         let ieee1905_local_interfaces: Vec<LocalInterface> = topology_db
@@ -459,7 +444,6 @@ pub fn cmdu_topology_response_transmission(
         );
 
         // Set destination MAC
-        let destination_mac = forwarding_mac_address;
         let source_mac = interface_mac_address;
         let ethertype = 0x893A; // IEEE 1905 EtherType
 
@@ -637,12 +621,7 @@ pub fn cmdu_from_sdu_transmission(
                         return warn!("node has not remotely converged, AL-MAC={destination_al_mac}");
                     }
 
-                    match node.device_data.destination_mac {
-                        Some(mac) => mac,
-                        None => {
-                            return error!("Destination MAC address is missing for AL-MAC={destination_al_mac}");
-                        }
-                    }
+                    node.device_data.destination_frame_mac
                 };
                 let source_mac = match get_mac_address_by_interface(&interface) {
                     Some(mac) => {

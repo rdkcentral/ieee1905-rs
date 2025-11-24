@@ -137,10 +137,10 @@ impl CMDUHandler {
 
         match CMDUType::from_u16(cmdu.message_type) {
             CMDUType::TopologyDiscovery => {
-                self.handle_topology_discovery(&tlvs, message_id).await;
+                self.handle_topology_discovery(&tlvs, message_id, source_mac).await;
             }
             CMDUType::TopologyNotification => {
-                let handled = self.handle_topology_notification(&tlvs, message_id).await;
+                let handled = self.handle_topology_notification(&tlvs, message_id, source_mac).await;
                 if !handled {
                     if let Err(e) = self
                         .handle_sdu_from_cmdu_reception(
@@ -176,7 +176,7 @@ impl CMDUHandler {
                 }
             }
             CMDUType::TopologyResponse => {
-                let handled = self.handle_topology_response(&tlvs, message_id).await;
+                let handled = self.handle_topology_response(&tlvs, message_id, source_mac).await;
                 if !handled {
                     if let Err(e) = self
                         .handle_sdu_from_cmdu_reception(
@@ -217,8 +217,9 @@ impl CMDUHandler {
 
     /// Handles and logs TLVs from the CMDU payload for Topology Discovery.
     #[instrument(skip_all, name = "discovery")]
-    async fn handle_topology_discovery(&self, tlvs: &[TLV], message_id: u16) {
+    async fn handle_topology_discovery(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) {
         debug!(
+            source = %source_mac,
             msg_id = message_id,
             interface = self.interface_name,
             "Handling Topology Discovery CMDU",
@@ -270,6 +271,7 @@ impl CMDUHandler {
 
             let device_data = Ieee1905DeviceData {
                 al_mac: remote_al_mac_address,
+                destination_frame_mac: source_mac,
                 destination_mac: Some(neighbor_interface_mac_address),
                 local_interface_list: None,
                 registry_role: None,
@@ -287,13 +289,15 @@ impl CMDUHandler {
                 .await;
 
             info!(
-                "Topology Discovery Processed: AL_MAC={} INTERFACE_MAC={}",
-                remote_al_mac_address, neighbor_interface_mac_address
+                al_mac = %remote_al_mac_address,
+                source = %source_mac,
+                %neighbor_interface_mac_address,
+                "Topology Discovery Processed",
             );
 
             // Now react to the event
             match result.transmission_event {
-                TransmissionEvent::SendTopologyQuery(destination_mac) => {
+                TransmissionEvent::SendTopologyQuery(destination_al_mac) => {
                     let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
 
                     cmdu_topology_query_transmission(
@@ -301,7 +305,7 @@ impl CMDUHandler {
                         Arc::clone(&self.sender),
                         Arc::clone(&self.message_id_generator),
                         self.local_al_mac,
-                        destination_mac,
+                        destination_al_mac,
                         forwarding_interface_mac,
                     )
                     .await;
@@ -328,6 +332,7 @@ impl CMDUHandler {
     #[instrument(skip_all, name = "query")]
     async fn handle_topology_query(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) -> bool {
         debug!(
+            source = %source_mac,
             msg_id = message_id,
             interface = self.interface_name,
             "Handling Topology Query CMDU",
@@ -401,7 +406,8 @@ impl CMDUHandler {
         let device_data = if let Some(remote_al_mac) = remote_al_mac {
             Ieee1905DeviceData {
                 al_mac: remote_al_mac,
-                destination_mac: Some(source_mac),
+                destination_frame_mac: source_mac,
+                destination_mac: None,
                 local_interface_list: None,
                 registry_role: None,
             }
@@ -410,7 +416,7 @@ impl CMDUHandler {
                 warn!("Topology Query node not found, REMOTE_PORT_MAC={source_mac}");
                 return false;
             };
-            node.device_data.destination_mac = Some(source_mac);
+            node.device_data.destination_frame_mac = source_mac;
             node.device_data
         };
 
@@ -426,7 +432,11 @@ impl CMDUHandler {
             )
             .await;
 
-        debug!("Topology Database updated: AL_MAC={remote_al_mac} set to QueryReceived");
+        info!(
+            al_mac = %remote_al_mac,
+            source = %source_mac,
+            "Topology Query Processed",
+        );
 
         match result.transmission_event {
             TransmissionEvent::SendTopologyResponse(destination_mac) => {
@@ -461,8 +471,9 @@ impl CMDUHandler {
 
     /// Handles and logs TLVs for Topology Response.
     #[instrument(skip_all, name = "response")]
-    async fn handle_topology_response(&self, tlvs: &[TLV], message_id: u16) -> bool {
+    async fn handle_topology_response(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) -> bool {
         debug!(
+            source = %source_mac,
             msg_id = message_id,
             interface = self.interface_name,
             "Handling Topology Response CMDU",
@@ -564,11 +575,6 @@ impl CMDUHandler {
             return true;
         }
 
-        let Some(remote_al_mac_address) = remote_al_mac else {
-            tracing::warn!("Topology Response missing AL MAC. Discarding.");
-            return true;
-        };
-
         if !ieee_neighbors_map.is_empty() {
             for iface in &mut interfaces {
                 if let Some(neighs) = ieee_neighbors_map.get(&iface.mac) {
@@ -577,32 +583,30 @@ impl CMDUHandler {
             }
         }
 
-        let topology_db =
-            TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
+        let topology_db = TopologyDatabase::get_instance(
+            self.local_al_mac,
+            self.interface_name.clone(),
+        ).await;
 
-        let expected_id = topology_db
-            .get_device(remote_al_mac_address)
-            .await
-            .and_then(|n| n.metadata.local_message_id);
+        let Some(node) = topology_db.find_device_by_port(source_mac).await.clone() else {
+            warn!(
+                al_mac = ?remote_al_mac,
+                source = %source_mac,
+                "Node not found. Discarding Topology Response.",
+            );
+            return true;
+        };
 
-        match expected_id {
-            Some(exp) if exp == message_id => {}
-            Some(exp) => {
-                tracing::warn!(
-                    expected = exp,
-                    got = message_id,
-                    al_mac = %remote_al_mac_address,
-                    "Topology Response message_id mismatch → fallback to SDU"
-                );
-                return false;
-            }
-            None => {
-                tracing::warn!(
-                    al_mac = %remote_al_mac_address,
-                    "No in-flight query for this node (missing expected message_id) → fallback to SDU"
-                );
-                return false;
-            }
+        let expected_id = node.metadata.local_message_id;
+        if expected_id != Some(message_id) {
+            warn!(
+                expected = expected_id,
+                got = message_id,
+                al_mac = ?remote_al_mac,
+                source = %source_mac,
+                "Topology Response message_id mismatch → fallback to SDU"
+            );
+            return false;
         }
 
         for interface in interfaces.iter_mut() {
@@ -626,8 +630,10 @@ impl CMDUHandler {
             }
         }
 
+        let remote_al_mac = node.device_data.al_mac;
         let updated_device_data = Ieee1905DeviceData {
-            al_mac: remote_al_mac_address,
+            al_mac: remote_al_mac,
+            destination_frame_mac: source_mac,
             destination_mac: None,
             local_interface_list: Some(interfaces.clone()),
             registry_role: None,
@@ -644,16 +650,18 @@ impl CMDUHandler {
             )
             .await;
 
-        tracing::info!(
-            "Topology Response processed: AL_MAC={} MESSAGE_ID={}",
-            remote_al_mac_address,
-            message_id
+        info!(
+            al_mac = %remote_al_mac,
+            source = %source_mac,
+            msg_id = message_id,
+            "Topology Response Processed",
         );
 
         match result.transmission_event {
             TransmissionEvent::SendTopologyNotification(_destination_mac) => {
-                tracing::debug!(
-                    al_mac = %remote_al_mac_address,
+                debug!(
+                    al_mac = %remote_al_mac,
+                    source = %source_mac,
                     "Sending Topology Notification because topology changed"
                 );
 
@@ -668,8 +676,9 @@ impl CMDUHandler {
                 );
             }
             TransmissionEvent::None => {
-                tracing::debug!(
-                    al_mac = %remote_al_mac_address,
+                debug!(
+                    al_mac = %remote_al_mac,
+                    source = %source_mac,
                     "Topology update did not require sending notification"
                 );
             }
@@ -681,8 +690,9 @@ impl CMDUHandler {
 
     /// Handles and logs TLVs from the CMDU payload for Topology Notification.
     #[instrument(skip_all, name = "notification")]
-    async fn handle_topology_notification(&self, tlvs: &[TLV], message_id: u16) -> bool {
+    async fn handle_topology_notification(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) -> bool {
         debug!(
+            source = %source_mac,
             msg_id = message_id,
             interface = self.interface_name,
             "Handling Topology Notification CMDU",
@@ -769,6 +779,7 @@ impl CMDUHandler {
 
         let received_device_data = Ieee1905DeviceData {
             al_mac: remote_al_mac_address,
+            destination_frame_mac: source_mac,
             destination_mac: None,
             local_interface_list: None,
             registry_role: None,
@@ -785,9 +796,10 @@ impl CMDUHandler {
             )
             .await;
 
-        tracing::info!(
-            "Topology Notification processed from AL_MAC={}",
-            remote_al_mac_address
+        info!(
+            al_mac = %remote_al_mac_address,
+            source = %source_mac,
+            "Topology Notification Processed",
         );
 
         match result.transmission_event {
