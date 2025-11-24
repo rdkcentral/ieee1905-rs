@@ -281,24 +281,22 @@ pub fn cmdu_topology_response_transmission(
         };
 
         // Construct DeviceInformation TLV
-        let ieee1905_local_interfaces: Vec<LocalInterface> = topology_db
-            .local_interface_list
-            .read()
-            .await
-            .as_ref()
-            .map(|interfaces| {
-                interfaces
-                    .iter()
-                    .map(|iface| {
-                        LocalInterface {
-                            mac_address: iface.mac,
-                            media_type: iface.media_type,
-                            special_info: vec![], // No additional special info
-                        }
+        let ieee1905_local_interfaces: Vec<LocalInterface> = {
+            let local_mac = topology_db.local_mac.read().await.clone();
+            let interfaces = topology_db.local_interface_list.read().await;
+            interfaces.as_ref().unwrap_or(&Vec::new()).iter()
+                .filter_map(|iface| {
+                    if iface.mac != local_mac {
+                        return None;
+                    }
+                    Some(LocalInterface {
+                        mac_address: iface.mac,
+                        media_type: iface.media_type,
+                        special_info: vec![], // No additional special info
                     })
-                    .collect()
-            })
-            .unwrap_or_default();
+                })
+                .collect()
+        };
 
         // Construct DeviceBridgingCapability TLV
         let device_bridging_capability_tlv = {
