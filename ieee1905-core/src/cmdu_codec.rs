@@ -19,17 +19,21 @@
 
 #![deny(warnings)]
 // External crates
-use nom::Err as NomErr;
+use nom::{Err as NomErr, Needed};
 use nom::{
     bytes::complete::take,
     error::{Error, ErrorKind},
     number::complete::{be_u16, be_u8},
+    Parser,
     IResult,
 };
 
 use pnet::datalink::MacAddr;
 use std::fmt::Debug;
-
+use anyhow::bail;
+use nom::combinator::{all_consuming, cond};
+use nom::multi::many0;
+use nom::number::complete::be_u32;
 // Internal modules
 use crate::cmdu_reassembler::CmduReassemblyError;
 use crate::tlv_cmdu_codec::TLV;
@@ -160,7 +164,11 @@ pub enum IEEE1905TLVType {
     DeviceBridgingCapability,
     NonIeee1905NeighborDevices,
     Ieee1905NeighborDevices,
+    LinkMetricQuery,
+    LinkMetricTx,
+    LinkMetricRx,
     VendorSpecificInfo,
+    LinkMetricResultCode,
     SearchedRole,
     SupportedRole,
     ClientAssociation,
@@ -179,7 +187,11 @@ impl IEEE1905TLVType {
             0x04 => IEEE1905TLVType::DeviceBridgingCapability,
             0x06 => IEEE1905TLVType::NonIeee1905NeighborDevices,
             0x07 => IEEE1905TLVType::Ieee1905NeighborDevices,
+            0x08 => IEEE1905TLVType::LinkMetricQuery,
+            0x09 => IEEE1905TLVType::LinkMetricTx,
+            0x0a => IEEE1905TLVType::LinkMetricRx,
             0x0b => IEEE1905TLVType::VendorSpecificInfo,
+            0x0c => IEEE1905TLVType::LinkMetricResultCode,
             0x0d => IEEE1905TLVType::SearchedRole,
             0x0f => IEEE1905TLVType::SupportedRole,
             0x92 => IEEE1905TLVType::ClientAssociation,
@@ -198,7 +210,11 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::DeviceBridgingCapability => 0x04,
             IEEE1905TLVType::NonIeee1905NeighborDevices => 0x06,
             IEEE1905TLVType::Ieee1905NeighborDevices => 0x07,
+            IEEE1905TLVType::LinkMetricQuery => 0x08,
+            IEEE1905TLVType::LinkMetricTx => 0x09,
+            IEEE1905TLVType::LinkMetricRx => 0x0a,
             IEEE1905TLVType::VendorSpecificInfo => 0x0b,
+            IEEE1905TLVType::LinkMetricResultCode => 0x0c,
             IEEE1905TLVType::SearchedRole => 0x0d,
             IEEE1905TLVType::SupportedRole => 0x0f,
             IEEE1905TLVType::ClientAssociation => 0x92,
@@ -997,6 +1013,7 @@ impl ClientAssociation {
         buf
     }
 }
+
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq)]
 pub struct MultiApProfileValue {
@@ -1017,6 +1034,242 @@ impl MultiApProfileValue {
     /// Serialize the value to a single byte.
     pub fn serialize(&self) -> Vec<u8> {
         vec![self.profile.to_u8()]
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct LinkMetricQuery {
+    pub neighbor_type: u8,
+    pub neighbor_mac: Option<MacAddr>,
+    pub requested_metrics: u8,
+}
+
+impl LinkMetricQuery {
+    pub const NEIGHBOR_ALL: u8 = 0x00;
+    pub const NEIGHBOR_SPECIFIC: u8 = 0x01;
+
+    pub const METRIC_TX: u8 = 0x00;
+    pub const METRIC_RX: u8 = 0x01;
+    pub const METRIC_TX_RX: u8 = 0x02;
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, neighbor_type) = be_u8(input)?;
+
+        let specific_neighbor = neighbor_type == Self::NEIGHBOR_SPECIFIC;
+        let (input, neighbor_mac) = cond(specific_neighbor, take_mac_addr).parse(input)?;
+        let (input, requested_metrics) = be_u8(input)?;
+
+        Ok((input, Self {
+            neighbor_type,
+            neighbor_mac,
+            requested_metrics,
+        }))
+    }
+
+    pub fn serialize(&self) -> anyhow::Result<Vec<u8>> {
+        let mut vec = Vec::new();
+        vec.push(self.neighbor_type);
+
+        if self.neighbor_type == Self::NEIGHBOR_SPECIFIC {
+            if let Some(mac) = self.neighbor_mac {
+                vec.extend(mac.octets());
+            } else {
+                bail!("LinkMetricQuery -> mac is missing when NEIGHBOR_SPECIFIC flag is present");
+            }
+        }
+        vec.push(self.requested_metrics);
+
+        Ok(vec)
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct LinkMetricTx {
+    pub source_al_mac: MacAddr,
+    pub neighbour_al_mac: MacAddr,
+    pub interface_pairs: Vec<LinkMetricTxPair>,
+}
+
+impl LinkMetricTx {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, source_al_mac) = take_mac_addr(input)?;
+        let (input, neighbour_al_mac) = take_mac_addr(input)?;
+        let (input, interface_pairs) = all_consuming(many0(LinkMetricTxPair::parse)).parse(input)?;
+
+        Ok((input, Self {
+            source_al_mac,
+            neighbour_al_mac,
+            interface_pairs,
+        }))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.source_al_mac.octets());
+        vec.extend(self.neighbour_al_mac.octets());
+        for pair in self.interface_pairs.iter() {
+            vec.extend(pair.serialize());
+        }
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct LinkMetricTxPair {
+    pub receiver_interface_mac: MacAddr,
+    pub neighbour_interface_mac: MacAddr,
+    pub interface_type: u16,
+    pub has_more_ieee802_bridges: u8,
+    pub packet_errors: u32,
+    pub transmitted_packets: u32,
+    pub mac_throughput_capacity: u16,
+    pub link_availability: u16,
+    pub phy_rate: u16,
+}
+
+impl LinkMetricTxPair {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, receiver_interface_mac) = take_mac_addr(input)?;
+        let (input, neighbour_interface_mac) = take_mac_addr(input)?;
+        let (input, interface_type) = be_u16(input)?;
+        let (input, has_more_ieee802_bridges) = be_u8(input)?;
+        let (input, packet_errors) = be_u32(input)?;
+        let (input, transmitted_packets) = be_u32(input)?;
+        let (input, mac_throughput_capacity) = be_u16(input)?;
+        let (input, link_availability) = be_u16(input)?;
+        let (input, phy_rate) = be_u16(input)?;
+
+        Ok((input, Self {
+            receiver_interface_mac,
+            neighbour_interface_mac,
+            interface_type,
+            has_more_ieee802_bridges,
+            packet_errors,
+            transmitted_packets,
+            mac_throughput_capacity,
+            link_availability,
+            phy_rate,
+        }))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.receiver_interface_mac.octets());
+        vec.extend(self.neighbour_interface_mac.octets());
+        vec.extend(self.interface_type.to_be_bytes());
+        vec.extend(self.has_more_ieee802_bridges.to_be_bytes());
+        vec.extend(self.packet_errors.to_be_bytes());
+        vec.extend(self.transmitted_packets.to_be_bytes());
+        vec.extend(self.mac_throughput_capacity.to_be_bytes());
+        vec.extend(self.link_availability.to_be_bytes());
+        vec.extend(self.phy_rate.to_be_bytes());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct LinkMetricRx {
+    pub source_al_mac: MacAddr,
+    pub neighbour_al_mac: MacAddr,
+    pub interface_pairs: Vec<LinkMetricRxPair>,
+}
+
+impl LinkMetricRx {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, source_al_mac) = take_mac_addr(input)?;
+        let (input, neighbour_al_mac) = take_mac_addr(input)?;
+        let (input, interface_pairs) = all_consuming(many0(LinkMetricRxPair::parse)).parse(input)?;
+
+        Ok((input, Self {
+            source_al_mac,
+            neighbour_al_mac,
+            interface_pairs,
+        }))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.source_al_mac.octets());
+        vec.extend(self.neighbour_al_mac.octets());
+        for pair in self.interface_pairs.iter() {
+            vec.extend(pair.serialize());
+        }
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct LinkMetricRxPair {
+    pub receiver_interface_mac: MacAddr,
+    pub neighbour_interface_mac: MacAddr,
+    pub interface_type: u16,
+    pub packet_errors: u32,
+    pub transmitted_packets: u32,
+    pub rssi: u8,
+}
+
+impl LinkMetricRxPair {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, receiver_interface_mac) = take_mac_addr(input)?;
+        let (input, neighbour_interface_mac) = take_mac_addr(input)?;
+        let (input, interface_type) = be_u16(input)?;
+        let (input, packet_errors) = be_u32(input)?;
+        let (input, transmitted_packets) = be_u32(input)?;
+        let (input, rssi) = be_u8(input)?;
+
+        Ok((input, Self {
+            receiver_interface_mac,
+            neighbour_interface_mac,
+            interface_type,
+            packet_errors,
+            transmitted_packets,
+            rssi,
+        }))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.receiver_interface_mac.octets());
+        vec.extend(self.neighbour_interface_mac.octets());
+        vec.extend(self.interface_type.to_be_bytes());
+        vec.extend(self.packet_errors.to_be_bytes());
+        vec.extend(self.transmitted_packets.to_be_bytes());
+        vec.extend(self.rssi.to_be_bytes());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub enum LinkMetricResultCode {
+    InvalidNeighbor,
+    UnknownCode(u8),
+}
+
+impl LinkMetricResultCode {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, code) = be_u8(input)?;
+        let this = match code {
+            0x00 => Self::InvalidNeighbor,
+            _ => Self::UnknownCode(code),
+        };
+        Ok((input, this))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let code = match self {
+            Self::InvalidNeighbor => 0x00,
+            Self::UnknownCode(e) => *e,
+        };
+
+        let mut vec = Vec::new();
+        vec.extend(code.to_be_bytes());
+        vec
     }
 }
 
@@ -1239,6 +1492,21 @@ impl CMDU {
         header_size + payload_size
     }
 }
+
+fn take_n_bytes<const N: usize>(input: &[u8]) -> IResult<&[u8], &[u8; N]> {
+    let (input, bytes) = take(N)(input)?;
+    match bytes.try_into() {
+        Ok(e) => Ok((input, e)),
+        Err(_) => Err(nom::Err::Incomplete(Needed::new(N))),
+    }
+}
+
+fn take_mac_addr(input: &[u8]) -> IResult<&[u8], MacAddr> {
+    let (input, bytes) = take_n_bytes::<6>(input)?;
+    let mac = MacAddr::from(*bytes);
+    Ok((input, mac))
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -1373,8 +1641,24 @@ pub mod tests {
             IEEE1905TLVType::Ieee1905NeighborDevices
         );
         assert_eq!(
+            IEEE1905TLVType::from_u8(0x08),
+            IEEE1905TLVType::LinkMetricQuery,
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x09),
+            IEEE1905TLVType::LinkMetricTx,
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x0a),
+            IEEE1905TLVType::LinkMetricRx,
+        );
+        assert_eq!(
             IEEE1905TLVType::from_u8(0x0b),
             IEEE1905TLVType::VendorSpecificInfo
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x0c),
+            IEEE1905TLVType::LinkMetricResultCode,
         );
         assert_eq!(
             IEEE1905TLVType::from_u8(0x0d),
@@ -1406,7 +1690,11 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::Unknown(0x05).to_u8(), 0x05);
         assert_eq!(IEEE1905TLVType::NonIeee1905NeighborDevices.to_u8(), 0x06);
         assert_eq!(IEEE1905TLVType::Ieee1905NeighborDevices.to_u8(), 0x07);
+        assert_eq!(IEEE1905TLVType::LinkMetricQuery.to_u8(), 0x08);
+        assert_eq!(IEEE1905TLVType::LinkMetricTx.to_u8(), 0x09);
+        assert_eq!(IEEE1905TLVType::LinkMetricRx.to_u8(), 0x0a);
         assert_eq!(IEEE1905TLVType::VendorSpecificInfo.to_u8(), 0x0b);
+        assert_eq!(IEEE1905TLVType::LinkMetricResultCode.to_u8(), 0x0c);
         assert_eq!(IEEE1905TLVType::SearchedRole.to_u8(), 0x0d);
         assert_eq!(IEEE1905TLVType::SupportedRole.to_u8(), 0x0f);
         assert_eq!(IEEE1905TLVType::ClientAssociation.to_u8(), 0x92);
@@ -2421,6 +2709,116 @@ pub mod tests {
 
         let parsed = MultiApProfileValue::parse(&bytes, bytes.len() as u16).unwrap().1;
         assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn test_link_metric_query_all_neighbors_serialization() {
+        let original = [0x00, 0x02];
+
+        let parsed = LinkMetricQuery::parse(&original).unwrap().1;
+        assert_eq!(parsed.neighbor_type, LinkMetricQuery::NEIGHBOR_ALL);
+        assert_eq!(parsed.neighbor_mac, None);
+        assert_eq!(parsed.requested_metrics, LinkMetricQuery::METRIC_TX_RX);
+
+        let serialized = parsed.serialize().unwrap();
+        assert_eq!(serialized, original);
+    }
+
+    #[test]
+    fn test_link_metric_query_specific_neighbor_serialization() {
+        let original = [0x01, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x01];
+
+        let parsed = LinkMetricQuery::parse(&original).unwrap().1;
+        assert_eq!(parsed.neighbor_type, LinkMetricQuery::NEIGHBOR_SPECIFIC);
+        assert_eq!(parsed.neighbor_mac, Some(MacAddr::new(0x40, 0x41, 0x42, 0x43, 0x44, 0x45)));
+        assert_eq!(parsed.requested_metrics, LinkMetricQuery::METRIC_RX);
+
+        let serialized = parsed.serialize().unwrap();
+        assert_eq!(serialized, original);
+    }
+
+    #[test]
+    fn test_link_metric_tx_serialization() {
+        let original = [
+            0x40, 0x41, 0x42, 0x43, 0x44, 0x45, // source al_mac
+            0x50, 0x51, 0x52, 0x53, 0x54, 0x55, // neighbour al_mac
+            // interface pair 1
+            0x60, 0x61, 0x62, 0x63, 0x64, 0x66, // receiver interface mac
+            0x70, 0x71, 0x72, 0x73, 0x74, 0x77, // neighbour interface mac
+            0x00, 0x01,                         // interface type
+            0x00,                               // no more bridges
+            0x00, 0x00, 0x00, 0x13,             // packet errors
+            0x00, 0x00, 0x00, 0x42,             // transmitted packets
+            0x00, 0x80,                         // mac throughput capacity
+            0x00, 0x64,                         // link availability
+            0x00, 0x10,                         // phy rate
+        ];
+
+        let parsed = LinkMetricTx::parse(&original).unwrap().1;
+        assert_eq!(parsed.source_al_mac, MacAddr::new(0x40, 0x41, 0x42, 0x43, 0x44, 0x45));
+        assert_eq!(parsed.neighbour_al_mac, MacAddr::new(0x50, 0x51, 0x52, 0x53, 0x54, 0x55));
+
+        let pair = &parsed.interface_pairs[0];
+        assert_eq!(pair.receiver_interface_mac, MacAddr::new(0x60, 0x61, 0x62, 0x63, 0x64, 0x66));
+        assert_eq!(pair.neighbour_interface_mac, MacAddr::new(0x70, 0x71, 0x72, 0x73, 0x74, 0x77));
+        assert_eq!(pair.interface_type, 1);
+        assert_eq!(pair.has_more_ieee802_bridges, 0);
+        assert_eq!(pair.packet_errors, 0x13);
+        assert_eq!(pair.transmitted_packets, 0x42);
+        assert_eq!(pair.mac_throughput_capacity, 0x80);
+        assert_eq!(pair.link_availability, 0x64);
+        assert_eq!(pair.phy_rate, 0x10);
+
+        let serialized = parsed.serialize();
+        assert_eq!(serialized, original);
+    }
+
+    #[test]
+    fn test_link_metric_rx_serialization() {
+        let original = [
+            0x40, 0x41, 0x42, 0x43, 0x44, 0x45, // source al_mac
+            0x50, 0x51, 0x52, 0x53, 0x54, 0x55, // neighbour al_mac
+            // interface pair 1
+            0x60, 0x61, 0x62, 0x63, 0x64, 0x66, // receiver interface mac
+            0x70, 0x71, 0x72, 0x73, 0x74, 0x77, // neighbour interface mac
+            0x00, 0x01,                         // interface type
+            0x00, 0x00, 0x00, 0x13,             // packet errors
+            0x00, 0x00, 0x00, 0x42,             // transmitted packets
+            0x10,                               // rssi
+        ];
+
+        let parsed = LinkMetricRx::parse(&original).unwrap().1;
+        assert_eq!(parsed.source_al_mac, MacAddr::new(0x40, 0x41, 0x42, 0x43, 0x44, 0x45));
+        assert_eq!(parsed.neighbour_al_mac, MacAddr::new(0x50, 0x51, 0x52, 0x53, 0x54, 0x55));
+
+        let pair = &parsed.interface_pairs[0];
+        assert_eq!(pair.receiver_interface_mac, MacAddr::new(0x60, 0x61, 0x62, 0x63, 0x64, 0x66));
+        assert_eq!(pair.neighbour_interface_mac, MacAddr::new(0x70, 0x71, 0x72, 0x73, 0x74, 0x77));
+        assert_eq!(pair.interface_type, 1);
+        assert_eq!(pair.packet_errors, 0x13);
+        assert_eq!(pair.transmitted_packets, 0x42);
+        assert_eq!(pair.rssi, 0x10);
+
+        let serialized = parsed.serialize();
+        assert_eq!(serialized, original);
+    }
+
+    #[test]
+    fn test_link_metric_result_code_serialization() {
+        let pairs = [
+            (0x00, LinkMetricResultCode::InvalidNeighbor),
+            (0x01, LinkMetricResultCode::UnknownCode(0x01)),
+        ];
+
+        for (code, expected) in pairs {
+            let slice = std::slice::from_ref(&code);
+
+            let parsed = LinkMetricResultCode::parse(slice).unwrap().1;
+            assert_eq!(parsed, expected);
+
+            let serialized = parsed.serialize();
+            assert_eq!(serialized, slice);
+        }
     }
 
     #[test]
