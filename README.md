@@ -1,17 +1,34 @@
 # IEEE1905.1 RDK-B component
 
-## IEEE1905.1 Overview
+## 🌐 IEEE1905.1 Overview
 
 IEEE 1905.1 is a standard developed by the Institute of Electrical and Electronics Engineers (IEEE) for providing a uniform method for devices to communicate and interoperate within a home network environment. It defines a protocol that enables devices from different manufacturers to seamlessly communicate and share resources, regardless of their underlying technologies.
 
 One of the key components of IEEE 1905 is the Application Layer SAP, which is responsible for managing communication between the higher-level entities (HLEs) and the lower layers of the network stack, and more specifically the IEEE 1905 adaptation layer.
 In order to identify multiple SAPs between AL and HLE layers, we identify the SAP as the AL_MAC_ADDRESS of the remote entity.
 
-## IEEE1905 Adaptation Layer MAC Service Access Point
+## 🗺 IEEE1905.1 Roadmap 
 
-IEEE1905 Adaptation Layer MAC Service Access Point will provide IEEE1905 transport service to applications in the RDK-B stack through a set of service primitives. These primitives have been creted with two goals in mind, registration of consumers that will make use of the IEEE1905 stack, using service-registration-request and service-registration-response APIs and exchange of service data units via service-data-request and service-data-indication, through the AL MAC service access point, refered as SAP in the rest of the document.  
+A short, high-level plan:
 
-### IEEE1905 Service functional requirements
+- [x] Topology map.
+- [x] FSM definition and implementation.  
+- [x] Adaptation Layer Service Access Point for Easymesh High Level Entities.
+- [x] LLDP implementation.  
+- [x] IEEE1905 CMDU parsing and serialization (version 2023)
+- [x] Docker integration for stand-alone.
+- [x] RDK integration.
+- [x] OWRT integration.
+- [ ] TR.181 data-model integration using RBUS
+- [ ] Link Metric management and topology inegration.
+- [ ] Interoperability.
+- [ ] IEEE1905 CMDU parsing and serialization (version 2024)
+- [ ] Controller backup.
+- [ ] Path Performance Monitoring.
+- [ ] IEEE1905 security. 
+ 
+
+## IEEE1905 Service functional requirements
 
 | Functional Requirement     | Description     |
 |--------------|--------------|
@@ -26,7 +43,7 @@ IEEE1905 Adaptation Layer MAC Service Access Point will provide IEEE1905 transpo
 | **CMDU encryption**  | IEEE1905 will provide encryption service and message integrity validation for CMDU's|
 | **Path Performance monitoring**  | IEEE1905 SAP will provide an active measurements service to monitor path health and performance monitoring|
 
-### IEEE1905 Software Stack
+## 🧩 IEEE1905 Software Stack
 
 In current implementations of EasyMesh, the IEEE1905 stack is deeply integrated into both the EasyMesh agents and controller. This tight coupling between the two standards means that the functionalities of IEEE1905, which handles the transport of network information, and EasyMesh, which manages mesh network control, are often intertwined within the same system components.  
 
@@ -44,6 +61,9 @@ graph TD;
     PacketHandler <---> TopologyManager
     PacketForwarder <---> Kernel
 ```
+## 🔌 IEEE1905 Adaptation Layer MAC Service Access Point
+
+IEEE1905 Adaptation Layer MAC Service Access Point will provide IEEE1905 transport service to applications in the RDK-B stack through a set of service primitives. These primitives have been creted with two goals in mind, registration of consumers that will make use of the IEEE1905 stack, using service-registration-request and service-registration-response APIs and exchange of service data units via service-data-request and service-data-indication, through the AL MAC service access point, refered as SAP in the rest of the document.  
 
 ### AL MAC SAP API's
 
@@ -65,7 +85,7 @@ The IEEE1905_AL_SAP will provide the following API abstraction to use the servic
     2. **AlServiceDataIndication()**: This API is used by applications to listen and receive a SDUs (service data unit) from the IEEE1905 service through the SAP, as before for the request,the SDU will contain the IEEE1905 CMDU created by the remote application, plus AlMacAddress source and destination.
    In case of SDU processing errors during SAP transfer for reception, IEEE1905 service will generate a primitive error, in a shape of a C++ exception according to C++ standard library.
 
-## AL Finite State Machine
+## 🔁 AL Finite State Machine
 
 ### Finite State machine Diagram
 
@@ -147,7 +167,7 @@ sequenceDiagram
 
 ---
 
-## Component diagram
+## 🧱 Architecture
 
 ![ARCH](docs/architecture/block_diagram/block_diagram.jpg)
 
@@ -334,7 +354,7 @@ The topology map provides all the information collected through Topology CMDUs e
                 └── (AA:BB:CC:A2)]
 ```
 
-## Installation
+## 🛠️ Installation
 
 ### Prerequisites
 
@@ -774,7 +794,7 @@ possibly with parameters and arguments.
 
 ---
 
-## IEEE1905 security layer
+## 🛡️ IEEE1905 security layer
 
 ### Security Storage
 
@@ -888,7 +908,7 @@ pkcs11.finalize()?;
 
 ```
 
-## Release Types
+## 🏷️ Release Types
 
 We follow **Semantic Versioning (SemVer)**, using the format **MAJOR.MINOR.PATCH**:
 
