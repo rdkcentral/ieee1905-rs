@@ -26,10 +26,9 @@ use crate::registration_codec::{
     ServiceOperation, ServiceType,
 };
 use crate::sdu_codec::SDU;
-use crate::task_registry::TASK_REGISTRY;
 use crate::topology_manager::Role;
-use crate::TopologyDatabase;
-use anyhow::{Context, Result};
+use crate::{next_task_id, TopologyDatabase};
+use anyhow::{bail, Context, Result};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
@@ -49,6 +48,7 @@ use tokio::sync::oneshot;
 use once_cell::sync::Lazy;
 
 use thiserror::Error;
+use tracing::instrument;
 
 pub static SAP_INSTANCE: Lazy<Mutex<Option<Arc<Mutex<AlServiceAccessPoint>>>>> =
     Lazy::new(|| Mutex::new(None));
@@ -62,10 +62,11 @@ pub enum AlSapError {
 }
 
 // Setter for SAP_INSTANCE
-async fn set_instance(instance: AlServiceAccessPoint) {
+async fn set_instance(instance: AlServiceAccessPoint) -> Arc<Mutex<AlServiceAccessPoint>> {
     let mut lock = SAP_INSTANCE.lock().await;
-    *lock = Some(Arc::new(Mutex::new(instance)));
+    lock.insert(Arc::new(Mutex::new(instance))).clone()
 }
+
 // Getter for mutable access
 async fn get_instance_mut() -> Option<Arc<Mutex<AlServiceAccessPoint>>> {
     let lock = SAP_INSTANCE.lock().await;
@@ -94,63 +95,44 @@ pub struct AlServiceAccessPoint {
 }
 
 impl AlServiceAccessPoint {
-    pub async fn initialize_and_store<P: AsRef<Path>>(
-        control_socket_path: P,
-        data_socket_path: P,
+    #[instrument(skip_all, name = "al_sap_init", fields(task = next_task_id()))]
+    pub async fn initialize_and_store(
+        control_socket_path: impl AsRef<Path>,
+        data_socket_path: impl AsRef<Path>,
         sender: Arc<EthernetSender>,
         interface_name: String,
-        shutdown_tx: Option<oneshot::Sender<()>>,
-    ) -> Result<()> {
+        shutdown_tx: oneshot::Sender<()>,
+    ) {
         let sap = AlServiceAccessPoint::start_server(
             control_socket_path,
             data_socket_path,
             sender,
             interface_name,
-        )
-        .await?;
+        ).await;
 
-        tracing::trace!("Setting up new SAP_INSTANCE");
-        set_instance(sap).await;
-        tracing::trace!("New instance setup done");
+        let sap = match sap {
+            Ok(e) => set_instance(e).await,
+            Err(e) => return tracing::error!("Failed to initialize SAP: {e:?}"),
+        };
+        tracing::info!("SAP server initialized and stored.");
 
-        if let Some(sap_instance_arc) = get_instance_mut().await {
-            // Run as a task listener registration
-            let task_handle = tokio::spawn(async move {
-                let mut sap_instance = sap_instance_arc.lock().await;
-                tracing::debug!("Got SAP_INSTANCE");
+        let result = sap.lock().await.service_access_point_registration_request().await;
+        tracing::debug!("SAP_INSTANCE locking result: {:?}", result);
 
-                let result: std::result::Result<AlServiceRegistrationRequest, anyhow::Error> =
-                    sap_instance
-                        .service_access_point_registration_request()
-                        .await;
-                tracing::debug!("SAP_INSTANCE locking result: {:?}", result);
-
-                match result {
-                    Ok(_req) => {
-                        tracing::debug!(
-                            "Received registration request on control unix stream socket"
-                        );
-                        // this task is gently closed when socket socket client disconnects no need to close it
-                        // via task_handler
-                        let task_handle = tokio::spawn(async move {
-                            sap_data_request_handler(shutdown_tx).await;
-                        });
-                        TASK_REGISTRY.lock().await.push(task_handle);
-                    }
-                    Err(err) => {
-                        tracing::error!("Registration request error: {:?}", err);
-                    }
-                }
-                tracing::debug!("Releasing lock on SAP_INSTANCE");
-            });
-            TASK_REGISTRY.lock().await.push(task_handle);
+        match result {
+            Ok(_) => {
+                tracing::debug!("Received registration request on control unix stream socket");
+                sap_data_request_handler(shutdown_tx).await;
+            }
+            Err(err) => {
+                tracing::error!("Registration request error: {:?}", err);
+            }
         }
-        Ok(())
     }
 
-    pub async fn start_server<P: AsRef<Path>>(
-        control_socket_path: P,
-        data_socket_path: P,
+    async fn start_server(
+        control_socket_path: impl AsRef<Path>,
+        data_socket_path: impl AsRef<Path>,
         sender: Arc<EthernetSender>,
         interface_name: String,
     ) -> Result<AlServiceAccessPoint> {
@@ -282,7 +264,7 @@ impl AlServiceAccessPoint {
                 }
             }
         }
-        panic!("Fatal error while reading from control socket!")
+        bail!("Fatal error while reading from control socket!")
     }
 
     /// Sends a registration response back to the client
@@ -344,15 +326,15 @@ pub async fn service_access_point_data_indication(sdu: &SDU) -> Result<()> {
         let serialized = single_sdu.serialize();
         let mut data_unix_write = LAZY_WRITER.lock().await;
         let Some(ref mut writer) = *data_unix_write else {
-            panic!("Error while dereferencing LAZY_WRITER");
+            bail!("LAZY_WRITER is not yet initialized");
         };
 
         match writer.send(Bytes::from(serialized)).await {
             Ok(_res) => {
-                tracing::trace!("SDU send success");
+                tracing::trace!("SDU from CMDU send success");
             }
             Err(e) => {
-                tracing::error!("SDU send ERROR: {e:?}");
+                tracing::error!("SDU from CMDU send ERROR: {e:?}");
             }
         }
 
@@ -378,15 +360,15 @@ pub async fn service_access_point_data_indication(sdu: &SDU) -> Result<()> {
         let serialized = fragment.serialize();
         let mut data_unix_write = LAZY_WRITER.lock().await;
         let Some(ref mut writer) = *data_unix_write else {
-            panic!("Error while dereferencing LAZY_WRITER");
+            bail!("LAZY_WRITER is not yet initialized");
         };
 
         match writer.send(Bytes::from(serialized)).await {
             Ok(_res) => {
-                tracing::trace!("SDU send success");
+                tracing::trace!("SDU from CMDU send success");
             }
             Err(e) => {
-                tracing::error!("SDU send error: {e:?}");
+                tracing::error!("SDU from CMDU send ERROR: {e:?}");
             }
         }
     }
@@ -398,7 +380,10 @@ pub async fn intercept_roles_and_compare_with_local(sdu_payload: Vec<u8>) {
     let mut expected_role: Option<Role> = None;
     match CMDU::parse(&sdu_payload) {
         Ok((_, parsed_cmd)) => {
-            for tlv in parsed_cmd.get_tlvs() {
+            let Ok(tlvs) = parsed_cmd.get_tlvs() else {
+                return tracing::error!("SDU TLVs parse ERROR. We expect valid SDU/CMDU here!");
+            };
+            for tlv in tlvs {
                 if tlv.tlv_type == IEEE1905TLVType::SearchedRole.to_u8() {
                     //Registrar -- controller
                     expected_role = Some(Role::Registrar);
@@ -449,7 +434,7 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
         let mut data_unix_read = LAZY_READER.lock().await;
         tracing::debug!("Got lock on LAZY_RX");
         let Some(ref mut reader) = *data_unix_read else {
-            panic!("Error while dereferencing LAZY_READER")
+            return Err(AlSapError::Other("Error while dereferencing LAZY_READER".into()));
         };
         let result_option = reader.next().await;
         tracing::debug!(
@@ -517,8 +502,13 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
 
                                         match CMDU::parse(&assembled_payload) {
                                             Ok((_, parsed_cmd)) => {
-                                                if let Some(last_tlv) = parsed_cmd.get_tlvs().last()
-                                                {
+                                                let Ok(tlvs) = parsed_cmd.get_tlvs() else {
+                                                    tracing::error!("ReassembleSDU: Cannot parse CMDU TLVs");
+                                                    return Err(AlSapError::Other(
+                                                        "Error: Cannot parse CMDU TLVs".to_string(),
+                                                    ));
+                                                };
+                                                if let Some(last_tlv) = tlvs.last() {
                                                     if last_tlv.tlv_type
                                                         != IEEE1905TLVType::EndOfMessage.to_u8()
                                                         || last_tlv.tlv_length != 0
@@ -580,7 +570,7 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
 }
 
 // Do the downward forwarding: unix stream socket -> network
-pub async fn sap_data_request_handler(mut shutdown_tx: Option<oneshot::Sender<()>>) {
+pub async fn sap_data_request_handler(shutdown_tx: oneshot::Sender<()>) {
     loop {
         match service_access_point_data_request().await {
             Ok(_) => {
@@ -588,10 +578,7 @@ pub async fn sap_data_request_handler(mut shutdown_tx: Option<oneshot::Sender<()
             }
             Err(AlSapError::SocketClosed) => {
                 tracing::error!("Connection closed. Need to trigger restart!");
-
-                if let Some(tx) = shutdown_tx.take() {
-                    let _ = tx.send(());
-                }
+                let _ = shutdown_tx.send(());
                 break;
             }
             Err(e) => {
@@ -617,8 +604,7 @@ async fn send_cmdu_from_sdu(sdu: SDU) -> Result<()> {
             sap_guard.interface_name.clone(),
             sap_guard.sender.clone(),
             sdu.clone(),
-        )
-        .await;
+        );
         Ok(())
     } else {
         tracing::warn!("SAP instance not ready, skipping registration");

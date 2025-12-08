@@ -4,6 +4,9 @@
 # Ignore Visual Studio Code workspace settings
 *.code-workspace
 
+# Ignore RustRover workspace settings
+.idea/
+
 #ingnore Testing files
 Testing/
 
@@ -19,9 +22,6 @@ Makefile
 # Ignore CMake build directory
 systemd/
 
-#ignore systemd for now
-target/
-
 # Ignore Makefile build artifacts
 *.d        # Dependency files
 *.o        # Object files
@@ -36,6 +36,9 @@ target/
 # Ignore generated documentation backup
 *.bkup
 .$*
+
+# Ignore Copilot instructions for AI agents
+.github/copilot-instructions.md
 
 # Ignore IDE/project-specific files
 .idea/            # JetBrains IDE (CLion, WebStorm, etc.) settings
@@ -94,5 +97,13 @@ Docker*
 # Ignore docker-compose files
 docker-*
 
+# Exception for docker files in "ieee1905-tests" subdirectory for github actions
+!ieee1905-tests/
+!ieee1905-tests/Dockerfile
+!ieee1905-tests/docker-compose.yaml
+
 # Ignore .dockignore files
 .dockerignore
+
+# Ignore lgs folder
+logs/

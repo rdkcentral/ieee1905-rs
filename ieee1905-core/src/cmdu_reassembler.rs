@@ -17,20 +17,18 @@
  * limitations under the License.
 */
 
-#![deny(warnings)]
-// External crates
 use pnet::datalink::MacAddr;
 use tokio::sync::Mutex;
 use tokio::time::Duration;
-
-// Standard library
+use tokio::task::JoinSet;
 use std::collections::{BTreeMap, HashMap};
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::time::Instant;
-
-// Internal modules
+use tracing::{info_span, Instrument};
 use crate::cmdu::CMDU;
-use crate::task_registry::TASK_REGISTRY;
+use crate::next_task_id;
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CmduReassemblyError {
     EmptyFragments,
@@ -47,18 +45,20 @@ struct FragmentBuffer {
     fragments: BTreeMap<u8, CMDU>,
     first_received: Instant,
 }
-#[derive(Debug, Default)]
+
+#[derive(Default)]
 pub struct CmduReassembler {
+    _join_set: JoinSet<()>,
     buffer: Arc<Mutex<HashMap<(MacAddr, u16), FragmentBuffer>>>,
 }
 
 impl CmduReassembler {
-    pub async fn new() -> Self {
-        let buffer: Arc<Mutex<HashMap<(MacAddr, u16), FragmentBuffer>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    pub fn new() -> Self {
+        let buffer = Arc::new(Mutex::new(HashMap::<(MacAddr, u16), FragmentBuffer>::new()));
         let buffer_clone = buffer.clone();
 
-        let task_handle = tokio::spawn(async move {
+        let mut join_set = JoinSet::new();
+        join_set.spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(3));
 
             loop {
@@ -89,10 +89,9 @@ impl CmduReassembler {
                     }
                 });
             }
-        });
+        }.instrument(info_span!(parent: None, "cmdu_reassembler_cleaner", task = next_task_id())));
 
-        TASK_REGISTRY.lock().await.push(task_handle);
-        Self { buffer }
+        Self { _join_set: join_set, buffer }
     }
 
     pub async fn push_fragment(&self, source_mac: MacAddr, fragment: CMDU) -> Option<Result<CMDU, CmduReassemblyError>> {
@@ -100,12 +99,15 @@ impl CmduReassembler {
         let key = (source_mac, fragment.message_id);
         let mut buffer = self.buffer.lock().await;
 
-        let entry = buffer.entry(key).or_insert_with(|| FragmentBuffer {
-            fragments: BTreeMap::new(),
-            first_received: Instant::now(),
-        });
+        let mut entry = match buffer.entry(key) {
+            Entry::Occupied(e) => e,
+            Entry::Vacant(e) => e.insert_entry(FragmentBuffer {
+                fragments: BTreeMap::new(),
+                first_received: Instant::now(),
+            }),
+        };
 
-        let inserted = entry.fragments.insert(fragment.fragment, fragment.clone());
+        let inserted = entry.get_mut().fragments.insert(fragment.fragment, fragment.clone());
         if inserted.is_some() {
             tracing::trace!("Duplicated fragment: {:?}", fragment.fragment);
             return Some(Err(CmduReassemblyError::DuplicatedFragment));
@@ -113,7 +115,7 @@ impl CmduReassembler {
 
         if fragment.is_last_fragment() {
             tracing::trace!("All fragments arrived. Generating reassembled CMDU");
-            let fragments_map = buffer.remove(&key).unwrap().fragments;
+            let fragments_map = entry.remove().fragments;
             let fragments: Vec<CMDU> = fragments_map.into_values().collect();
             Some(CMDU::reassemble(fragments))
         } else {
@@ -130,12 +132,13 @@ pub mod tests {
     use crate::cmdu::TLV;
     use crate::cmdu_codec::tests::make_dummy_cmdu;
     use tokio::time::sleep;
+    use crate::cmdu_codec::MessageVersion;
     use super::*;
 
     // Create CMDU reassembler instance but don't push any fragments to it
     #[tokio::test]
     async fn test_empty_fragment() {
-        let cmdu_reasm = CmduReassembler::new().await;
+        let cmdu_reasm = CmduReassembler::new();
 
         // Wait longer than 3 seconds timeout set in tokio async in new() method
         sleep(Duration::from_secs(4)).await;
@@ -156,7 +159,7 @@ pub mod tests {
 
         // Create only one CMDU
         let cmdu = CMDU {
-            message_version: 0,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: 0x04,
             message_id: 0x1122,
@@ -165,7 +168,7 @@ pub mod tests {
             payload: tlv.serialize(),
         };
 
-        let cmdu_reasm = CmduReassembler::new().await;
+        let cmdu_reasm = CmduReassembler::new();
 
         // Push the only fragment
         let _ = cmdu_reasm.push_fragment(MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66), cmdu.clone()).await;
@@ -200,7 +203,7 @@ pub mod tests {
         // Create chain of 2 CMDUs. Both CMDUs have no last fragment flag set to simulate
         // lost of fragment 3
         let cmdu1 = CMDU {
-            message_version: 0,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: 0x04,
             message_id: 0x1122,
@@ -210,7 +213,7 @@ pub mod tests {
         };
 
         let cmdu2 = CMDU {
-            message_version: 0,
+            message_version: MessageVersion::Version2013.to_u8(),
             reserved: 0,
             message_type: 0x04,
             message_id: 0x1122,
@@ -219,7 +222,7 @@ pub mod tests {
             payload: tlv2.serialize(),
         };
 
-        let cmdu_reasm = CmduReassembler::new().await;
+        let cmdu_reasm = CmduReassembler::new();
 
         // Add both CMDUs to CMDU reassembler buffer
         let _ = cmdu_reasm.push_fragment(MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66), cmdu1.clone()).await;
@@ -251,7 +254,7 @@ pub mod tests {
 
         let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
         let fragments = vec![cmdu0, cmdu1, cmdu2];
-        let cmdu_reasm = CmduReassembler::new().await;
+        let cmdu_reasm = CmduReassembler::new();
 
         for fragment in fragments.iter() {
             match cmdu_reasm.push_fragment(source_mac, fragment.clone()).await {

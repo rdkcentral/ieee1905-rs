@@ -18,13 +18,14 @@
 */
 
 #![deny(warnings)]
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use tokio::sync::OnceCell;
 use tracing::{debug, info}; // Import tracing
 
 /// A global Message ID generator.
 pub struct MessageIdGenerator {
-    counter: Mutex<u16>,
+    counter: AtomicU16,
 }
 
 impl MessageIdGenerator {
@@ -32,28 +33,21 @@ impl MessageIdGenerator {
     pub fn new() -> Self {
         info!("Initializing MessageIdGenerator with starting value 0x0001");
         Self {
-            counter: Mutex::new(0x0001),
+            counter: AtomicU16::new(0),
         }
     }
 
     /// Get the next message ID, cycling back to 0x0001 after 0xFFFF.
     pub fn next_id(&self) -> u16 {
-        let mut counter = self.counter.lock().unwrap();
-        let current_id = *counter;
-
-        // Log the generated ID
-        debug!("Generated Message ID: {:#06X}", current_id);
-
-        // Update the counter using modulo 2^16
-        let check = counter.overflowing_add(1);
-        *counter = check.0;
-
-        // After overflow correct the value to 1
-        if check.1 {
-            *counter = 0x0001;
+        // Update the counter using modulo 2^16 but not 0 (atomics always wrap)
+        let mut id = self.counter.fetch_add(1, Ordering::Relaxed);
+        while id == 0 {
+            id = self.counter.fetch_add(1, Ordering::Relaxed);
         }
 
-        current_id
+        // Log the generated ID
+        debug!("Generated Message ID: {id:#06X}");
+        id
     }
 }
 

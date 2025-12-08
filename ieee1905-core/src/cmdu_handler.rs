@@ -18,9 +18,10 @@
 */
 
 #![deny(warnings)]
+use anyhow::bail;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::al_sap::service_access_point_data_indication;
 use crate::cmdu::{CMDUType, CMDU};
@@ -32,7 +33,6 @@ use crate::sdu_codec::SDU;
 use crate::tlv_cmdu_codec::TLV;
 use crate::topology_manager::*;
 use crate::MessageIdGenerator;
-use anyhow::Result;
 use pnet::datalink::MacAddr;
 
 ///the handler has to take care of the reassembly
@@ -45,6 +45,8 @@ pub struct CMDUHandler {
 }
 
 impl CMDUHandler {
+    const MAX_CMDU_SIZE: usize = 1500;
+
     pub async fn new(
         sender: Arc<EthernetSender>,
         message_id_generator: Arc<MessageIdGenerator>,
@@ -56,17 +58,30 @@ impl CMDUHandler {
             message_id_generator,
             local_al_mac,
             interface_name,
-            reassembler: Arc::new(CmduReassembler::new().await),
+            reassembler: Arc::new(CmduReassembler::new()),
         }
     }
-    pub async fn handle_cmdu(&self, cmdu: &CMDU, source_mac: MacAddr, destination_mac: MacAddr) {
-        tracing::trace!("Handling CMDU <{cmdu:?}> source mac: {source_mac}, destination_mac {destination_mac:?}");
-        assert!(
-            cmdu.total_size() <= 1500,
-            "CMDU should have maximum {} bytes but is {} bytes long",
-            1500,
-            cmdu.total_size()
+
+    pub async fn handle_cmdu(
+        &self,
+        cmdu: &CMDU,
+        source_mac: MacAddr,
+        destination_mac: MacAddr,
+    ) -> anyhow::Result<()> {
+        trace!(
+            src = %source_mac,
+            dst = %destination_mac,
+            ?cmdu,
+            "Handling CMDU",
         );
+
+        if cmdu.total_size() > Self::MAX_CMDU_SIZE {
+            bail!(
+                "CMDU should have maximum {} bytes but is {} bytes long",
+                Self::MAX_CMDU_SIZE,
+                cmdu.total_size()
+            );
+        }
 
         let cmdu_to_process = if cmdu.is_fragmented() {
             let fragment_clone = cmdu.clone();
@@ -84,371 +99,130 @@ impl CMDUHandler {
                     full_cmdu
                 }
                 Some(Err(e)) => {
-                    error!("Error reassembling CMDU: {:?}", e);
-                    return;
+                    bail!("Error reassembling CMDU: {e:?}");
                 }
                 None => {
-                    trace!(
+                    debug!(
                         "Fragment stored. Waiting for more... MessageID {:?} fragment {:?}",
-                        cmdu.message_id,
-                        cmdu.fragment
+                        cmdu.message_id, cmdu.fragment,
                     );
-                    return;
+                    return Ok(());
                 }
             }
         } else {
             cmdu.clone()
         };
-        tracing::trace!("Dispatching CMDU {cmdu_to_process:?} source mac {source_mac:?} destination_mac {destination_mac:?}");
-        self.dispatch_cmdu(cmdu_to_process, source_mac, destination_mac)
-            .await;
-    }
-
-    /// Some discriminated messages created above the SAP
-    /// still needs to be introspected
-    async fn process_cmdus(
-        &self,
-        cmdu: CMDU,
-        source_mac: MacAddr,
-        destination_mac: MacAddr,
-    ) {
-        info!("Handling unknown CMDU type for message version 2013");
-        //Intercept a few messages
-        match CMDUType::from_u16(cmdu.message_type) {
-            CMDUType::TopologyQuery => {
-                debug!("Handling topolgy query for message version 2013");
-                self.handle_topology_query(
-                    cmdu.clone().get_tlvs().as_slice(),
-                    cmdu.message_id,
-                    source_mac,
-                )
-                .await
-            }
-            CMDUType::TopologyResponse => {
-                debug!("Handling topolgy response for message version 2013");
-                self.handle_topology_response(cmdu.clone().get_tlvs().as_slice(), cmdu.message_id)
-                    .await
-            }
-            CMDUType::ApAutoConfigSearch => {
-                debug!("Handling ApAutoConfigSearch for message version 2013");
-                self.handle_ap_auto_config_search(
-                    cmdu.clone().get_tlvs().as_slice(),
-                    cmdu.message_id,
-                )
-                .await;
-            }
-            CMDUType::ApAutoConfigResponse => {
-                debug!("Handling ApAutoConfigResponse for message version 2013");
-                self.handle_ap_auto_config_response(
-                    cmdu.clone().get_tlvs().as_slice(),
-                    cmdu.message_id,
-                    source_mac,
-                )
-                .await;
-            }
-            _ => {
-                tracing::trace!(
-                    "For message version 2013 this type {:?} is not intercepted",
-                    cmdu.message_type
-                );
-            }
-        }
-
-        if let Err(e) = self
-            .handle_sdu_from_cmdu_reception(
-                cmdu.clone().get_tlvs().as_slice(),
-                cmdu.message_id,
-                cmdu.message_type,
-                source_mac,
-                destination_mac,
-            )
-            .await
-        {
-            tracing::error!(
-                "Error handling SDU from CMDU (msg_id={}): {:?}",
-                cmdu.message_id,
-                e
-            );
-        }
-    }
-
-    /// Process and introspect messages
-    async fn process_sdus(
-        &self,
-        cmdu: CMDU,
-        source_mac: MacAddr,
-        destination_mac: MacAddr,
-    ) {
-        info!("Handling non 2013 message version");
-        match CMDUType::from_u16(cmdu.message_type) {
-            CMDUType::TopologyDiscovery => {
-                debug!("Handling topolgy discovery");
-                self.handle_topology_discovery(cmdu.clone().get_tlvs().as_slice(), cmdu.message_id)
-                    .await
-            }
-            CMDUType::TopologyNotification => {
-                debug!("Handling topolgy notification");
-                self.handle_topology_notification(
-                    cmdu.clone().get_tlvs().as_slice(),
-                    cmdu.message_id,
-                )
-                .await
-            }
-            CMDUType::TopologyQuery => {
-                debug!("Handling topolgy query");
-                self.handle_topology_query(
-                    cmdu.clone().get_tlvs().as_slice(),
-                    cmdu.message_id,
-                    source_mac,
-                )
-                .await
-            }
-            CMDUType::TopologyResponse => {
-                debug!("Handling topolgy response");
-                self.handle_topology_response(cmdu.clone().get_tlvs().as_slice(), cmdu.message_id)
-                    .await
-            }
-            CMDUType::ApAutoConfigSearch => {
-                debug!("Handling ApAutoConfigSearch CMDU");
-                self.handle_ap_auto_config_search(
-                    cmdu.clone().get_tlvs().as_slice(),
-                    cmdu.message_id,
-                )
-                .await;
-
-                if let Err(e) = self
-                    .handle_sdu_from_cmdu_reception(
-                        cmdu.clone().get_tlvs().as_slice(),
-                        cmdu.message_id,
-                        cmdu.message_type,
-                        source_mac,
-                        destination_mac,
-                    )
-                    .await
-                {
-                    tracing::error!(
-                        "Error handling SDU from CMDU (msg_id={}): {:?}",
-                        cmdu.message_id,
-                        e
-                    );
-                }
-            }
-            CMDUType::ApAutoConfigResponse => {
-                debug!("Handling ApAutoConfigResponse CMDU");
-                self.handle_ap_auto_config_response(
-                    cmdu.clone().get_tlvs().as_slice(),
-                    cmdu.message_id,
-                    source_mac,
-                )
-                .await;
-
-                if let Err(e) = self
-                    .handle_sdu_from_cmdu_reception(
-                        cmdu.clone().get_tlvs().as_slice(),
-                        cmdu.message_id,
-                        cmdu.message_type,
-                        source_mac,
-                        destination_mac,
-                    )
-                    .await
-                {
-                    tracing::error!(
-                        "Error handling SDU from CMDU (msg_id={}): {:?}",
-                        cmdu.message_id,
-                        e
-                    );
-                }
-            }
-            _ => {
-                tracing::warn!("This CMDU will not be handled at all! Unknown data types are handled only for message version 0.  CMDU:{:?}",cmdu);
-            }
-        }
+        self.dispatch_cmdu(cmdu_to_process, source_mac, destination_mac).await;
+        Ok(())
     }
 
     /// Handles a parsed CMDU, logs details, and extracts TLVs.
     async fn dispatch_cmdu(&self, cmdu: CMDU, source_mac: MacAddr, destination_mac: MacAddr) {
-        tracing::trace!("Dispatch CMDU {cmdu:?}");
-        match MessageVersion::from_u8(cmdu.message_version).unwrap() {
-            MessageVersion::Version2013 => {
-                tracing::trace!("Handling message version 2013");
-                //process_cmdus
-                self.process_cmdus(cmdu, source_mac, destination_mac)
+        trace!(
+            src = %source_mac,
+            dst = %destination_mac,
+            ?cmdu,
+            "Dispatch CMDU",
+        );
+
+        let message_id = cmdu.message_id;
+
+        let tlvs = match cmdu.get_tlvs() {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!("Failed to parse TLVs (msg_id={}): {:?}", message_id, e);
+                return;
+            }
+        };
+
+        match CMDUType::from_u16(cmdu.message_type) {
+            CMDUType::TopologyDiscovery => {
+                self.handle_topology_discovery(&tlvs, message_id, source_mac).await;
+            }
+            CMDUType::TopologyNotification => {
+                let handled = self.handle_topology_notification(&tlvs, message_id, source_mac).await;
+                if !handled {
+                    if let Err(e) = self
+                        .handle_sdu_from_cmdu_reception(
+                            &tlvs,
+                            message_id,
+                            cmdu.message_type,
+                            source_mac,
+                            destination_mac,
+                        )
+                        .await
+                    {
+                        error!("Error forwarding SDU from TopologyNotification interoperability (msg_id={message_id}): {e:?}");
+                    }
+                }
+            }
+            CMDUType::TopologyQuery => {
+                let handled = self
+                    .handle_topology_query(&tlvs, message_id, source_mac)
                     .await;
+                if !handled {
+                    if let Err(e) = self
+                        .handle_sdu_from_cmdu_reception(
+                            &tlvs,
+                            message_id,
+                            cmdu.message_type,
+                            source_mac,
+                            destination_mac,
+                        )
+                        .await
+                    {
+                        error!("Error forwarding SDU from TopologyQuery interoperability (msg_id={message_id}): {e:?}");
+                    }
+                }
+            }
+            CMDUType::TopologyResponse => {
+                let handled = self.handle_topology_response(&tlvs, message_id, source_mac).await;
+                if !handled {
+                    if let Err(e) = self
+                        .handle_sdu_from_cmdu_reception(
+                            &tlvs,
+                            message_id,
+                            cmdu.message_type,
+                            source_mac,
+                            destination_mac,
+                        )
+                        .await
+                    {
+                        error!("Error forwarding SDU from TopologyResponse interoperability (msg_id={message_id}): {e:?}");
+                    }
+                }
+            }
+            CMDUType::LinkMetricQuery => {
+                tracing::info!("Handling Link Metric Query CMDU");
+            }
+            CMDUType::LinkMetricResponse => {
+                tracing::info!("Handling Link Metric Response CMDU");
             }
             _ => {
-                tracing::trace!("Handling message version different than 2013");
-                //process_sdus
-                self.process_sdus(cmdu, source_mac, destination_mac)
-                    .await;
-            }
-        }
-    }
-
-    /// Handles APAutoconfigSearchCMDU
-    async fn handle_ap_auto_config_search(&self, tlvs: &[TLV], message_id: u16) {
-        tracing::debug!(
-            "Handling Ap Auto Config Response CMDU with Message ID: {} from interface {}",
-            message_id,
-            self.interface_name
-        );
-
-        let mut remote_al_mac: Option<MacAddr> = None;
-        let mut end_of_message_found = false;
-        let mut ap_auto_config_search_found = false;
-        let mut registry_role: Option<Role> = None;
-
-        for tlv in tlvs {
-            match IEEE1905TLVType::from_u8(tlv.tlv_type) {
-                IEEE1905TLVType::AlMacAddress => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
-                            remote_al_mac = Some(parsed.al_mac_address);
-                        }
-                    }
-                }
-                IEEE1905TLVType::SearchedRole => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, _parsed)) = SearchedRole::parse(value, tlv.tlv_length) {
-                            registry_role = Some(Role::Enrollee);
-                            ap_auto_config_search_found = true;
-                        }
-                    }
-                }
-                IEEE1905TLVType::EndOfMessage => {
-                    end_of_message_found = true;
-                }
-                _ => {}
-            }
-        }
-
-        if !end_of_message_found {
-            tracing::warn!("Missing EndOfMessage TLV. Ignoring.");
-            return;
-        }
-        if !ap_auto_config_search_found {
-            tracing::warn!("Missing Ap Auto Config search TLV. Ignoring.");
-            return;
-        }
-
-        if let (Some(remote_al_mac_address), Some(reg_role)) = (remote_al_mac, registry_role) {
-            let topology_db =
-                TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
-                    .await;
-
-            let updated_device_data = Ieee1905DeviceData {
-                al_mac: remote_al_mac_address,
-                destination_mac: None,
-                local_interface_list: None,
-                registry_role: Some(reg_role),
-            };
-
-            let _event = {
-                topology_db
-                    .update_ieee1905_topology(
-                        updated_device_data,
-                        UpdateType::AutoConfigSearch,
-                        Some(message_id),
-                        None,
+                if let Err(e) = self
+                    .handle_sdu_from_cmdu_reception(
+                        &tlvs,
+                        message_id,
+                        cmdu.message_type,
+                        source_mac,
+                        destination_mac,
                     )
                     .await
-            };
-
-            debug!(
-                "Topology Database updated: AL_MAC={} ROLE={:?}",
-                remote_al_mac_address, reg_role
-            );
-        } else {
-            tracing::warn!(
-                "AP auto config  search CMDU processing failed: AL_MAC or Role not found in TLVs"
-            );
-        }
-    }
-
-    /// Handle APAutconfigResposne CMDU
-    async fn handle_ap_auto_config_response(
-        &self,
-        tlvs: &[TLV],
-        message_id: u16,
-        source_mac: MacAddr,
-    ) {
-        tracing::debug!(
-            "Handling Ap Auto Config Response CMDU with Message ID: {} from interface {}",
-            message_id,
-            self.interface_name
-        );
-
-        let remote_al_mac: Option<MacAddr> = Some(source_mac);
-        let mut end_of_message_found = false;
-        let mut ap_auto_config_response_found = false;
-        let mut registry_role: Option<Role> = None;
-
-        for tlv in tlvs {
-            match IEEE1905TLVType::from_u8(tlv.tlv_type) {
-                IEEE1905TLVType::SupportedRole => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, _parsed)) = SupportedRole::parse(value, tlv.tlv_length) {
-                            registry_role = Some(Role::Registrar);
-                            ap_auto_config_response_found = true;
-                        }
-                    }
+                {
+                    error!("Error forwarding SDU from CMDU (msg_id={message_id}): {e:?}");
                 }
-                IEEE1905TLVType::EndOfMessage => {
-                    end_of_message_found = true;
-                }
-                _ => {}
             }
-        }
-
-        if !end_of_message_found {
-            tracing::warn!("Missing EndOfMessage TLV. Ignoring.");
-            return;
-        }
-        if !ap_auto_config_response_found {
-            tracing::warn!("Missing Ap Auto Config Response TLV. Ignoring.");
-            return;
-        }
-
-        if let (Some(remote_al_mac_address), Some(reg_role)) = (remote_al_mac, registry_role) {
-            let topology_db =
-                TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
-                    .await;
-
-            let updated_device_data = Ieee1905DeviceData {
-                al_mac: remote_al_mac_address,
-                destination_mac: None,
-                local_interface_list: None,
-                registry_role: Some(reg_role),
-            };
-
-            let _event = {
-                topology_db
-                    .update_ieee1905_topology(
-                        updated_device_data,
-                        UpdateType::AutoConfigResponse,
-                        Some(message_id),
-                        None,
-                    )
-                    .await
-            };
-
-            tracing::info!(
-                "Topology Response Processed: Updated Node → AL_MAC={} MESSAGE_ID={} ROLE={:?}",
-                remote_al_mac_address,
-                message_id,
-                reg_role
-            );
-        } else {
-            tracing::warn!(
-                "AP auto config  response CMDU processing failed: AL_MAC or Registry Role not found in TLVs"
-            );
         }
     }
 
     /// Handles and logs TLVs from the CMDU payload for Topology Discovery.
-    async fn handle_topology_discovery(&self, tlvs: &[TLV], message_id: u16) {
+    #[instrument(skip_all, name = "discovery")]
+    async fn handle_topology_discovery(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) {
         debug!(
-            "Handling Topology Discovery CMDU with Message ID: {}, from interface {}",
-            message_id, self.interface_name
+            source = %source_mac,
+            msg_id = message_id,
+            interface = self.interface_name,
+            "Handling Topology Discovery CMDU",
         );
 
         let mut remote_al_mac: Option<MacAddr> = None;
@@ -456,24 +230,21 @@ impl CMDUHandler {
         let mut end_of_message_found = false;
 
         for (index, tlv) in tlvs.iter().enumerate() {
-            trace!(
-                index,
-                tlv_type = ?IEEE1905TLVType::from_u8(tlv.tlv_type),
-                length = tlv.tlv_length,
-                "Processing TLV"
-            );
+            let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
 
-            match IEEE1905TLVType::from_u8(tlv.tlv_type) {
+            trace!(index, ?tlv_type, length = tlv.tlv_length, "Processing TLV");
+
+            match tlv_type {
                 IEEE1905TLVType::AlMacAddress => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
+                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                         }
                     }
                 }
                 IEEE1905TLVType::MacAddress => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = MacAddress::parse(value, tlv.tlv_length) {
+                        if let Ok((_, parsed)) = MacAddress::parse(value) {
                             remote_interface_mac = Some(parsed.mac_address);
                         }
                     }
@@ -482,7 +253,7 @@ impl CMDUHandler {
                     end_of_message_found = true;
                     trace!("End of CMDU Message found");
                 }
-                _ => warn!("Unknown TLV Type, Raw Data: {:?}", tlv.tlv_value),
+                _ => trace!(?tlv_type, data = ?tlv.tlv_value, "Ignoring TLV"),
             }
         }
 
@@ -500,28 +271,33 @@ impl CMDUHandler {
 
             let device_data = Ieee1905DeviceData {
                 al_mac: remote_al_mac_address,
+                destination_frame_mac: source_mac,
                 destination_mac: Some(neighbor_interface_mac_address),
                 local_interface_list: None,
                 registry_role: None,
             };
 
-            let event = topology_db
+            let result = topology_db
                 .update_ieee1905_topology(
                     device_data,
                     UpdateType::DiscoveryReceived,
+                    None,
                     Some(message_id),
+                    None,
                     None,
                 )
                 .await;
 
             info!(
-                "Topology Discovery Processed: AL_MAC={} INTERFACE_MAC={}",
-                remote_al_mac_address, neighbor_interface_mac_address
+                al_mac = %remote_al_mac_address,
+                source = %source_mac,
+                %neighbor_interface_mac_address,
+                "Topology Discovery Processed",
             );
 
             // Now react to the event
-            match event {
-                TransmissionEvent::SendTopologyQuery(destination_mac) => {
+            match result.transmission_event {
+                TransmissionEvent::SendTopologyQuery(destination_al_mac) => {
                     let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
 
                     cmdu_topology_query_transmission(
@@ -529,7 +305,7 @@ impl CMDUHandler {
                         Arc::clone(&self.sender),
                         Arc::clone(&self.message_id_generator),
                         self.local_al_mac,
-                        destination_mac,
+                        destination_al_mac,
                         forwarding_interface_mac,
                     )
                     .await;
@@ -553,18 +329,22 @@ impl CMDUHandler {
     }
 
     /// Handles and logs TLVs for Topology Query.
-    async fn handle_topology_query(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) {
+    #[instrument(skip_all, name = "query")]
+    async fn handle_topology_query(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) -> bool {
         debug!(
-            "Handling Topology Query CMDU on interface {}",
-            self.interface_name
+            source = %source_mac,
+            msg_id = message_id,
+            interface = self.interface_name,
+            "Handling Topology Query CMDU",
         );
 
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut end_of_message_found = false;
+        let mut device_vendor = Ieee1905DeviceVendor::Unknown;
 
         for (index, tlv) in tlvs.iter().enumerate() {
             let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
-            trace!(
+            tracing::trace!(
                 index,
                 tlv_type = ?tlv_type,
                 length = tlv.tlv_length,
@@ -574,116 +354,170 @@ impl CMDUHandler {
             match tlv_type {
                 IEEE1905TLVType::AlMacAddress => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
+                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
-                            debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
+                            tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
+                        }
+                    }
+                }
+                IEEE1905TLVType::VendorSpecificInfo => {
+                    if let Some(ref value) = tlv.tlv_value {
+                        if let Ok((_, parsed_vs)) = VendorSpecificInfo::parse(value, tlv.tlv_length)
+                        {
+                            tracing::trace!(
+                                "VendorSpecific TLV found: OUI={:02x}:{:02x}:{:02x}, len={}",
+                                parsed_vs.oui[0],
+                                parsed_vs.oui[1],
+                                parsed_vs.oui[2],
+                                parsed_vs.vendor_data.len()
+                            );
+
+                            if parsed_vs.oui == COMCAST_OUI
+                                && parsed_vs.vendor_data.starts_with(COMCAST_QUERY_TAG)
+                            {
+                                device_vendor = Ieee1905DeviceVendor::Rdk;
+                                tracing::debug!(
+                                    "Matched Comcast VendorSpecific TLV (00:90:96 / 00 01 00)."
+                                );
+                            }
                         }
                     }
                 }
                 IEEE1905TLVType::EndOfMessage => {
                     end_of_message_found = true;
-                    trace!("End of CMDU Message found");
+                    tracing::trace!("End of CMDU Message found");
                 }
-                _ => warn!(
-                    "Unknown TLV Type: {:?}, Raw Data: {:?}",
-                    tlv_type, tlv.tlv_value
-                ),
+                _ => trace!(?tlv_type, data = ?tlv.tlv_value, "Ignoring TLV"),
             }
         }
 
         if !end_of_message_found {
-            error!(
-                "Topology Query CMDU is missing the required End of Message TLV. Ignoring CMDU."
-            );
-            return;
+            tracing::error!("Topology Query CMDU missing EndOfMessage TLV → discarding message.");
+            return true;
         }
 
-        if let Some(remote_al_mac_address) = remote_al_mac {
-            info!(
-                "Topology Query received from AL_MAC={}",
-                remote_al_mac_address
-            );
+        info!("Topology Query received from REMOTE_PORT_MAC={source_mac}");
 
-            let topology_db =
-                TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
-                    .await;
+        let topology_db = TopologyDatabase::get_instance(
+            self.local_al_mac,
+            self.interface_name.clone(),
+        ).await;
 
-            let device_data = Ieee1905DeviceData {
-                al_mac: remote_al_mac_address,
-                destination_mac: Some(source_mac),
+        let device_data = if let Some(remote_al_mac) = remote_al_mac {
+            Ieee1905DeviceData {
+                al_mac: remote_al_mac,
+                destination_frame_mac: source_mac,
+                destination_mac: None,
                 local_interface_list: None,
                 registry_role: None,
-            };
-
-            let event = {
-                topology_db
-                    .update_ieee1905_topology(
-                        device_data,
-                        UpdateType::QueryReceived,
-                        Some(message_id),
-                        None,
-                    )
-                    .await
-            };
-
-            debug!(
-                "Topology Database updated: AL_MAC={} set to QueryReceived",
-                remote_al_mac_address
-            );
-
-            // Now process the event
-            match event {
-                TransmissionEvent::SendTopologyResponse(destination_mac) => {
-                    debug!(
-                        remote = %remote_al_mac_address,
-                        local = %self.local_al_mac,
-                        "Preparing to send Topology Response"
-                    );
-
-                    let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
-
-                    cmdu_topology_response_transmission(
-                        self.interface_name.clone(),
-                        self.sender.clone(),
-                        self.local_al_mac,
-                        destination_mac,
-                        forwarding_interface_mac,
-                    )
-                    .await;
-                }
-                TransmissionEvent::None => {
-                    debug!(
-                        remote = %remote_al_mac_address,
-                        "No transmission needed after topology query update"
-                    );
-                }
-                _ => {} // Future proof: ignore other events
             }
         } else {
-            warn!("Topology Query failed: Missing AL MAC Address TLV");
-        }
+            let Some(mut node) = topology_db.find_device_by_port(source_mac).await else {
+                warn!("Topology Query node not found, REMOTE_PORT_MAC={source_mac}");
+                return false;
+            };
+            node.device_data.destination_frame_mac = source_mac;
+            node.device_data
+        };
+
+        let remote_al_mac = device_data.al_mac;
+        let result = topology_db
+            .update_ieee1905_topology(
+                device_data,
+                UpdateType::QueryReceived,
+                None,
+                Some(message_id),
+                None,
+                Some(device_vendor),
+            )
+            .await;
+
+        info!(
+            al_mac = %remote_al_mac,
+            source = %source_mac,
+            "Topology Query Processed",
+        );
+
+        match result.transmission_event {
+            TransmissionEvent::SendTopologyResponse(destination_mac) => {
+                debug!(
+                    remote = %remote_al_mac,
+                    local = %self.local_al_mac,
+                    "Preparing to send Topology Response"
+                );
+
+                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+
+                cmdu_topology_response_transmission(
+                    self.interface_name.clone(),
+                    self.sender.clone(),
+                    self.local_al_mac,
+                    destination_mac,
+                    forwarding_interface_mac,
+                    message_id,
+                );
+            }
+            TransmissionEvent::None => {
+                debug!(
+                    remote = %remote_al_mac,
+                    "No transmission needed after topology query update"
+                );
+            }
+            _ => {}
+        };
+
+        !result.converged // don't consume message if we have converged
     }
 
     /// Handles and logs TLVs for Topology Response.
-    async fn handle_topology_response(&self, tlvs: &[TLV], message_id: u16) {
-        tracing::debug!(
-            "Handling Topology Response CMDU with Message ID: {} from interface {}",
-            message_id,
-            self.interface_name
+    #[instrument(skip_all, name = "response")]
+    async fn handle_topology_response(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) -> bool {
+        debug!(
+            source = %source_mac,
+            msg_id = message_id,
+            interface = self.interface_name,
+            "Handling Topology Response CMDU",
         );
 
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut interfaces: Vec<Ieee1905InterfaceData> = Vec::new();
         let mut ieee_neighbors_map: HashMap<MacAddr, Vec<IEEE1905Neighbor>> = HashMap::new();
+        let mut non_ieee_neighbors_map: HashMap<MacAddr, Vec<MacAddr>> = HashMap::new();
+        let mut device_bridging_capability = None;
         let mut end_of_message_found = false;
+        let mut device_vendor = Ieee1905DeviceVendor::Unknown;
 
         for tlv in tlvs {
-            match IEEE1905TLVType::from_u8(tlv.tlv_type) {
+            let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
+            match tlv_type {
                 IEEE1905TLVType::AlMacAddress => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
+                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                             tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
+                        }
+                    }
+                }
+                IEEE1905TLVType::VendorSpecificInfo => {
+                    if let Some(ref value) = tlv.tlv_value {
+                        if let Ok((_, parsed_vs)) = VendorSpecificInfo::parse(value, tlv.tlv_length)
+                        {
+                            tracing::trace!(
+                                "VendorSpecific TLV found: OUI={:02x}:{:02x}:{:02x}, len={}",
+                                parsed_vs.oui[0],
+                                parsed_vs.oui[1],
+                                parsed_vs.oui[2],
+                                parsed_vs.vendor_data.len()
+                            );
+
+                            if parsed_vs.oui == COMCAST_OUI
+                                && parsed_vs.vendor_data.starts_with(COMCAST_QUERY_TAG)
+                            {
+                                device_vendor = Ieee1905DeviceVendor::Rdk;
+                                tracing::debug!(
+                                    "Matched Comcast VendorSpecific TLV (00:90:96 / 00 01 00)."
+                                );
+                            }
                         }
                     }
                 }
@@ -708,113 +542,212 @@ impl CMDUHandler {
                 }
                 IEEE1905TLVType::Ieee1905NeighborDevices => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = Ieee1905NeighborDevice::parse(
-                            value,
-                            ((tlv.tlv_length - 6) / 7) as usize,
-                        ) {
-                            ieee_neighbors_map
-                                .insert(parsed.local_mac_address, parsed.neighborhood_list);
+                        let devices_count = ((tlv.tlv_length - 6) / 7) as usize;
+                        if let Ok((_, parsed)) = Ieee1905NeighborDevice::parse(value, devices_count) {
+                            ieee_neighbors_map.insert(parsed.local_mac_address, parsed.neighborhood_list);
                         }
                     }
                 }
-                //TODO: NonIeee1905NeighborDevices
-                //TODO: Bridge TUPLES only BRLAN0
+                IEEE1905TLVType::NonIeee1905NeighborDevices => {
+                    if let Some(ref value) = tlv.tlv_value {
+                        let devices_count = (tlv.tlv_length - 6) / 6;
+                        if let Ok((_, parsed)) = NonIeee1905NeighborDevices::parse(value, devices_count) {
+                            non_ieee_neighbors_map.insert(parsed.local_mac_address, parsed.neighborhood_list);
+                        }
+                    }
+                }
+                IEEE1905TLVType::DeviceBridgingCapability => {
+                    if let Some(ref value) = tlv.tlv_value {
+                        if let Ok((_, parsed)) = DeviceBridgingCapability::parse(value) {
+                            device_bridging_capability = Some(parsed);
+                        }
+                    }
+                }
                 IEEE1905TLVType::EndOfMessage => {
                     end_of_message_found = true;
                 }
-                _ => {}
+                _ => trace!(?tlv_type, data = ?tlv.tlv_value, "Ignoring TLV"),
             }
         }
 
         if !end_of_message_found {
-            tracing::warn!("Missing EndOfMessage TLV. Ignoring.");
-            return;
+            tracing::warn!("Missing EndOfMessage TLV. Discarding Topology Response.");
+            return true;
         }
 
-        if let Some(remote_al_mac_address) = remote_al_mac {
-            let topology_db =
-                TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
-                    .await;
-
-            let updated_device_data = Ieee1905DeviceData {
-                al_mac: remote_al_mac_address,
-                destination_mac: None,
-                local_interface_list: Some(interfaces.clone()),
-                registry_role: None,
-            };
-
-            let event = {
-                topology_db
-                    .update_ieee1905_topology(
-                        updated_device_data,
-                        UpdateType::ResponseReceived,
-                        Some(message_id),
-                        None,
-                    )
-                    .await
-            };
-
-            tracing::info!(
-                "Topology Response Processed: Updated Node → AL_MAC={} MESSAGE_ID={}",
-                remote_al_mac_address,
-                message_id
-            );
-
-            match event {
-                TransmissionEvent::SendTopologyNotification(_destination_mac) => {
-                    tracing::debug!(
-                        al_mac = %remote_al_mac_address,
-                        "Sending Topology Notification because topology changed"
-                    );
-
-                    let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
-
-                    cmdu_topology_notification_transmission(
-                        self.interface_name.clone(),
-                        Arc::clone(&self.sender),
-                        Arc::clone(&self.message_id_generator),
-                        self.local_al_mac,
-                        forwarding_interface_mac,
-                    )
-                    .await;
+        if !ieee_neighbors_map.is_empty() {
+            for iface in &mut interfaces {
+                if let Some(neighs) = ieee_neighbors_map.get(&iface.mac) {
+                    iface.ieee1905_neighbors = Some(neighs.clone());
                 }
-                TransmissionEvent::None => {
-                    tracing::debug!(
-                        al_mac = %remote_al_mac_address,
-                        "Topology update did not require sending notification"
-                    );
-                }
-                _ => {} // Future-proof for other transmission types
             }
-        } else {
-            tracing::warn!("Topology Response CMDU processing failed: AL_MAC not found in TLVs");
         }
+
+        let topology_db = TopologyDatabase::get_instance(
+            self.local_al_mac,
+            self.interface_name.clone(),
+        ).await;
+
+        let Some(node) = topology_db.find_device_by_port(source_mac).await.clone() else {
+            warn!(
+                al_mac = ?remote_al_mac,
+                source = %source_mac,
+                "Node not found. Discarding Topology Response.",
+            );
+            return true;
+        };
+
+        let expected_id = node.metadata.local_message_id;
+        if expected_id != Some(message_id) {
+            warn!(
+                expected = expected_id,
+                got = message_id,
+                al_mac = ?remote_al_mac,
+                source = %source_mac,
+                "Topology Response message_id mismatch → fallback to SDU"
+            );
+            return false;
+        }
+
+        for interface in interfaces.iter_mut() {
+            interface.ieee1905_neighbors = ieee_neighbors_map.remove(&interface.mac);
+            interface.non_ieee1905_neighbors = non_ieee_neighbors_map.remove(&interface.mac);
+        }
+
+        if let Some(device_bridging_capability) = device_bridging_capability {
+            let mut bridge_index_by_interface = HashMap::new();
+            for (index, macs) in device_bridging_capability.bridging_tuples_list.iter().enumerate() {
+                for mac in macs.bridging_mac_list.iter() {
+                    bridge_index_by_interface.insert(mac, index as u8);
+                }
+            }
+            
+            for interface in interfaces.iter_mut() {
+                if let Some(bridge_index) = bridge_index_by_interface.get(&interface.mac) {
+                    interface.bridging_flag = true;
+                    interface.bridging_tuple = Some(*bridge_index);
+                }
+            }
+        }
+
+        let remote_al_mac = node.device_data.al_mac;
+        let updated_device_data = Ieee1905DeviceData {
+            al_mac: remote_al_mac,
+            destination_frame_mac: source_mac,
+            destination_mac: None,
+            local_interface_list: Some(interfaces.clone()),
+            registry_role: None,
+        };
+
+        let result = topology_db
+            .update_ieee1905_topology(
+                updated_device_data,
+                UpdateType::ResponseReceived,
+                None,
+                None,
+                None,
+                Some(device_vendor),
+            )
+            .await;
+
+        info!(
+            al_mac = %remote_al_mac,
+            source = %source_mac,
+            msg_id = message_id,
+            "Topology Response Processed",
+        );
+
+        match result.transmission_event {
+            TransmissionEvent::SendTopologyNotification(_destination_mac) => {
+                debug!(
+                    al_mac = %remote_al_mac,
+                    source = %source_mac,
+                    "Sending Topology Notification because topology changed"
+                );
+
+                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+
+                cmdu_topology_notification_transmission(
+                    self.interface_name.clone(),
+                    Arc::clone(&self.sender),
+                    Arc::clone(&self.message_id_generator),
+                    self.local_al_mac,
+                    forwarding_interface_mac,
+                );
+            }
+            TransmissionEvent::None => {
+                debug!(
+                    al_mac = %remote_al_mac,
+                    source = %source_mac,
+                    "Topology update did not require sending notification"
+                );
+            }
+            _ => {}
+        };
+
+        !result.converged // don't consume message if we have converged
     }
 
     /// Handles and logs TLVs from the CMDU payload for Topology Notification.
-    async fn handle_topology_notification(&self, tlvs: &[TLV], message_id: u16) {
-        tracing::debug!(
-            "Handling Topology Notification CMDU with Message ID: {} from interface {}",
-            message_id,
-            self.interface_name
+    #[instrument(skip_all, name = "notification")]
+    async fn handle_topology_notification(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) -> bool {
+        debug!(
+            source = %source_mac,
+            msg_id = message_id,
+            interface = self.interface_name,
+            "Handling Topology Notification CMDU",
         );
 
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut end_of_message_found = false;
+        let mut device_vendor = Ieee1905DeviceVendor::Unknown;
+        let mut client_association = None;
 
         for (index, tlv) in tlvs.iter().enumerate() {
-            tracing::debug!(
+            let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
+            debug!(
                 index,
-                tlv_type = ?IEEE1905TLVType::from_u8(tlv.tlv_type),
+                ?tlv_type,
                 length = tlv.tlv_length,
                 "Processing TLV"
             );
 
-            match IEEE1905TLVType::from_u8(tlv.tlv_type) {
+            match tlv_type {
                 IEEE1905TLVType::AlMacAddress => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value, tlv.tlv_length) {
+                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
+                            tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
+                        }
+                    }
+                }
+                IEEE1905TLVType::VendorSpecificInfo => {
+                    if let Some(ref value) = tlv.tlv_value {
+                        if let Ok((_, parsed_vs)) = VendorSpecificInfo::parse(value, tlv.tlv_length)
+                        {
+                            tracing::trace!(
+                                "VendorSpecific TLV found: OUI={:02x}:{:02x}:{:02x}, len={}",
+                                parsed_vs.oui[0],
+                                parsed_vs.oui[1],
+                                parsed_vs.oui[2],
+                                parsed_vs.vendor_data.len()
+                            );
+
+                            if parsed_vs.oui == COMCAST_OUI
+                                && parsed_vs.vendor_data.starts_with(COMCAST_QUERY_TAG)
+                            {
+                                device_vendor = Ieee1905DeviceVendor::Rdk;
+                                tracing::debug!(
+                                    "Matched Comcast VendorSpecific TLV (00:90:96 / 00 01 00)."
+                                );
+                            }
+                        }
+                    }
+                }
+                IEEE1905TLVType::ClientAssociation => {
+                    if let Some(value) = tlv.tlv_value.as_ref() {
+                        if let Ok((_, parsed)) = ClientAssociation::parse(value, tlv.tlv_length) {
+                            client_association = Some(parsed);
                         }
                     }
                 }
@@ -822,67 +755,79 @@ impl CMDUHandler {
                     end_of_message_found = true;
                     tracing::debug!("End of CMDU Message found");
                 }
-                _ => tracing::warn!("Unknown TLV Type, Raw Data: {:?}", tlv.tlv_value),
+                _ => trace!(?tlv_type, data = ?tlv.tlv_value, "Ignoring TLV"),
             }
         }
 
         if !end_of_message_found {
-            tracing::error!("Topology Notification CMDU is missing the required End of Message TLV. Ignoring CMDU.");
-            return;
+            error!("Topology Notification CMDU missing EndOfMessage TLV → discarding message.");
+            return true;
         }
 
-        if let Some(remote_al_mac_address) = remote_al_mac {
-            let topology_db =
-                TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
-                    .await;
+        if client_association.is_some() {
+            warn!("Topology Notification has Comcast ClientAssociation TLV → fallback to SDU.");
+            return false;
+        }
 
-            let received_device_data = Ieee1905DeviceData {
-                al_mac: remote_al_mac_address,
-                destination_mac: None,
-                local_interface_list: None,
-                registry_role: None,
-            };
+        let Some(remote_al_mac_address) = remote_al_mac else {
+            warn!("Topology Notification has Comcast VendorSpecific TLV but missing AL MAC → fallback to SDU.");
+            return false;
+        };
 
-            let event = topology_db
-                .update_ieee1905_topology(
-                    received_device_data,
-                    UpdateType::NotificationReceived,
-                    Some(message_id),
-                    None,
+        let topology_db =
+            TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
+
+        let received_device_data = Ieee1905DeviceData {
+            al_mac: remote_al_mac_address,
+            destination_frame_mac: source_mac,
+            destination_mac: None,
+            local_interface_list: None,
+            registry_role: None,
+        };
+
+        let result = topology_db
+            .update_ieee1905_topology(
+                received_device_data,
+                UpdateType::NotificationReceived,
+                None,
+                Some(message_id),
+                None,
+                Some(device_vendor),
+            )
+            .await;
+
+        info!(
+            al_mac = %remote_al_mac_address,
+            source = %source_mac,
+            "Topology Notification Processed",
+        );
+
+        match result.transmission_event {
+            TransmissionEvent::SendTopologyQuery(dest_mac) => {
+                let forwarding_interface = topology_db.get_forwarding_interface_mac().await;
+
+                cmdu_topology_query_transmission(
+                    self.interface_name.clone(),
+                    self.sender.clone(),
+                    self.message_id_generator.clone(),
+                    self.local_al_mac,
+                    dest_mac,
+                    forwarding_interface,
                 )
                 .await;
-
-            tracing::info!(
-                "Topology Notification Processed: from AL_MAC={}",
-                remote_al_mac_address
-            );
-
-            match event {
-                TransmissionEvent::SendTopologyQuery(dest_mac) => {
-                    let forwarding_interface = topology_db.get_forwarding_interface_mac().await;
-
-                    cmdu_topology_query_transmission(
-                        self.interface_name.clone(),
-                        self.sender.clone(),
-                        self.message_id_generator.clone(),
-                        self.local_al_mac,
-                        dest_mac,
-                        forwarding_interface,
-                    )
-                    .await;
-                }
-                TransmissionEvent::None => {
-                    tracing::debug!("No transmission event triggered by Topology Notification");
-                }
-                _ => {
-                    tracing::warn!("Unexpected TransmissionEvent in handle_topology_notification");
-                }
             }
-        } else {
-            tracing::warn!("Topology Notification not Processed: AL_MAC is missing");
-        }
+            TransmissionEvent::None => {
+                tracing::debug!("No transmission event triggered by Topology Notification");
+            }
+            _ => {
+                tracing::warn!("Unexpected TransmissionEvent in handle_topology_notification");
+            }
+        };
+
+        !result.converged // don't consume message if we have converged
     }
 
+    #[instrument(skip_all, name = "sdu_from_cmdu")]
     pub async fn handle_sdu_from_cmdu_reception(
         &self,
         tlvs: &[TLV],
@@ -890,19 +835,16 @@ impl CMDUHandler {
         message_type: u16,
         source_mac: MacAddr,
         destination_mac: MacAddr,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let mut end_of_message_found = false;
-        let tlv_no = tlvs.len();
-        trace!(
-            "Handling SDU from CMDU with Message ID: {}, from interface {}, message type {}, no of tlvs {}",
-            message_id, self.interface_name, message_type, tlv_no
-        );
-        trace!(
-            "Handle SDU from CMDU source_mac {source_mac:?} destination_mac {destination_mac:?}"
-        );
         debug!(
-            "Handling SDU from CMDU with Message ID: {}, from interface {}",
-            message_id, self.interface_name
+            src = %source_mac,
+            dst = %destination_mac,
+            msg_id = message_id,
+            msg_type = message_type,
+            tlv_no = tlvs.len(),
+            interface = self.interface_name,
+            "Handle SDU from CMDU",
         );
 
         for (index, tlv) in tlvs.iter().enumerate() {
@@ -918,10 +860,7 @@ impl CMDUHandler {
                     end_of_message_found = true;
                     trace!("End of CMDU Message found");
                 }
-                _ => warn!(
-                    "Unknown TLV Type: {:#x?}, Raw Data: {:?}",
-                    tlv.tlv_type, tlv.tlv_value
-                ),
+                _ => trace!("TLV Type: {:#x?}, Raw Data: {:?}", tlv.tlv_type, tlv.tlv_value),
             }
         }
 
@@ -931,37 +870,25 @@ impl CMDUHandler {
         }
 
         if destination_mac != IEEE1905_CONTROL_ADDRESS && destination_mac != self.local_al_mac {
-            tracing::debug!("Skipping SDU from CMDU as destination mac {destination_mac:?} is different as local al mac {}",self.local_al_mac);
+            debug!("Skipping SDU from CMDU as destination mac {destination_mac:?} is different as local al mac {}",self.local_al_mac);
             return Ok(());
         }
 
         let topology_db =
             TopologyDatabase::get_instance(source_mac, self.interface_name.clone()).await;
 
-        let device_data = Ieee1905DeviceData {
-            al_mac: source_mac,
-            destination_mac: Some(destination_mac),
-            local_interface_list: None,
-            registry_role: None,
-        };
-
-        topology_db
-            .update_ieee1905_topology(device_data, UpdateType::SDU, Some(message_id), None)
-            .await;
-
         if let Some(updated_node) = topology_db.get_device(source_mac).await {
             trace!("Node: {updated_node:?}");
-            if updated_node.metadata.node_state_local == Some(StateLocal::ConvergedLocal)
-                && updated_node.metadata.node_state_remote == Some(StateRemote::ConvergedRemote)
-                && updated_node.device_data.al_mac != self.local_al_mac
-            {
-                debug!(remote= %source_mac,
-                        metadata = ?updated_node.metadata,
-                        "Sending the serviceAccessPointDataIndication");
+            if updated_node.metadata.has_converged() && updated_node.device_data.al_mac != self.local_al_mac {
+                debug!(
+                    remote= %source_mac,
+                    metadata = ?updated_node.metadata,
+                    "Sending the serviceAccessPointDataIndication",
+                );
                 let mut serialized_payload: Vec<u8> = vec![];
-                    for tlv in tlvs {
-                        serialized_payload.extend(tlv.serialize());
-                    }
+                for tlv in tlvs {
+                    serialized_payload.extend(tlv.serialize());
+                }
 
                 let sdu = SDU {
                     source_al_mac_address: self.local_al_mac,
@@ -970,7 +897,7 @@ impl CMDUHandler {
                     is_last_fragment: 0,
                     fragment_id: 0,
                     payload: CMDU {
-                        message_version: 0x01,
+                        message_version: MessageVersion::Version2013.to_u8(),
                         reserved: 0x00,
                         message_type,
                         message_id,
@@ -980,12 +907,10 @@ impl CMDUHandler {
                     }
                     .serialize(),
                 };
-                tracing::trace!("Sending SDU from CMDU: <{sdu:?}>");
+                trace!("Sending SDU from CMDU: <{sdu:?}>");
                 service_access_point_data_indication(&sdu).await?;
             } else {
-                trace!(
-                    "Skipping as not in converged mode or update device data equal to local al mac"
-                );
+                trace!("Skipping as not in converged mode or update device data equal to local al mac");
             }
         } else {
             trace!("Cannot find device for {} topology_db", source_mac);
@@ -999,10 +924,10 @@ mod tests {
     use super::*;
     use crate::cmdu_codec::tests::make_dummy_cmdu;
     use crate::cmdu_message_id_generator::get_message_id_generator;
+    use crate::cmdu_reassembler::CmduReassemblyError;
     use crate::interface_manager::get_forwarding_interface_name;
     use crate::interface_manager::get_local_al_mac;
     use tokio::sync::Mutex;
-    use crate::cmdu_reassembler::CmduReassemblyError;
 
     // Verify CMDU fragmentation and push_fragment function
     #[tokio::test]
@@ -1034,7 +959,7 @@ mod tests {
         let fragments = cmdu.clone().fragment(1500);
 
         // Prepare a CmduReassembler instance
-        let cmdu_reasm = CmduReassembler::new().await;
+        let cmdu_reasm = CmduReassembler::new();
 
         let mut reassembled: Option<CMDU> = None;
 
@@ -1045,12 +970,20 @@ mod tests {
                 // Differentiate between last-first and the last-but-not-first CMDU fragments
                 if i == 0 {
                     // First and at the same time last CMDU fragment (the only fragment in CMDU chain) in case of size based fragmentation should have the minimal size of CMDU header + TLV header without any TLV payload
-                    assert!(fragment.total_size() >= 8 + 3, "Fragment {0} should be at least 8+3 bytes but is {1} bytes long",
-                        i, fragment.total_size());
+                    assert!(
+                        fragment.total_size() >= 8 + 3,
+                        "Fragment {0} should be at least 8+3 bytes but is {1} bytes long",
+                        i,
+                        fragment.total_size()
+                    );
                 } else {
                     // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
-                    assert!(fragment.total_size() >= 8 + 1, "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
-                        i, fragment.total_size());
+                    assert!(
+                        fragment.total_size() >= 8 + 1,
+                        "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
+                        i,
+                        fragment.total_size()
+                    );
                 }
             }
 
@@ -1193,7 +1126,7 @@ mod tests {
         let fragments: Vec<CMDU> = vec![cmdu_part_1, cmdu_part_2];
 
         // Prepare instance of CmduReassembler
-        let cmdu_reasm = CmduReassembler::new().await;
+        let cmdu_reasm = CmduReassembler::new();
 
         // Make instance of CMDU for reassembling CMDU fragments into one, final CMDU
         let mut reassembled: Option<CMDU> = None;
@@ -1205,12 +1138,20 @@ mod tests {
                 // Differentiate between last-first and the last-but-not-first CMDU fragments
                 if i == 0 {
                     // First and at the same time last CMDU fragment (the only fragment in CMDU chain) in case of size based fragmentation should have the minimal size of CMDU header + TLV header without any TLV payload
-                    assert!(fragment.total_size() >= 8 + 3, "Fragment {0} should be at least 8+3 bytes but is {1} bytes long",
-                        i, fragment.total_size());
+                    assert!(
+                        fragment.total_size() >= 8 + 3,
+                        "Fragment {0} should be at least 8+3 bytes but is {1} bytes long",
+                        i,
+                        fragment.total_size()
+                    );
                 } else {
                     // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
-                    assert!(fragment.total_size() >= 8 + 1, "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
-                        i, fragment.total_size());
+                    assert!(
+                        fragment.total_size() >= 8 + 1,
+                        "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
+                        i,
+                        fragment.total_size()
+                    );
                 }
             }
 
@@ -1242,7 +1183,6 @@ mod tests {
 
     // Verify detection of oversized CMDU
     #[tokio::test]
-    #[should_panic]
     async fn test_handle_cmdu_function_for_oversized_cmdu() {
         // Prepare forwarding interface
         let interface_name = "eth0".to_string();
@@ -1257,8 +1197,10 @@ mod tests {
 
         // Prepare sender
         let mutex_tx = Arc::new(Mutex::new(()));
-        let sender: Arc<EthernetSender> =
-            Arc::new(EthernetSender::new(&forwarding_interface, Arc::clone(&mutex_tx)).await);
+        let sender = Arc::new(EthernetSender::new(
+            &forwarding_interface,
+            Arc::clone(&mutex_tx),
+        ));
 
         // Prepare MessageIdGenerator instance
         let message_id_generator = get_message_id_generator().await;
@@ -1289,9 +1231,10 @@ mod tests {
         let destination_mac = MacAddr::new(0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc);
 
         // Expect panic in handle_cmdu() as the CMDU size is prepared to have 1501 bytes
-        cmdu_handler
+        assert!(cmdu_handler
             .handle_cmdu(&cmdu, source_mac, destination_mac)
-            .await;
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -1302,12 +1245,12 @@ mod tests {
 
         cmdu0.fragment = 0;
         cmdu1.fragment = 1;
-        cmdu2.fragment = 1;         // duplicated fragment No. 1
-        cmdu2.flags = 0x80;         // set last fragment flag
+        cmdu2.fragment = 1; // duplicated fragment No. 1
+        cmdu2.flags = 0x80; // set last fragment flag
 
         let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
         let fragments = vec![cmdu0, cmdu1, cmdu2];
-        let cmdu_reasm = CmduReassembler::new().await;
+        let cmdu_reasm = CmduReassembler::new();
 
         for fragment in fragments.iter() {
             match cmdu_reasm.push_fragment(source_mac, fragment.clone()).await {
