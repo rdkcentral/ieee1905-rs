@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "ieee1905-core"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "ieee1905-tests"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytes",
