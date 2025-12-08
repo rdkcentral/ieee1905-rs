@@ -22,15 +22,24 @@
 use pnet::datalink::{self, MacAddr};
 
 // Standard library
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::process::Command;
 use std::str;
-
+use netdev::interface::InterfaceType;
 // Internal modules
 use crate::topology_manager::Ieee1905InterfaceData;
 
+pub struct InterfaceInfo {
+    pub name: String,
+    pub mac: MacAddr,
+}
 
+pub struct BridgeInfo {
+    pub name: String,
+    pub index: u32,
+    pub address: MacAddr,
+}
 
 pub fn get_local_al_mac(interface_name: String) -> Option<MacAddr> {
     // Fetch all network interfaces
@@ -75,6 +84,22 @@ pub fn get_forwarding_interface_name(interface_name: String) -> Option<String> {
         .map(|iface| iface.name.clone()) // Extract and return interface name
 }
 
+/// Retrieves a list of all physical ethernet interfaces.
+pub fn get_physical_ethernet_interfaces() -> Vec<InterfaceInfo> {
+    let interfaces = netdev::get_interfaces();
+    interfaces.into_iter()
+        .filter_map(|interface| {
+            if interface.if_type != InterfaceType::Ethernet || !interface.is_physical() {
+                return None;
+            }
+            Some(InterfaceInfo {
+                name: interface.name,
+                mac: interface.mac_addr?.octets().into(),
+            })
+        })
+        .collect()
+}
+
 /// **Gets the MAC address of a given network interface**
 pub fn get_mac_address_by_interface(interface_name: &str) -> Option<MacAddr> {
     // Fetch all available interfaces
@@ -90,6 +115,17 @@ pub fn get_mac_address_by_interface(interface_name: &str) -> Option<MacAddr> {
 pub fn is_bridge_member(interface_name: &str) -> bool {
     let path = format!("/sys/class/net/{}/brport", interface_name);
     fs::metadata(&path).is_ok() // If this directory exists, it's part of a bridge
+}
+
+pub fn get_bridge_of(interface_name: &str) -> Option<BridgeInfo> {
+    let path = format!("/sys/class/net/{interface_name}/brport/bridge");
+    let link = fs::read_link(&path).ok()?;
+
+    Some(BridgeInfo {
+        name: link.file_name()?.to_string_lossy().into_owned(),
+        index: fs::read_to_string(format!("{path}/ifindex")).ok()?.trim().parse().ok()?,
+        address: fs::read_to_string(format!("{path}/address")).ok()?.trim().parse().ok()?,
+    })
 }
 
 /// Retrieves VLAN ID from `/proc/net/vlan/config`
@@ -159,9 +195,9 @@ fn parse_mac(mac_str: &str) -> Result<MacAddr, ()> {
 /// Retrieves a list of interfaces with additional metadata.
 pub fn get_interfaces() -> Vec<Ieee1905InterfaceData> {
     let mut interfaces = Vec::new();
+    let mut interfaces_by_bridge = HashMap::<u32, Vec<MacAddr>>::new();
 
     let netdev_interfaces = netdev::get_interfaces();
-
     let pnet_interfaces = datalink::interfaces();
 
     for iface in pnet_interfaces {
@@ -172,27 +208,28 @@ pub fn get_interfaces() -> Vec<Ieee1905InterfaceData> {
             if let Some(net_iface) = netdev_interfaces.iter().find(|n| n.name == interface_name) {
 
                 // Determine media type
-                let media_type = if net_iface.name.starts_with("eth") {
-                    0x01 // Ethernet
-                } else if net_iface.name.starts_with("wl") || net_iface.name.starts_with("wlan") {
-                    0x02 // Wi-Fi
-                } else {
-                    continue; // Skip non-Ethernet/Wi-Fi interfaces
+                let media_type = match net_iface.if_type {
+                    InterfaceType::Ethernet => 0x01,        // Ethernet
+                    InterfaceType::Wireless80211 => 0x0100, // Wi-Fi
+                    _ => continue,                          // Skip non-Ethernet/Wi-Fi interfaces
                 };
 
                 let metric = if media_type == 0x01 { Some(10) } else { Some(100) };
 
-                let bridging_flag = is_bridge_member(&net_iface.name);
-                let bridging_tuple = if bridging_flag { Some(0) } else { None };
                 let vlan = get_vlan_id(&net_iface.name);
                 //let non_ieee1905_neighbors = Some(get_neighbor_macs(&interface_name));
                 let non_ieee1905_neighbors = None;
                 let ieee1905_neighbors = None;
+
+                if let Some(bridging_info) = get_bridge_of(&interface_name) {
+                    interfaces_by_bridge.entry(bridging_info.index).or_default().push(mac);
+                }
+
                 interfaces.push(Ieee1905InterfaceData {
                     mac,
                     media_type,
-                    bridging_flag,
-                    bridging_tuple,
+                    bridging_flag: false,
+                    bridging_tuple: None,
                     vlan,
                     metric,
                     non_ieee1905_neighbors,
@@ -201,5 +238,20 @@ pub fn get_interfaces() -> Vec<Ieee1905InterfaceData> {
             }
         }
     }
+
+    let mut bridge_index_by_interface = HashMap::<MacAddr, u8>::new();
+    for (index, bridged_interfaces) in interfaces_by_bridge.into_values().enumerate() {
+        for interface in bridged_interfaces {
+            bridge_index_by_interface.insert(interface, index as u8);
+        }
+    }
+
+    for interface in interfaces.iter_mut() {
+        if let Some(index) = bridge_index_by_interface.get(&interface.mac) {
+            interface.bridging_flag = true;
+            interface.bridging_tuple = Some(*index);
+        }
+    }
+
     interfaces
 }

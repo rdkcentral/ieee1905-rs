@@ -34,6 +34,8 @@ pub struct CryptoContext {
     pub pmk_key: ObjectHandle,
 }
 
+// Global CryptoContext instance needed for cryptographic operations such as GTK and PMK handling.
+
 pub static CRYPTO_CONTEXT: Lazy<Arc<Mutex<CryptoContext>>> = Lazy::new(|| {
     let lib_path = "/usr/lib/softhsm/libsofthsm2.so";
     let pin = std::env::var("SOFTHSM_USER_PIN").expect("Missing PIN");
@@ -43,11 +45,12 @@ pub static CRYPTO_CONTEXT: Lazy<Arc<Mutex<CryptoContext>>> = Lazy::new(|| {
 
     let slot = pkcs11.get_slots_with_token().expect("No slot").remove(0);
     let mut session = pkcs11.open_ro_session(slot).expect("Session failed");
-
+    // Log in to the session
     session
         .login(UserType::User, Some(&AuthPin::new(pin)))
         .expect("Login failed");
 
+    // Retrieve GTK and PMK keys
     let gtk_key = find_key(&mut session, "1905GTK", 0x01).expect("GTK key not found");
     let pmk_key = find_key(&mut session, "1905PMK", 0x02).expect("PMK key not found");
 
@@ -57,7 +60,7 @@ pub static CRYPTO_CONTEXT: Lazy<Arc<Mutex<CryptoContext>>> = Lazy::new(|| {
         pmk_key,
     }))
 });
-
+// Helper function to find a key by label and ID
 fn find_key(session: &mut Session, label: &str, id: u8) -> Option<ObjectHandle> {
     let attributes = vec![
         Attribute::Label(label.as_bytes().to_vec()),

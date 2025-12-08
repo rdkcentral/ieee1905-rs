@@ -28,10 +28,10 @@ use crossterm::{
 use pnet::datalink::MacAddr;
 use tokio::{
     sync::{OnceCell, RwLock},
-    task::{spawn, yield_now},
+    task::{yield_now},
     time::{interval, Duration, Instant},
 };
-use tracing::debug;
+use tracing::{debug, info, instrument, warn};
 use tui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -39,27 +39,23 @@ use tui::{
     widgets::{Block, Borders, Paragraph, Row, Table},
     Terminal,
 };
-// use crate::task_registry::TASK_REGISTRY;
 // Standard library
 use std::{collections::HashMap, io, sync::Arc};
-
+use tokio::task::JoinSet;
 // Internal modules
-use crate::{
-    cmdu::IEEE1905Neighbor,
-    interface_manager::{get_forwarding_interface_mac, get_interfaces},
-    //task_registry::TASK_REGISTRY,
-};
+use crate::{cmdu::IEEE1905Neighbor, interface_manager::{get_forwarding_interface_mac, get_interfaces}, next_task_id};
+use crate::lldpdu::PortId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateLocal {
     Idle,
-    ConvergingLocal,
+    ConvergingLocal(Instant),
     ConvergedLocal,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateRemote {
     Idle,
-    ConvergingRemote,
+    ConvergingRemote(Instant),
     ConvergedRemote,
 }
 
@@ -68,15 +64,16 @@ pub enum StateRemote {
 pub enum UpdateType {
     LldpUpdate,
     DiscoveryReceived,
-    NotificationSent,
     NotificationReceived,
     QuerySent,
     QueryReceived,
     ResponseSent,
     ResponseReceived,
-    AutoConfigSearch,
-    AutoConfigResponse,
-    SDU,
+}
+
+pub struct UpdateTopologyResult {
+    pub converged: bool,
+    pub transmission_event: TransmissionEvent,
 }
 
 pub enum TransmissionEvent {
@@ -150,32 +147,49 @@ impl Ieee1905InterfaceData {
     }
 }
 
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Ieee1905DeviceVendor {
+    Rdk,
+    #[default]
+    Unknown,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ieee1905NodeInfo {
+    pub al_mac: MacAddr,
     pub last_update: UpdateType,
     pub last_seen: Instant,
-    pub message_id: Option<u16>,
-    pub lldp_neighbor: Option<bool>,
-    pub node_state_local: Option<StateLocal>,
-    pub node_state_remote: Option<StateRemote>,
+    /// last msg id sent to this node
+    /// this excludes response ids, those are always copied from the query
+    pub local_message_id: Option<u16>,
+    /// last msg id received from this node
+    /// this excludes response ids, those are always copied from the query
+    pub remote_message_id: Option<u16>,
+    pub lldp_neighbor: Option<PortId>,
+    pub node_state_local: StateLocal,
+    pub node_state_remote: StateRemote,
+    pub device_vendor: Ieee1905DeviceVendor,
 }
 
 impl Ieee1905NodeInfo {
     /// **Create a new `Ieee1905NodeInfo` instance**
     pub fn new(
+        al_mac: MacAddr,
         last_update: UpdateType,
-        message_id: Option<u16>,
-        lldp_neighbor: Option<bool>,
-        node_state_local: Option<StateLocal>,
-        node_state_remote: Option<StateRemote>,
+        lldp_neighbor: Option<PortId>,
+        node_state_local: StateLocal,
+        node_state_remote: StateRemote,
     ) -> Self {
         Self {
+            al_mac,
             last_update,
             last_seen: Instant::now(), // Set current time at creation
-            message_id,
+            local_message_id: None,
+            remote_message_id: None,
             lldp_neighbor,
             node_state_local,
             node_state_remote,
+            device_vendor: Ieee1905DeviceVendor::Unknown,
         }
     }
 
@@ -183,28 +197,45 @@ impl Ieee1905NodeInfo {
     pub fn update(
         &mut self,
         new_state: Option<UpdateType>,
-        new_message_id: Option<u16>,
-        new_lldp_neighbor: Option<bool>,
+        new_local_message_id: Option<u16>,
+        new_remote_message_id: Option<u16>,
+        new_lldp_neighbor: Option<PortId>,
         new_node_state_local: Option<StateLocal>,
         new_node_state_remote: Option<StateRemote>,
     ) {
         if let Some(message_type) = new_state {
             self.last_update = message_type;
         }
-        if let Some(message_id) = new_message_id {
-            self.message_id = Some(message_id);
+        if let Some(message_id) = new_local_message_id {
+            self.local_message_id = Some(message_id);
+        }
+        if let Some(message_id) = new_remote_message_id {
+            self.remote_message_id = Some(message_id);
         }
         if let Some(lldp_neighbor) = new_lldp_neighbor {
             self.lldp_neighbor = Some(lldp_neighbor);
         }
+
         if let Some(local) = new_node_state_local {
-            self.node_state_local = Some(local);
+            if self.node_state_local != local {
+                info!("{} local state changed: {:?} -> {local:?}", self.al_mac, self.node_state_local);
+                self.node_state_local = local;
+            }
         }
+
         if let Some(remote) = new_node_state_remote {
-            self.node_state_remote = Some(remote);
+            if self.node_state_remote != remote {
+                info!("{} remote state changed: {:?} -> {remote:?}", self.al_mac, self.node_state_remote);
+                self.node_state_remote = remote;
+            }
         }
 
         self.last_seen = Instant::now();
+    }
+
+    pub fn has_converged(&self) -> bool {
+        self.node_state_local == StateLocal::ConvergedLocal
+            && self.node_state_remote == StateRemote::ConvergedRemote
     }
 }
 
@@ -217,6 +248,7 @@ pub enum Role {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ieee1905DeviceData {
     pub al_mac: MacAddr,
+    pub destination_frame_mac: MacAddr,
     pub destination_mac: Option<MacAddr>,
     pub local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
     pub registry_role: Option<Role>,
@@ -226,12 +258,14 @@ impl Ieee1905DeviceData {
     /// **Create a new `Ieee1905DeviceData`**
     pub fn new(
         al_mac: MacAddr,
+        destination_frame_mac: MacAddr,
         destination_mac: Option<MacAddr>,
         local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
         registry_role: Option<Role>,
     ) -> Self {
         Self {
             al_mac,
+            destination_frame_mac,
             destination_mac,
             local_interface_list,
             registry_role,
@@ -288,7 +322,7 @@ impl Ieee1905Node {
 
 pub static TOPOLOGY_DATABASE: OnceCell<Arc<TopologyDatabase>> = OnceCell::const_new();
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TopologyDatabase {
     pub al_mac_address: Arc<RwLock<MacAddr>>,
     pub local_mac: Arc<RwLock<MacAddr>>,
@@ -300,24 +334,30 @@ pub struct TopologyDatabase {
 
 impl TopologyDatabase {
     /// **Creates a new `TopologyDatabase` instance**
-    pub async fn new(al_mac_address: MacAddr, interface_name: String) -> Self {
+    pub async fn new(al_mac_address: MacAddr, interface_name: String) -> Arc<Self> {
         debug!(al_mac = %al_mac_address, "Database initialized");
+
+        // TODO singletons initialization must not be failable. this db should be
+        //  initialized eagerly from main, and propagated as a dependency
 
         // Get local MAC address from forwarding interface
         let local_mac = Arc::new(RwLock::new(get_forwarding_interface_mac(interface_name.clone()).unwrap()));
 
-        let db = TopologyDatabase {
+        Arc::new(TopologyDatabase {
             al_mac_address: Arc::new(RwLock::new(al_mac_address)), // Wrapped in Arc<RwLock<T>>
             local_mac,
             local_interface_list: Arc::new(RwLock::new(None)),
             nodes: Arc::new(RwLock::new(HashMap::new())),
             interface_name: Arc::new(RwLock::new(Some(interface_name))),
             local_role: Arc::new(RwLock::new(None)),
-        };
+        })
+    }
 
-        db.refresh_topology().await;
-        db.refresh_interfaces().await;
-        db
+    pub fn start_workers(self: &Arc<Self>) -> JoinSet<()> {
+        let mut set = JoinSet::new();
+        set.spawn(self.clone().refresh_topology_worker());
+        set.spawn(self.clone().refresh_interfaces_worker());
+        set
     }
 
     /// ** Returns the local role
@@ -341,16 +381,34 @@ impl TopologyDatabase {
         interface_name: String,
     ) -> Arc<TopologyDatabase> {
         TOPOLOGY_DATABASE
-            .get_or_init(|| async {
-                Arc::new(TopologyDatabase::new(al_mac_address, interface_name).await)
-            })
+            .get_or_init(|| TopologyDatabase::new(al_mac_address, interface_name))
             .await
             .clone()
     }
+
     /// **Retrieves a device node from the database**
     pub async fn get_device(&self, al_mac: MacAddr) -> Option<Ieee1905Node> {
         let nodes = self.nodes.read().await; // Read lock
         nodes.get(&al_mac).cloned() // Clone to return the device node
+    }
+
+    /// **Retrieves a device node from the database**
+    pub async fn find_device_by_port(&self, mac: MacAddr) -> Option<Ieee1905Node> {
+        let nodes = self.nodes.read().await;
+        nodes.values().find(|node| {
+            if node.device_data.al_mac == mac {
+                return true;
+            }
+            if node.device_data.destination_frame_mac == mac {
+                return true;
+            }
+            if node.device_data.destination_mac == Some(mac) {
+                return true;
+            }
+            node.device_data.local_interface_list.as_ref().is_some_and(|interfaces| {
+                interfaces.iter().any(|e| e.mac == mac)
+            })
+        }).cloned()
     }
 
     /// **Getter for `local_interface_list`**
@@ -372,112 +430,100 @@ impl TopologyDatabase {
     pub async fn get_node_states(
         &self,
         al_mac: MacAddr,
-    ) -> (Option<StateLocal>, Option<StateRemote>) {
+    ) -> Option<(StateLocal, StateRemote)> {
         let nodes = self.nodes.read().await;
-        if let Some(node) = nodes.get(&al_mac) {
-            (
-                node.metadata.node_state_local,
-                node.metadata.node_state_remote,
-            )
-        } else {
-            (None, None)
-        }
+        let node = nodes.get(&al_mac)?;
+        Some((
+            node.metadata.node_state_local,
+            node.metadata.node_state_remote,
+        ))
     }
 
-    pub async fn refresh_topology(&self) {
-        let nodes_clone = Arc::clone(&self.nodes);
-        let _task_handle = spawn(async move {
-            let mut ticker = interval(Duration::from_secs(5)); // Runs every 5 seconds
+    #[instrument(skip_all, name = "topo_db_refresh_topology", fields(task = next_task_id()))]
+    async fn refresh_topology_worker(self: Arc<Self>) {
+        let mut ticker = interval(Duration::from_secs(5)); // Runs every 5 seconds
 
-            loop {
-                ticker.tick().await; // Wait for the next tick
-                let mut nodes = nodes_clone.write().await;
-                let now = Instant::now();
+        loop {
+            ticker.tick().await; // Wait for the next tick
+            let mut nodes = self.nodes.write().await;
+            let now = Instant::now();
 
-                nodes.retain(|al_mac, node| {
-                    let elapsed = now.duration_since(node.metadata.last_seen);
-
-                    // **Remove nodes stuck in Converging state for 5+ seconds**
-                    if matches!(
-                        node.metadata.node_state_local,
-                        Some(StateLocal::ConvergingLocal)
-                    ) && elapsed >= Duration::from_secs(40)
-                    {
-                        tracing::debug!(
+            nodes.retain(|al_mac, node| {
+                // Remove nodes stuck in ConvergingLocal state
+                if let StateLocal::ConvergingLocal(when) = node.metadata.node_state_local {
+                    if now.duration_since(when) >= Duration::from_secs(5) {
+                        debug!(
                             al_mac = ?al_mac,
                             state = ?node.metadata.last_update,
                             "Removing node stuck in local convergence for too long"
                         );
-                        return false; // **Remove from database**
+                        return false; // Remove from database
                     }
-                    if matches!(
-                        node.metadata.node_state_remote,
-                        Some(StateRemote::ConvergingRemote)
-                    ) && elapsed >= Duration::from_secs(40)
-                    {
-                        tracing::debug!(
+                }
+
+                // Remove nodes stuck in ConvergingRemote state
+                if let StateRemote::ConvergingRemote(when) = node.metadata.node_state_remote {
+                    if now.duration_since(when) >= Duration::from_secs(5) {
+                        debug!(
                             al_mac = ?al_mac,
                             state = ?node.metadata.last_update,
                             "Removing node stuck in remote convergence for too long"
                         );
-                        return false; // **Remove from database**
+                        return false; // Remove from database
                     }
-                    // **Remove nodes that have been inactive for 30+ seconds**
-                    if elapsed >= Duration::from_secs(60) {
-                        tracing::debug!(al_mac = ?al_mac, "Removing node due to timeout");
-                        return false; // **Remove from database**
-                    }
-
-                    debug!(
-                        al_mac = ?al_mac,
-                        elapsed_time = elapsed.as_secs_f64(),
-                        "Node Last Seen"
-                    );
-                    true // Keep the node
-                });
-
-                if nodes.is_empty() {
-                    debug!("No nodes in the topology, waiting for updates...");
                 }
+
+                // Remove nodes that have been inactive
+                let elapsed = now.duration_since(node.metadata.last_seen);
+                if elapsed >= Duration::from_secs(60) {
+                    tracing::debug!(al_mac = ?al_mac, "Removing node due to timeout");
+                    return false; // Remove from database
+                }
+
+                debug!(
+                    al_mac = ?al_mac,
+                    elapsed_time = elapsed.as_secs_f64(),
+                    "Node Last Seen"
+                );
+                true // Keep the node
+            });
+
+            if nodes.is_empty() {
+                debug!("No nodes in the topology, waiting for updates...");
             }
-        });
-        //TASK_REGISTRY.lock().await.push(task_handle);
+        }
     }
 
-    pub async fn refresh_interfaces(&self) {
-        let local_interfaces = Arc::clone(&self.local_interface_list);
-        let interface_name = Arc::clone(&self.interface_name);
-        let forwarding_mac = Arc::clone(&self.local_mac);
+    #[instrument(skip_all, name = "topo_db_refresh_interfaces", fields(task = next_task_id()))]
+    async fn refresh_interfaces_worker(self: Arc<Self>) {
+        let mut interval = tokio::time::interval(Duration::from_secs(100));
 
-        let _task_handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(100));
+        loop {
+            interval.tick().await;
 
-            loop {
-                interval.tick().await;
+            match tokio::task::spawn_blocking(get_interfaces).await {
+                Ok(interfaces) => {
+                    let mut list = self.local_interface_list.write().await;
 
-                match tokio::task::spawn_blocking(get_interfaces).await {
-                    Ok(interfaces) => {
-                        let mut list = local_interfaces.write().await;
-
-                        if interfaces.is_empty() {
-                            *list = None;
-                            tracing::debug!("No interfaces found — set to None");
-                        } else {
-                            *list = Some(interfaces);
-                            tracing::debug!("Updated local interfaces");
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Interface scan task panicked: {:?}", e);
+                    if interfaces.is_empty() {
+                        *list = None;
+                        tracing::debug!("No interfaces found — set to None");
+                    } else {
+                        *list = Some(interfaces);
+                        tracing::debug!("Updated local interfaces");
                     }
                 }
-                if let Some(int_name) = interface_name.read().await.clone() {
-                    let mut mac_lock = forwarding_mac.write().await;
-                    *mac_lock = get_forwarding_interface_mac(int_name).unwrap();
+                Err(e) => {
+                    tracing::error!("Interface scan task panicked: {:?}", e);
                 }
             }
-        });
-        //TASK_REGISTRY.lock().await.push(task_handle);
+            if let Some(int_name) = self.interface_name.read().await.clone() {
+                match get_forwarding_interface_mac(int_name) {
+                    Some(e) => *self.local_mac.write().await = e,
+                    None => warn!("Failed to fetch forwarding mac address"),
+                }
+            }
+        }
     }
 
     /// Tie breaker function in case we need to give priority in case of collision
@@ -493,33 +539,37 @@ impl TopologyDatabase {
         &self,
         device_data: Ieee1905DeviceData,
         operation: UpdateType,
-        msg_id: Option<u16>,
-        lldp_neighbor: Option<bool>,
-    ) -> TransmissionEvent {
+        local_msg_id: Option<u16>,
+        remote_msg_id: Option<u16>,
+        lldp_neighbor: Option<PortId>,
+        device_vendor: Option<Ieee1905DeviceVendor>,
+    ) -> UpdateTopologyResult {
         let al_mac = device_data.al_mac;
-        let event;
+        let converged;
+        let transmission_event;
+
         //TODO: use new update types.
         tracing::debug!("WAITING for write lock");
         {
             let mut nodes = self.nodes.write().await;
             tracing::debug!("ACQUIRED write lock");
 
-            event = match nodes.get_mut(&al_mac) {
+            match nodes.get_mut(&al_mac) {
                 Some(node) => {
                     tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Updating existing node");
 
-                    match operation {
+                    if let Some(device_vendor) = device_vendor {
+                        node.metadata.device_vendor = device_vendor;
+                    }
+
+                    transmission_event = match operation {
                         UpdateType::DiscoveryReceived => {
                             let local_state = node.metadata.node_state_local;
-                            let remote_state = node.metadata.node_state_remote;
 
-                            node.metadata
-                                .update(Some(operation), msg_id, None, None, None);
+                            node.device_data.update(device_data.destination_mac, None);
+                            node.metadata.update(Some(operation), local_msg_id, remote_msg_id, None, None, None);
 
-                            if matches!(
-                                (local_state, remote_state),
-                                (Some(StateLocal::Idle), Some(_))
-                            ) {
+                            if local_state == StateLocal::Idle {
                                 TransmissionEvent::SendTopologyQuery(al_mac)
                             } else {
                                 TransmissionEvent::None
@@ -527,34 +577,36 @@ impl TopologyDatabase {
                         }
                         UpdateType::NotificationReceived => {
                             let local_state = node.metadata.node_state_local;
-                            let remote_state = node.metadata.node_state_remote;
-                            if matches!(
-                                (local_state, remote_state),
-                                (Some(StateLocal::ConvergedLocal), Some(_))
-                            ) {
-                                node.metadata
-                                    .update(Some(operation), msg_id, None, None, None);
+
+                            if local_state == StateLocal::ConvergedLocal {
+                                node.metadata.update(
+                                    Some(operation),
+                                    local_msg_id,
+                                    remote_msg_id,
+                                    None,
+                                    Some(StateLocal::Idle),
+                                    None,
+                                );
                                 TransmissionEvent::SendTopologyQuery(al_mac)
                             } else {
                                 TransmissionEvent::None
                             }
                         }
                         UpdateType::QueryReceived => {
-                            let local_state = node.metadata.node_state_local;
                             let remote_state = node.metadata.node_state_remote;
 
-                            if matches!((local_state, remote_state), (Some(_), Some(_))) {
+                            if remote_state != StateRemote::ConvergedRemote {
                                 node.metadata.update(
                                     Some(operation),
-                                    msg_id,
+                                    local_msg_id,
+                                    remote_msg_id,
                                     None,
                                     None,
-                                    Some(StateRemote::ConvergingRemote),
+                                    Some(StateRemote::ConvergingRemote(Instant::now())),
                                 );
-                                tracing::debug!("Event: Send Topology Response");
+                                debug!("Event: Send Topology Response");
                                 TransmissionEvent::SendTopologyResponse(al_mac)
                             } else {
-                                tracing::debug!("Conditions not met: No transmission needed after QueryReceived");
                                 TransmissionEvent::None
                             }
                         }
@@ -562,10 +614,11 @@ impl TopologyDatabase {
                         UpdateType::ResponseReceived => {
                             let local_state = node.metadata.node_state_local;
 
-                            if matches!(local_state, Some(StateLocal::ConvergingLocal)) {
+                            if let StateLocal::ConvergingLocal(_) = local_state {
                                 node.metadata.update(
                                     Some(operation),
-                                    msg_id,
+                                    local_msg_id,
+                                    remote_msg_id,
                                     None,
                                     Some(StateLocal::ConvergedLocal),
                                     None,
@@ -585,14 +638,11 @@ impl TopologyDatabase {
                                         device_data.local_interface_list,
                                     );
 
-                                    let multicast_mac =
-                                        MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13);
-                                    tracing::debug!("Event: Send Topology Notification");
+                                    let multicast_mac = MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13);
+                                    debug!("Event: Send Topology Notification");
                                     TransmissionEvent::SendTopologyNotification(multicast_mac)
                                 } else {
-                                    tracing::debug!(
-                                        "Device data unchanged — no transmission needed"
-                                    );
+                                    debug!("Device data unchanged — no transmission needed");
                                     TransmissionEvent::None
                                 }
                             } else {
@@ -604,118 +654,105 @@ impl TopologyDatabase {
                         }
 
                         UpdateType::QuerySent => {
-                            node.metadata.update(
-                                Some(operation),
-                                msg_id,
-                                None,
-                                Some(StateLocal::ConvergingLocal),
-                                None,
-                            );
+                            if node.metadata.node_state_local != StateLocal::ConvergedLocal {
+                                node.metadata.update(
+                                    Some(operation),
+                                    local_msg_id,
+                                    remote_msg_id,
+                                    None,
+                                    Some(StateLocal::ConvergingLocal(Instant::now())),
+                                    None,
+                                );
+                            }
                             TransmissionEvent::None
                         }
                         UpdateType::ResponseSent => {
-                            node.metadata.update(
-                                Some(operation),
-                                msg_id,
-                                None,
-                                None,
-                                Some(StateRemote::ConvergedRemote),
-                            );
+                            if let StateRemote::ConvergingRemote(_) = node.metadata.node_state_remote {
+                                node.metadata.update(
+                                    Some(operation),
+                                    local_msg_id,
+                                    remote_msg_id,
+                                    None,
+                                    None,
+                                    Some(StateRemote::ConvergedRemote),
+                                );
+                            }
                             TransmissionEvent::None
                         }
                         UpdateType::LldpUpdate => {
                             node.metadata.update(
                                 Some(operation),
-                                msg_id,
-                                lldp_neighbor,
+                                local_msg_id,
+                                remote_msg_id,
+                                lldp_neighbor.clone(),
                                 None,
                                 None,
                             );
-                            tracing::debug!(al_mac = ?al_mac, lldp_neighbor = ?lldp_neighbor, "Updated LLDP neighbor status");
+                            debug!(al_mac = ?al_mac, lldp_neighbor = ?lldp_neighbor, "Updated LLDP neighbor status");
                             TransmissionEvent::None
                             //If needed we can indicate here a notification event to update topology data base in al neighbors but for now it is not needed
                             //initial DB snapshot covers current uses cases for RDK-B but we can update this part if needed in the future
                         }
-                        UpdateType::AutoConfigResponse => {
-                            let local_state = node.metadata.node_state_local;
-                            let remote_state = node.metadata.node_state_remote;
-                            if matches!(
-                                (local_state, remote_state),
-                                (
-                                    Some(StateLocal::ConvergedLocal),
-                                    Some(StateRemote::ConvergedRemote)
-                                )
-                            ) {
-                                node.metadata
-                                    .update(Some(operation), msg_id, None, None, None);
-                            }
-                            TransmissionEvent::None
-                        }
-                        UpdateType::AutoConfigSearch => {
-                            let local_state = node.metadata.node_state_local;
-                            let remote_state = node.metadata.node_state_remote;
-                            if matches!(
-                                (local_state, remote_state),
-                                (
-                                    Some(StateLocal::ConvergedLocal),
-                                    Some(StateRemote::ConvergedRemote)
-                                )
-                            ) {
-                                node.metadata
-                                    .update(Some(operation), msg_id, None, None, None);
-                            }
-                            TransmissionEvent::None
-                        }
-                        _ => {
-                            tracing::warn!(al_mac = ?al_mac, operation = ?operation, "Unhandled update for existing node");
-                            TransmissionEvent::None
-                        }
-                    }
+                    };
+
+                    converged = node.metadata.has_converged();
                 }
                 None => {
                     tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Node not found — inserting");
 
                     let mut new_node = Ieee1905Node {
                         metadata: Ieee1905NodeInfo {
+                            al_mac: device_data.al_mac,
                             last_update: operation,
                             last_seen: Instant::now(),
-                            message_id: msg_id,
-                            lldp_neighbor: Some(false),
-                            node_state_local: None,
-                            node_state_remote: None,
+                            local_message_id: local_msg_id,
+                            remote_message_id: remote_msg_id,
+                            lldp_neighbor,
+                            node_state_local: StateLocal::Idle,
+                            node_state_remote: StateRemote::Idle,
+                            device_vendor: device_vendor.unwrap_or_default(),
                         },
                         device_data,
                     };
 
-                    match operation {
+                    converged = false;
+                    transmission_event = match operation {
                         UpdateType::DiscoveryReceived => {
-                            new_node.metadata.node_state_local = Some(StateLocal::Idle);
-                            new_node.metadata.node_state_remote = Some(StateRemote::Idle);
                             nodes.insert(al_mac, new_node);
                             tracing::debug!(al_mac = ?al_mac, "Inserted node from Discovery");
-                            return TransmissionEvent::SendTopologyQuery(al_mac);
+                            TransmissionEvent::SendTopologyQuery(al_mac)
                         }
                         UpdateType::QueryReceived => {
-                            new_node.metadata.node_state_local = Some(StateLocal::Idle);
-                            new_node.metadata.node_state_remote =
-                                Some(StateRemote::ConvergingRemote);
+                            new_node.metadata.node_state_remote = StateRemote::ConvergingRemote(Instant::now());
                             nodes.insert(al_mac, new_node);
                             tracing::debug!(al_mac = ?al_mac, "Inserted node from query");
-                            return TransmissionEvent::SendTopologyResponse(al_mac);
+                            TransmissionEvent::SendTopologyResponse(al_mac)
                         }
                         _ => {
                             tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
+                            TransmissionEvent::None
                         }
-                    }
-
-                    TransmissionEvent::None
+                    };
                 }
             };
         }
 
-        tracing::debug!("Lock released — function continues safely");
-        event
+        debug!("Lock released — function continues safely");
+        UpdateTopologyResult {
+            converged,
+            transmission_event,
+        }
     }
+
+    pub async fn handle_notification_sent(&self) {
+        let mut nodes = self.nodes.write().await;
+        for node in nodes.values_mut() {
+            if let StateRemote::ConvergedRemote = node.metadata.node_state_remote {
+                node.metadata.update(None, None, None, None, None, Some(StateRemote::Idle));
+            }
+        }
+    }
+
     pub async fn start_topology_cli(self: Arc<Self>) -> io::Result<()> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
@@ -782,7 +819,8 @@ impl TopologyDatabase {
                     let lldp = node
                         .metadata
                         .lldp_neighbor
-                        .map(|l| l.to_string())
+                        .as_ref()
+                        .map(|l| l.port_id.to_string())
                         .unwrap_or_else(|| "-".to_string());
 
                     let interface_mac = node
@@ -833,7 +871,7 @@ impl TopologyDatabase {
                         Constraint::Length(25),
                         Constraint::Length(15),
                         Constraint::Length(20),
-                        Constraint::Length(10),
+                        Constraint::Length(20),
                         Constraint::Length(20),
                         Constraint::Length(15),
                     ])
@@ -863,5 +901,39 @@ impl TopologyDatabase {
         disable_raw_mode()?;
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pnet::datalink::MacAddr;
+    use crate::topology_manager::{Ieee1905DeviceData, Ieee1905InterfaceData, UpdateType};
+    use crate::TopologyDatabase;
+
+    #[tokio::test]
+    async fn test_remote_controller_won() {
+        let db = TopologyDatabase::new(MacAddr::new(0, 0, 0, 0, 0, 0), "en1".to_string()).await;
+
+        let device_mac = MacAddr::new(0, 0, 0, 0, 0, 1);
+        let device_al_mac = MacAddr::new(0, 0, 0, 0, 0, 2);
+        let device_if_mac = MacAddr::new(0, 0, 0, 0, 0, 3);
+
+        let interface = Ieee1905InterfaceData {
+            mac: device_if_mac,
+            media_type: 0,
+            bridging_flag: false,
+            bridging_tuple: None,
+            vlan: None,
+            metric: None,
+            non_ieee1905_neighbors: None,
+            ieee1905_neighbors: None,
+        };
+        let device = Ieee1905DeviceData::new(device_al_mac, device_al_mac, Some(device_mac), Some(vec!(interface)), None);
+        db.update_ieee1905_topology(device.clone(), UpdateType::DiscoveryReceived, None,  None, None, None).await;
+
+        assert!(db.find_device_by_port(device_mac).await.is_some());
+        assert!(db.find_device_by_port(device_al_mac).await.is_some());
+        assert!(db.find_device_by_port(device_if_mac).await.is_some());
+        assert!(db.find_device_by_port(MacAddr::new(0, 0, 0, 0, 0, 4)).await.is_none());
     }
 }

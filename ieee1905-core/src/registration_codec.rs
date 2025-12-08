@@ -354,26 +354,20 @@ pub mod tests {
 
     // Verify recognition and signalling of too short registration request
     #[test]
-    #[should_panic]
     fn test_parse_too_short_registration_request() {
-        // Expect panic trying to parse one byte request as registration request needs 2 bytes
-        assert!(AlServiceRegistrationRequest::parse(&[1]).is_ok());
+        assert!(AlServiceRegistrationRequest::parse(&[1]).is_err());
     }
 
     // Verify recognition and signalling trying to parse invalid ServiceOperation code
     #[test]
-    #[should_panic]
     fn test_try_to_parse_inappropriate_service_operation() {
-        // Expect panic trying to parse invalid data
-        assert!(ServiceOperation::parse(&[0]).is_ok());
+        assert!(ServiceOperation::parse(&[0]).is_err());
     }
 
     // Verify recognition and signalling trying to parse invalid ServiceType code
     #[test]
-    #[should_panic]
     fn test_try_to_parse_inappropriate_service_type() {
-        // Expect panic trying to parse invalid data as 0 is not valid ServiceType code
-        assert!(ServiceType::parse(&[0]).is_ok());
+        assert!(ServiceType::parse(&[0]).is_err());
     }
 
     // Try to parse some value that is out of range of allowed in enum RegistrationResult

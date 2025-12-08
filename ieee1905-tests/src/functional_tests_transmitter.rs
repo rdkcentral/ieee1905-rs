@@ -18,7 +18,6 @@
 */
 
 use bytes::Bytes;
-use eyre::Result;
 use futures::{SinkExt, StreamExt};
 use ieee1905::cmdu_codec::*;
 use ieee1905::registration_codec::{
@@ -140,7 +139,6 @@ fn prepare_payload_with_small_tlv(r: &AlServiceRegistrationResponse, multicast: 
         }
     }
 }
-
 
 fn prepare_payload_with_huge_tlv(r: &AlServiceRegistrationResponse, multicast: bool) -> Vec<u8> {
     // Here is whole SDU with autoconfig request taken from onewifi_em_agent_
@@ -423,8 +421,7 @@ fn prepare_payload_with_huge_tlv(r: &AlServiceRegistrationResponse, multicast: b
     }
 }
 
-
-async fn test1() -> Result<()> {
+async fn test1() -> anyhow::Result<()> {
     // Modify this filter for your tracing during run time
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("trace")); //add 'tokio=trace' to debug the runtime
 
@@ -638,7 +635,7 @@ async fn send_huge_data(
     Ok(sdu_autoconfig_search)
 }
 
-async fn read_data(framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>) -> Result<SDU> {
+async fn read_data(framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>) -> anyhow::Result<SDU> {
     println!("Waiting for any data");
 
     let mut assembled_payload = Vec::new();
@@ -717,7 +714,7 @@ async fn read_data(framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCo
 }
 
 // Read complete SDU with CMDU and TLVs and compare CMDU payload
-async fn read_and_compare_data(framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>, data_to_compare: &Vec<u8>) -> Result<()> {
+async fn read_and_compare_data(framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>, data_to_compare: &Vec<u8>) -> anyhow::Result<()> {
     let sdu_wrapped = read_data(framed_data_socket).await;
     match sdu_wrapped {
         Ok(sdu) => {
@@ -953,7 +950,6 @@ async fn test3_breaking_connection(sap_control_path: &str, sap_data_path: &str) 
     Ok(())
 }
 
-
 // Breaking connection case: Connect -> Register -> Break connection -> Re-connect -> Re-register -> Send data -> Receive data -> Compare data
 async fn test4_break_connection_and_receive(sap_control_path: &str, sap_data_path: &str, read_timeout: u8, connect_timeout: u8) -> anyhow::Result<()> {
     let mut framed_control_socket: Option<Framed<UnixStream, LengthDelimitedCodec>> = None;
@@ -972,8 +968,6 @@ async fn test4_break_connection_and_receive(sap_control_path: &str, sap_data_pat
 
     let mut state = State::Connect;
     let mut try_no: u8 = 1;
-    let mut test_finished: bool = false;
-    let mut test_result: bool = false;
 
     println!("Starting test4");
     let mut data_for_verification: Vec<u8> = Vec::new();
@@ -995,9 +989,8 @@ async fn test4_break_connection_and_receive(sap_control_path: &str, sap_data_pat
                         try_no += 1;
                         sleep(Duration::from_millis(100)).await;
                     } else {
-                        println!("Trying to re-connect failed after {} tries", try_no);
-                        test_finished = true;
-                        test_result = false;
+                        println!("Trying to connect failed after {} tries", try_no);
+                        return Err(anyhow::anyhow!("Trying to connect failed after {} tries", try_no));
                     }
                 }
             },
@@ -1019,8 +1012,7 @@ async fn test4_break_connection_and_receive(sap_control_path: &str, sap_data_pat
                                 sleep(Duration::from_millis(100)).await;
                             } else {
                                 println!("Trying to register failed after {} tries", try_no);
-                                test_finished = true;
-                                test_result = false;
+                                return Err(anyhow::anyhow!("Trying to register failed after {} tries", try_no));
                             }
                         }
                     },
@@ -1061,8 +1053,7 @@ async fn test4_break_connection_and_receive(sap_control_path: &str, sap_data_pat
                         sleep(Duration::from_millis(100)).await;
                     } else {
                         println!("Trying to re-connect failed after {} tries", try_no);
-                        test_finished = true;
-                        test_result = false;
+                        return Err(anyhow::anyhow!("Trying to re-connect failed after {} tries", try_no));
                     }
                 }
             },
@@ -1088,8 +1079,7 @@ async fn test4_break_connection_and_receive(sap_control_path: &str, sap_data_pat
                                 sleep(Duration::from_millis(100)).await;
                             } else {
                                 println!("Trying to register failed after {} tries", try_no);
-                                test_finished = true;
-                                test_result = false;
+                                return Err(anyhow::anyhow!("Trying to register failed after {} tries", try_no));
                             }
                         }
                     },
@@ -1103,7 +1093,7 @@ async fn test4_break_connection_and_receive(sap_control_path: &str, sap_data_pat
                     match res {
                         Err(e) => {
                             println!("Sending failed: {e:?}");
-                            return Err(e);
+                            return Err(anyhow::anyhow!("Sending failed: {e:?}"));
                         }
                         Ok(sdu_sent) => {
                             data_for_verification = sdu_sent;
@@ -1115,8 +1105,7 @@ async fn test4_break_connection_and_receive(sap_control_path: &str, sap_data_pat
                 } else if let None = framed_data_socket.take() {
                     println!("Data socket not available");
                     sleep(Duration::from_millis(100)).await;
-                    test_finished = true;
-                    test_result = false;
+                    return Err(anyhow::anyhow!("Data socket not available"));
                 }
             }
 
@@ -1128,20 +1117,19 @@ async fn test4_break_connection_and_receive(sap_control_path: &str, sap_data_pat
                             match rd {
                                 Ok(_) => {
                                     println!("read_and_compare_data: ok");
-                                    return true;
+                                    return Ok(());
                                 }
                                 Err(e) => {
                                     println!("read_and_compare_data: failed: {e:?}");
-                                    return false;
+                                    return Err(anyhow::anyhow!("read_and_compare_data: failed: {e:?}"));
                                 }
                             }
                         } else {
-                            return false;
+                            return Err(anyhow::anyhow!("Data socket not available"));
                         }
                     } => {
                         println!("Test finished with result: {res:?}");
-                        test_finished = true;
-                        test_result = res;
+                        return Ok(());
                     }
 
                     _ = tokio::time::sleep(Duration::from_millis(100)) => {
@@ -1149,20 +1137,13 @@ async fn test4_break_connection_and_receive(sap_control_path: &str, sap_data_pat
                             println!("Trying to read any data (try: {try_no}/{read_timeout})");
                             try_no += 1;
                         } else {
-                            test_finished = true;
-                            test_result = false;
+                            return Err(anyhow::anyhow!("Couldn't read any data during {} tries", read_timeout));
                         }
-
                     }
                 }
             }
         }
-
-        if test_finished { break; };
     }
-    println!("Exit from test4 with result: {test_result:?}\n");
-
-    Ok(())
 }
 
 
@@ -1188,36 +1169,35 @@ struct Args {
     /// Read/Send timeout in 0.1s units (10 = 1 second)
     #[clap(short = 'r', long, default_value_t = 100)]
     read: u8,
-
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let connect = args.connect.clone();
     let test = args.test_num.clone();
     let read = args.read.clone();
     let sap_control_path: &str = &args.control_path.clone()[..];
     let sap_data_path = &args.data_path.clone()[..];
-
+    let mut t: anyhow::Result<()> = Ok(());
 
     // Not modularized test1
     if test == 1 {
-        let _t1 = test1().await;
+        t = test1().await;
     }
 
-    // Run modularized tests
+    // Modularized tests
     if test == 2 {
-        let _t2 = test2_common_without_breaking_connection().await;
+        t = test2_common_without_breaking_connection().await;
     }
 
     if test == 3 {
-        let _t3 = test3_breaking_connection(sap_control_path, sap_data_path).await;
+        t = test3_breaking_connection(sap_control_path, sap_data_path).await;
     }
 
     if test == 4 {
-        let _t4 = test4_break_connection_and_receive(sap_control_path, sap_data_path, read, connect).await;
+        t = test4_break_connection_and_receive(sap_control_path, sap_data_path, read, connect).await;
     }
 
-    return Ok(());
+    return t;
 }

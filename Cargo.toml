@@ -1,62 +1,14 @@
-[package]
-name = "ieee1905"
-version = "0.1.8"
-edition = "2021"
-repository = "git@github.com:rdkcentral/ieee1905-rs.git"
-license = "Apache-2.0"
-license-file = "LICENSE"
-publish = false    # keep this if you don’t want to publish to crates.io
-
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-pnet = {version = "0.35.0"}
-nom = "8.0.0"
-tokio = { version = "1.47.1", features = ["full", "tracing"] }
-console-subscriber = { version = "0.4.1" }
-async-trait = "0.1.89"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
-tui = "0.19"
-crossterm = "0.29.0"
-netdev = "0.37.3"
-anyhow = "1.0.99"
-futures = "0.3"
-eyre = "0.6.12"
-tokio-tasker = "1.2.0"
-tokio-util = "0.7.16"
-clap = { version = "4.5.47", features = ["derive"] }
-bytes = "1.10.1"
-lazy_static = "1.5.0"
-once_cell = "1.21.3"
-hex-literal = "1.0.0"
-cryptoki = "0.10"
-tracing-appender = "0.2.3"
-thiserror = "2.0.16"
-
-
-[[bin]]
-name="functional_tests_transmitter"
-path="examples/functional_tests_transmitter.rs"
-
-[[bin]]
-name="functional_tests_receiver"
-path="examples/functional_tests_receiver.rs"
+[workspace]
+resolver = "2"
+members = [
+  "ieee1905-core",
+  "ieee1905-tests",
+]
 
 [profile.release]
 strip = true
 debug = false
-opt-level = "z"     # Optimize for size
-#opt-level = 3
-lto = true           # Enable Link Time Optimization
-codegen-units = 1    # Use a single codegen unit for better optimization
-panic = "abort"      # Reduce binary size by aborting on panics
-
-[lib]
-name = "ieee1905"    # Name of the library (optional, defaults to package name)
-path = "src/lib.rs"    # Path to the library file (default is `src/lib.rs`)
-
-[features]
-default = []
-enable_tokio_console = []
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
