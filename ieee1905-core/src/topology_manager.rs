@@ -386,6 +386,11 @@ impl TopologyDatabase {
             .clone()
     }
 
+    /// **Returns a globally shared `TopologyDatabase` instance if constructed (sync)**
+    pub fn peek_instance_sync() -> Option<&'static Arc<TopologyDatabase>> {
+        TOPOLOGY_DATABASE.get()
+    }
+
     /// **Retrieves a device node from the database**
     pub async fn get_device(&self, al_mac: MacAddr) -> Option<Ieee1905Node> {
         let nodes = self.nodes.read().await; // Read lock

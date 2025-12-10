@@ -15,6 +15,7 @@ default = []
 enable_tokio_console = []
 
 [dependencies]
+rbus = { path = "../rbus" }
 pnet = "0.35.0"
 nom = "8.0.0"
 tokio = { version = "1.47.1", features = ["full", "tracing"] }
@@ -37,3 +38,4 @@ hex-literal = "1.0.0"
 cryptoki = "0.10"
 tracing-appender = "0.2.3"
 thiserror = "2.0.16"
+sscanf = "0.4.4"
