@@ -2,8 +2,8 @@
 resolver = "2"
 members = [
   "ieee1905-core",
-  "ieee1905-tests",
-  "rbus",
+  "ieee1905-tests", "rbus-provider",
+  "rbus-core",
   "rbus-sys",
 ]
 

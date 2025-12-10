@@ -13,7 +13,7 @@ pub use readable::*;
 pub use writable::*;
 
 ///
-/// A handle to an rbus value.
+/// A handle to an rbus-provider value.
 ///
 #[repr(transparent)]
 pub struct RBusValue(pub(super) rbusValue_t);

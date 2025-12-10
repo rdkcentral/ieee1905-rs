@@ -1,11 +1,12 @@
 use crate::rbus_property::RBusProperty;
 use rbus_sys::*;
 use std::ffi::CStr;
+use crate::RBusValue;
 
 #[repr(transparent)]
-pub struct RBuseObject(pub(super) rbusObject_t);
+pub struct RBusObject(pub(super) rbusObject_t);
 
-impl RBuseObject {
+impl RBusObject {
     ///
     /// Allocate, initialize, and take ownership of an object.
     ///
@@ -18,7 +19,7 @@ impl RBuseObject {
     }
 
     ///
-    /// Get the name of a object.
+    /// Get the name of the object.
     ///
     pub fn get_name(&self) -> &CStr {
         unsafe {
@@ -31,11 +32,20 @@ impl RBuseObject {
     }
 
     ///
-    /// Set the name of a object.
+    /// Set the name of the object.
     ///
     pub fn set_name(&self, name: &CStr) {
         unsafe {
             rbusObject_SetName(self.0, name.as_ptr());
+        }
+    }
+
+    ///
+    /// Set the value of the object.
+    ///
+    pub fn set_value(&self, name: &CStr, value: &RBusValue) {
+        unsafe {
+            rbusObject_SetValue(self.0, name.as_ptr(), value.0);
         }
     }
 
@@ -84,7 +94,7 @@ impl RBuseObject {
     }
 }
 
-impl Drop for RBuseObject {
+impl Drop for RBusObject {
     fn drop(&mut self) {
         unsafe {
             rbusObject_Release(self.0);
@@ -92,7 +102,7 @@ impl Drop for RBuseObject {
     }
 }
 
-impl Clone for RBuseObject {
+impl Clone for RBusObject {
     fn clone(&self) -> Self {
         unsafe {
             rbusObject_Retain(self.0);

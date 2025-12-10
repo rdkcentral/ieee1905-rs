@@ -70,9 +70,9 @@ pub enum RBusError {
 }
 
 impl RBusError {
-    pub(crate) fn map<T>(error: rbusError_t, success: T) -> Result<T, Self> {
+    pub(crate) fn map<T>(error: rbusError_t, success: impl FnOnce() -> T) -> Result<T, Self> {
         Err(match error {
-            rbusError_t::RBUS_ERROR_SUCCESS => return Ok(success),
+            rbusError_t::RBUS_ERROR_SUCCESS => return Ok(success()),
             rbusError_t::RBUS_ERROR_BUS_ERROR => Self::GeneralError,
             rbusError_t::RBUS_ERROR_INVALID_INPUT => Self::InvalidInput,
             rbusError_t::RBUS_ERROR_NOT_INITIALIZED => Self::NotInitialized,

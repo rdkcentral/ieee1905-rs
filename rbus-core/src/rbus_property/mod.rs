@@ -1,5 +1,5 @@
 use crate::rbus_value::RBusValue;
-use crate::{RBusValueGetError, RBusValueReadable, RBusValueWritable};
+use crate::{RBusObject, RBusValueGetError, RBusValueReadable, RBusValueWritable};
 use rbus_sys::*;
 use std::cmp::Ordering;
 use std::ffi::CStr;
@@ -84,6 +84,33 @@ impl RBusProperty {
     pub fn set_value(&self, value: &RBusValue) {
         unsafe {
             rbusProperty_SetValue(self.0, value.0);
+        }
+    }
+
+    ///
+    /// Set the object of a property.
+    ///
+    pub fn set_object(&self, value: &RBusObject) {
+        unsafe {
+            rbusProperty_SetObject(self.0, value.0);
+        }
+    }
+
+    ///
+    /// Set the property of a property.
+    ///
+    pub fn set_property(&self, value: &RBusProperty) {
+        unsafe {
+            rbusProperty_SetProperty(self.0, value.0);
+        }
+    }
+
+    ///
+    /// Append a property to the end of a property list.  
+    ///
+    pub fn append_property(&self, value: &RBusProperty) {
+        unsafe {
+            rbusProperty_Append(self.0, value.0);
         }
     }
 }
