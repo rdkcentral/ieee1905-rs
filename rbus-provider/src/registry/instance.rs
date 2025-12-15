@@ -47,13 +47,15 @@ where
     T: RBusProviderElement,
 {
     fn invoke_get(&mut self, property: &RBusProperty, path: &BStr) -> Result<(), RBusError> {
-        let path = path.split(|e| *e == b'.').filter(|e| !e.is_empty());
-        let path = path.map(BStr::new).collect::<Vec<_>>();
+        let path_chunks = path.split(|e| *e == b'.').filter(|e| !e.is_empty());
+        let path_chunks = path_chunks.map(BStr::new).collect::<Vec<_>>();
 
         let result = self.elements.invoke_get(
-            &path,
+            &path_chunks,
             RBusProviderGetterArgsInner {
                 property,
+                path_full: path,
+                path_chunks: &path_chunks,
                 table_idx: &mut Vec::new(),
                 user_data: &mut self.elements_data,
             },
@@ -73,7 +75,8 @@ where
             &path_chunks,
             RBusProviderTableSyncArgsInner {
                 handle,
-                full_path: path,
+                path_full: path,
+                path_chunks: &path_chunks,
                 table_idx: &mut Vec::new(),
                 user_data: &mut self.elements_data,
             },

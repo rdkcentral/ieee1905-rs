@@ -1,6 +1,6 @@
 use crate::rbus::peek_topology_database;
 use indexmap::IndexMap;
-use rbus_core::{RBusError, RBusProperty};
+use rbus_core::RBusError;
 use rbus_provider::element::property::{RBusProviderGetter, RBusProviderGetterArgs};
 
 ///
@@ -40,11 +40,15 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device_BridgingTuple_In
             return Err(RBusError::ElementDoesNotExists);
         };
 
+        let mut interface_list = String::new();
+        let mut separator = "";
         for if_index in interfaces {
             let value = format!("Device.IEEE1905.AL.NetworkTopology.IEEE1905Device.{device_index}.Interface.{if_index}");
-            let property = RBusProperty::new(c"InterfaceList", &value.as_str().into());
-            args.property.append_property(&property);
+            interface_list.push_str(separator);
+            interface_list.push_str(&value);
+            separator = ",";
         }
+        args.property.set(&interface_list);
         Ok(())
     }
 }

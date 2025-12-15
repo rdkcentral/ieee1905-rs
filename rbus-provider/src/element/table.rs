@@ -13,31 +13,20 @@ use std::ffi::CString;
 ///
 /// Create new table builder instance
 ///
-pub fn rbus_table<N, T>(name: N, handler: T) -> RBusProviderTableBuilder<N, T> {
-    RBusProviderTableBuilder(name, handler)
-}
-
-///
-/// Table builder
-///
-pub struct RBusProviderTableBuilder<N, T>(N, T);
-
-impl<N, T> RBusProviderTableBuilder<N, T> {
-    ///
-    /// Create new table instance
-    ///
-    pub fn content<C>(self, content: C) -> impl RBusProviderElement
-    where
-        N: IntoCowBStr,
-        C: RBusProviderElement,
-        T: RBusProviderTableSync,
-    {
-        RBusProviderTable {
-            path: Default::default(),
-            name: self.0.into_cow_b_str(),
-            sync: self.1,
-            content,
-        }
+pub fn rbus_table<N, T>(
+    name: N,
+    sync: T,
+    content: impl RBusProviderElement,
+) -> impl RBusProviderElement
+where
+    N: IntoCowBStr,
+    T: RBusProviderTableSync,
+{
+    RBusProviderTable {
+        path: Default::default(),
+        name: name.into_cow_b_str(),
+        sync,
+        content,
     }
 }
 
@@ -107,6 +96,8 @@ where
             path,
             RBusProviderGetterArgsInner {
                 property: args.property,
+                path_full: args.path_full,
+                path_chunks: args.path_chunks,
                 table_idx: args.table_idx,
                 user_data,
             },
@@ -123,7 +114,7 @@ where
         }
 
         if path.is_empty() || path == &["{i}"] {
-            let table_path = join_path(&[args.full_path]);
+            let table_path = join_path(&[args.path_full]);
 
             let len_new = self.sync.len(RBusProviderTableSyncArgs {
                 table_idx: args.table_idx,
@@ -174,7 +165,8 @@ where
             path,
             RBusProviderTableSyncArgsInner {
                 handle: args.handle,
-                full_path: args.full_path,
+                path_full: args.path_full,
+                path_chunks: args.path_chunks,
                 table_idx: args.table_idx,
                 user_data,
             },

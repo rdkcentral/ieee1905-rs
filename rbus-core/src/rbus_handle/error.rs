@@ -3,7 +3,7 @@ use rbus_sys::*;
 use std::os::raw::c_uint;
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Copy, Clone, Eq, PartialEq)]
 pub enum RBusError {
     #[error("General Error")]
     GeneralError,
@@ -152,7 +152,7 @@ impl RBusError {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Copy, Clone, Eq, PartialEq)]
 pub enum RBusGetError {
     #[error("{0}")]
     RBus(RBusError),

@@ -53,10 +53,10 @@ impl RBusConnection {
     #[rustfmt::skip]
     fn register(instance: u32) -> Result<RBusProvider, RBusProviderError> {
         RBusProvider::open(c"Device.IEEE1905", || {
-            rbus_object("Device").content((
-                rbus_object("IEEE1905").content((
-                    rbus_object("AL").content((
-                        rbus_object(format!("{instance}")).content(Self::register_nested()),
+            rbus_object("Device", (
+                rbus_object("IEEE1905", (
+                    rbus_object("AL", (
+                        rbus_object(format!("{instance}"), Self::register_nested()),
                     )),
                 )),
             ))
@@ -67,10 +67,10 @@ impl RBusConnection {
     fn register_nested() -> impl RBusProviderElement {
         (
             rbus_property("IEEE1905Id", RBus_Ieee1905Id),
-            rbus_object("NetworkTopology").content((
-                rbus_table("IEEE1905Device", RBus_NetworkTopology_Ieee1905Device).content((
+            rbus_object("NetworkTopology", (
+                rbus_table("IEEE1905Device", RBus_NetworkTopology_Ieee1905Device, (
                     rbus_property("IEEE1905Id", RBus_NetworkTopology_Ieee1905Device_Ieee1905Id),
-                    rbus_table("BridgingTuple", RBus_NetworkTopology_Ieee1905Device_BridgingTuple).content((
+                    rbus_table("BridgingTuple", RBus_NetworkTopology_Ieee1905Device_BridgingTuple, (
                         rbus_property("InterfaceList", RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList),
                     ))
                 )),

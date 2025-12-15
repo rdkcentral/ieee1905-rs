@@ -48,6 +48,8 @@ macro_rules! define {
                 {
                     let result = $arg.invoke_get(path, RBusProviderGetterArgsInner {
                         property: args.property,
+                        path_full: args.path_full,
+                        path_chunks: args.path_chunks,
                         table_idx: args.table_idx,
                         user_data: user_data.$arg,
                     });
@@ -78,7 +80,8 @@ macro_rules! define {
                 {
                     let result = $arg.invoke_table_sync(path, RBusProviderTableSyncArgsInner {
                         handle: args.handle,
-                        full_path: args.full_path,
+                        path_full: args.path_full,
+                        path_chunks: args.path_chunks,
                         table_idx: args.table_idx,
                         user_data: user_data.$arg,
                     });

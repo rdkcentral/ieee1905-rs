@@ -1504,6 +1504,7 @@ dependencies = [
 name = "rbus-provider"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bstr",
  "indexmap 2.12.1",
  "parking_lot",

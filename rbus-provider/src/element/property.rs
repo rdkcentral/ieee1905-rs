@@ -62,6 +62,8 @@ where
         }
         self.getter.get(RBusProviderGetterArgs {
             property: args.property,
+            path_full: args.path_full,
+            path_chunks: args.path_chunks,
             table_idx: args.table_idx,
             user_data: args.user_data,
         })?;
@@ -87,6 +89,8 @@ where
 ///
 pub struct RBusProviderGetterArgs<'a, UserData> {
     pub property: &'a RBusProperty,
+    pub path_full: &'a BStr,
+    pub path_chunks: &'a [&'a BStr],
     pub table_idx: &'a [u32],
     pub user_data: &'a mut UserData,
 }

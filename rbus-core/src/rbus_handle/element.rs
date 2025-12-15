@@ -23,7 +23,7 @@ use std::os::raw::c_char;
 /// If a particular usage is supported, then that callback must be set to a
 /// function pointer for the handler. If a particular usage is not supported by
 /// the component, the callback shall be set "NULL". On call to register the
-/// data element, the rbus-provider library checks for NULL and substitutes a pointer
+/// data element, the rbus library checks for NULL and substitutes a pointer
 /// to an error handler function for all unused features
 ///
 #[repr(transparent)]

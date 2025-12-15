@@ -2,9 +2,10 @@
 resolver = "2"
 members = [
   "ieee1905-core",
-  "ieee1905-tests", "rbus-provider",
-  "rbus-core",
+  "ieee1905-tests",
   "rbus-sys",
+  "rbus-core",
+  "rbus-provider",
 ]
 
 [profile.release]

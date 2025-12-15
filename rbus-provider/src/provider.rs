@@ -20,7 +20,7 @@ pub enum RBusProviderError {
 /// Provider which registers elements via DSL syntax
 ///
 pub struct RBusProvider {
-    _handle: RBusHandle,
+    handle: RBusHandle,
     _instance_handle: RBusRegistryHandle,
 }
 
@@ -52,8 +52,15 @@ impl RBusProvider {
         };
 
         Ok(Self {
-            _handle: handle,
+            handle,
             _instance_handle: instance_handle,
         })
+    }
+
+    ///
+    /// Gets RBus handle used by this provider
+    ///
+    pub fn handle(&self) -> &RBusHandle {
+        &self.handle
     }
 }

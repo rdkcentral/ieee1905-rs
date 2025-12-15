@@ -12,29 +12,14 @@ use std::ffi::CString;
 ///
 /// Create new object builder instance
 ///
-pub fn rbus_object<N>(name: N) -> RBusProviderObjectBuilder<N> {
-    RBusProviderObjectBuilder(name)
-}
-
-///
-/// Object builder
-///
-pub struct RBusProviderObjectBuilder<N>(N);
-
-impl<N> RBusProviderObjectBuilder<N> {
-    ///
-    /// Create new object instance
-    ///
-    pub fn content<C>(self, content: C) -> impl RBusProviderElement
-    where
-        N: IntoCowBStr,
-        C: RBusProviderElement,
-    {
-        RBusProviderObject {
-            path: Default::default(),
-            name: self.0.into_cow_b_str(),
-            content,
-        }
+pub fn rbus_object<N>(name: N, content: impl RBusProviderElement) -> impl RBusProviderElement
+where
+    N: IntoCowBStr,
+{
+    RBusProviderObject {
+        path: Default::default(),
+        name: name.into_cow_b_str(),
+        content,
     }
 }
 
