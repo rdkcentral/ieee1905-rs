@@ -26,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::process::Command;
 use std::str;
-use netdev::interface::InterfaceType;
+use netdev::interface::types::InterfaceType;
 // Internal modules
 use crate::topology_manager::Ieee1905InterfaceData;
 
