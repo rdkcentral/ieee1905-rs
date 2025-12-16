@@ -2,7 +2,7 @@ use rbus_sys::*;
 use std::fmt::Debug;
 use thiserror::Error;
 
-#[derive(Debug, Error, Copy, Clone)]
+#[derive(Debug, Error, Copy, Clone, Eq, PartialEq)]
 pub enum RBusValueGetError {
     #[error("Wrong type of value requested")]
     BadType,

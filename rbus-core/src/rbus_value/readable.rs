@@ -1,7 +1,6 @@
 use crate::RBusValue;
 use rbus_sys::*;
 use std::borrow::Cow;
-use std::ffi::CStr;
 
 pub trait RBusValueReadable: Default {
     fn get(this: &mut Self, value: &RBusValue) -> rbusValueError_t;
@@ -25,8 +24,7 @@ impl RBusValueReadable for String {
             }
 
             let slice = std::slice::from_raw_parts(ptr.cast(), len as usize);
-            let c_str = CStr::from_bytes_with_nul_unchecked(slice);
-            match c_str.to_string_lossy() {
+            match String::from_utf8_lossy(slice) {
                 Cow::Owned(e) => *this = e,
                 Cow::Borrowed(e) => this.push_str(e),
             }

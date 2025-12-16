@@ -40,7 +40,8 @@ use tui::{
     Terminal,
 };
 // Standard library
-use std::{collections::HashMap, io, sync::Arc};
+use std::{io, sync::Arc};
+use indexmap::IndexMap;
 use tokio::task::JoinSet;
 // Internal modules
 use crate::{cmdu::IEEE1905Neighbor, interface_manager::{get_forwarding_interface_mac, get_interfaces}, next_task_id};
@@ -327,7 +328,7 @@ pub struct TopologyDatabase {
     pub al_mac_address: Arc<RwLock<MacAddr>>,
     pub local_mac: Arc<RwLock<MacAddr>>,
     pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905InterfaceData>>>>,
-    pub nodes: Arc<RwLock<HashMap<MacAddr, Ieee1905Node>>>,
+    pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905Node>>>,
     pub interface_name: Arc<RwLock<Option<String>>>,
     pub local_role: Arc<RwLock<Option<Role>>>,
 }
@@ -347,7 +348,7 @@ impl TopologyDatabase {
             al_mac_address: Arc::new(RwLock::new(al_mac_address)), // Wrapped in Arc<RwLock<T>>
             local_mac,
             local_interface_list: Arc::new(RwLock::new(None)),
-            nodes: Arc::new(RwLock::new(HashMap::new())),
+            nodes: Arc::new(RwLock::new(IndexMap::new())),
             interface_name: Arc::new(RwLock::new(Some(interface_name))),
             local_role: Arc::new(RwLock::new(None)),
         })

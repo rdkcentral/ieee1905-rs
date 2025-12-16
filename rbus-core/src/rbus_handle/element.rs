@@ -1,4 +1,5 @@
-use crate::rbus::RBusError;
+use crate::RBusHandle;
+use crate::rbus_handle::RBusError;
 use crate::rbus_property::RBusProperty;
 use rbus_sys::*;
 use std::ffi::CStr;
@@ -43,7 +44,7 @@ pub struct RBusDataElement<'a> {
 /// through this get handler.
 ///
 pub trait RBusDataElementGet {
-    fn get(property: &RBusProperty) -> Result<(), RBusError>;
+    fn get(handle: &RBusHandle, property: &RBusProperty) -> Result<(), RBusError>;
 }
 
 ///
@@ -59,7 +60,21 @@ pub trait RBusDataElementGet {
 /// of that property's value with the value contained within the property parameter.
 ///
 pub trait RBusDataElementSet {
-    fn set(property: &RBusProperty) -> Result<(), RBusError>;
+    fn set(handle: &RBusHandle, property: &RBusProperty) -> Result<(), RBusError>;
+}
+
+///
+/// A table sync callback handler
+///
+/// A provider can implement this handler to allow dynamic tables to synchronize rows.
+/// The tableName parameter will be a fully qualified name, specifying table's name
+/// (e.g. "Device.IP.Interface.").
+///
+/// # Arguments
+/// * `table_name` - The name of a table (e.g. "Device.IP.Interface.")
+///
+pub trait RBusTableSyncHandler {
+    fn sync_rows(handle: &RBusHandle, table_name: &CStr) -> Result<(), RBusError>;
 }
 
 ///
@@ -178,8 +193,9 @@ impl<'a> RBusDataElement<'a> {
                 return rbusError_t::RBUS_ERROR_INVALID_HANDLE;
             }
 
+            let handle = ManuallyDrop::new(RBusHandle(handle));
             let property = ManuallyDrop::new(RBusProperty(property));
-            match T::get(&*property) {
+            match T::get(&handle, &property) {
                 Ok(_) => rbusError_t::RBUS_ERROR_SUCCESS,
                 Err(e) => e.to_raw(),
             }
@@ -204,8 +220,9 @@ impl<'a> RBusDataElement<'a> {
                 return rbusError_t::RBUS_ERROR_INVALID_HANDLE;
             }
 
+            let handle = ManuallyDrop::new(RBusHandle(handle));
             let property = ManuallyDrop::new(RBusProperty(property));
-            match T::set(&*property) {
+            match T::set(&handle, &property) {
                 Ok(_) => rbusError_t::RBUS_ERROR_SUCCESS,
                 Err(e) => e.to_raw(),
             }

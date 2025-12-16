@@ -15,7 +15,8 @@ default = []
 enable_tokio_console = []
 
 [dependencies]
-rbus = { path = "../rbus" }
+rbus-core = { path = "../rbus-core" }
+rbus-provider = { path = "../rbus-provider" }
 pnet = "0.35.0"
 nom = "8.0.0"
 tokio = { version = "1.48.0", features = ["full", "tracing"] }
@@ -33,6 +34,6 @@ clap = { version = "4.5.53", features = ["derive"] }
 lazy_static = "1.5.0"
 once_cell = "1.21.3"
 cryptoki = "0.10"
-tracing-appender = "0.2.4"
-thiserror = "2.0.17"
-sscanf = "0.4.4"
+tracing-appender = "0.2.3"
+thiserror = "2.0.16"
+indexmap = "2.12.1"
