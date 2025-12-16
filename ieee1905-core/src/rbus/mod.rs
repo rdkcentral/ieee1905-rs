@@ -3,6 +3,7 @@
 use crate::rbus::id::RBus_Ieee1905Id;
 use crate::rbus::nt_device::RBus_NetworkTopology_Ieee1905Device;
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
+use crate::rbus::nt_device_bridge_len::RBus_NetworkTopology_Ieee1905Device_BridgingTupleNumberOfEntries;
 use crate::rbus::nt_device_bridge_list::RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList;
 use crate::rbus::nt_device_id::RBus_NetworkTopology_Ieee1905Device_Ieee1905Id;
 use crate::TopologyDatabase;
@@ -19,6 +20,7 @@ use tracing::{debug, info, instrument, warn};
 mod id;
 mod nt_device;
 mod nt_device_bridge;
+mod nt_device_bridge_len;
 mod nt_device_bridge_list;
 mod nt_device_id;
 
@@ -70,6 +72,7 @@ impl RBusConnection {
             rbus_object("NetworkTopology", (
                 rbus_table("IEEE1905Device", RBus_NetworkTopology_Ieee1905Device, (
                     rbus_property("IEEE1905Id", RBus_NetworkTopology_Ieee1905Device_Ieee1905Id),
+                    rbus_property("BridgingTupleNumberOfEntries", RBus_NetworkTopology_Ieee1905Device_BridgingTupleNumberOfEntries),
                     rbus_table("BridgingTuple", RBus_NetworkTopology_Ieee1905Device_BridgingTuple, (
                         rbus_property("InterfaceList", RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList),
                     ))
