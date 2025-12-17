@@ -31,7 +31,7 @@ use tokio::{
     task::{yield_now},
     time::{interval, Duration, Instant},
 };
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 use tui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -44,7 +44,9 @@ use std::{io, sync::Arc};
 use indexmap::IndexMap;
 use tokio::task::JoinSet;
 // Internal modules
-use crate::{cmdu::IEEE1905Neighbor, interface_manager::{get_forwarding_interface_mac, get_interfaces}, next_task_id};
+use crate::{cmdu::IEEE1905Neighbor, interface_manager::get_forwarding_interface_mac, next_task_id};
+use crate::cmdu_codec::MediaType;
+use crate::interface_manager::get_interfaces;
 use crate::lldpdu::PortId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,10 +89,10 @@ pub enum TransmissionEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ieee1905InterfaceData {
     pub mac: MacAddr,
-    pub media_type: u16,
+    pub media_type: MediaType,
     pub bridging_flag: bool,
-    pub bridging_tuple: Option<u8>,
-    pub vlan: Option<u8>,
+    pub bridging_tuple: Option<u32>,
+    pub vlan: Option<u16>,
     pub metric: Option<u16>,
     pub non_ieee1905_neighbors: Option<Vec<MacAddr>>,
     pub ieee1905_neighbors: Option<Vec<IEEE1905Neighbor>>,
@@ -98,10 +100,10 @@ pub struct Ieee1905InterfaceData {
 impl Ieee1905InterfaceData {
     pub fn new(
         mac: MacAddr,
-        media_type: u16,
+        media_type: MediaType,
         bridging_flag: bool,
-        bridging_tuple: Option<u8>,
-        vlan: Option<u8>,
+        bridging_tuple: Option<u32>,
+        vlan: Option<u16>,
         metric: Option<u16>,
         non_ieee1905_neighbors: Option<Vec<MacAddr>>,
         ieee1905_neighbors: Option<Vec<IEEE1905Neighbor>>,
@@ -121,8 +123,8 @@ impl Ieee1905InterfaceData {
     pub fn update(
         &mut self,
         new_bridging_flag: Option<bool>,
-        new_bridging_tuple: Option<u8>,
-        new_vlan: Option<u8>,
+        new_bridging_tuple: Option<u32>,
+        new_vlan: Option<u16>,
         new_metric: Option<u16>,
         new_non_ieee1905_neighbors: Option<Vec<MacAddr>>,
         new_ieee1905_neighbors: Option<Vec<IEEE1905Neighbor>>,
@@ -507,22 +509,23 @@ impl TopologyDatabase {
         loop {
             interval.tick().await;
 
-            match tokio::task::spawn_blocking(get_interfaces).await {
+            match get_interfaces().await {
                 Ok(interfaces) => {
                     let mut list = self.local_interface_list.write().await;
 
                     if interfaces.is_empty() {
                         *list = None;
-                        tracing::debug!("No interfaces found — set to None");
+                        debug!("No interfaces found — set to None");
                     } else {
                         *list = Some(interfaces);
-                        tracing::debug!("Updated local interfaces");
+                        debug!("Updated local interfaces");
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Interface scan task panicked: {:?}", e);
+                    error!("Interface scan task panicked: {:?}", e);
                 }
             }
+
             if let Some(int_name) = self.interface_name.read().await.clone() {
                 match get_forwarding_interface_mac(int_name) {
                     Some(e) => *self.local_mac.write().await = e,
@@ -879,7 +882,7 @@ impl TopologyDatabase {
                         Constraint::Length(20),
                         Constraint::Length(20),
                         Constraint::Length(20),
-                        Constraint::Length(15),
+                        Constraint::Length(25),
                     ])
                     .column_spacing(1);
 
@@ -913,6 +916,7 @@ impl TopologyDatabase {
 #[cfg(test)]
 mod tests {
     use pnet::datalink::MacAddr;
+    use crate::cmdu_codec::MediaType;
     use crate::topology_manager::{Ieee1905DeviceData, Ieee1905InterfaceData, UpdateType};
     use crate::TopologyDatabase;
 
@@ -926,7 +930,7 @@ mod tests {
 
         let interface = Ieee1905InterfaceData {
             mac: device_if_mac,
-            media_type: 0,
+            media_type: MediaType::ETHERNET_802_3ab,
             bridging_flag: false,
             bridging_tuple: None,
             vlan: None,

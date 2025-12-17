@@ -17,6 +17,7 @@ enable_tokio_console = []
 [dependencies]
 rbus-core = { path = "../rbus-core" }
 rbus-provider = { path = "../rbus-provider" }
+
 pnet = "0.35.0"
 nom = "8.0.0"
 tokio = { version = "1.48.0", features = ["full", "tracing"] }
@@ -37,3 +38,4 @@ cryptoki = "0.10"
 tracing-appender = "0.2.3"
 thiserror = "2.0.16"
 indexmap = "2.12.1"
+neli = { version = "0.7.3", features = ["async"] }

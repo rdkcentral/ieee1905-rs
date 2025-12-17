@@ -9,7 +9,7 @@ use rbus_provider::element::table::{RBusProviderTableSync, RBusProviderTableSync
 pub struct RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
 
 impl RBus_NetworkTopology_Ieee1905Device_BridgingTuple {
-    pub fn get_tuples(node_index: usize) -> Result<IndexMap<u8, Vec<usize>>, RBusError> {
+    pub fn get_tuples(node_index: usize) -> Result<IndexMap<u32, Vec<usize>>, RBusError> {
         let lock = peek_topology_database()?.nodes.blocking_read();
 
         let Some(node) = lock.get_index(node_index) else {
@@ -19,7 +19,7 @@ impl RBus_NetworkTopology_Ieee1905Device_BridgingTuple {
             return Ok(IndexMap::new());
         };
 
-        let mut tuples = IndexMap::<u8, Vec<_>>::new();
+        let mut tuples = IndexMap::<u32, Vec<_>>::new();
         for (index, interface) in interfaces.iter().enumerate() {
             if !interface.bridging_flag {
                 continue;

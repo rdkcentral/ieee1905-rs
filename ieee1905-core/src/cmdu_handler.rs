@@ -618,7 +618,7 @@ impl CMDUHandler {
             let mut bridge_index_by_interface = HashMap::new();
             for (index, macs) in device_bridging_capability.bridging_tuples_list.iter().enumerate() {
                 for mac in macs.bridging_mac_list.iter() {
-                    bridge_index_by_interface.insert(mac, index as u8);
+                    bridge_index_by_interface.insert(mac, index as u32);
                 }
             }
             
