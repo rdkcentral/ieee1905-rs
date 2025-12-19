@@ -379,7 +379,7 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
         let Ok(if_name) = handle.get_attr_payload_as_with_len(Nl80211Attribute::IfName) else {
             continue;
         };
-        let Ok(frequency) = handle.get_attr_payload_as(Nl80211Attribute::Wiphy) else {
+        let Ok(frequency) = handle.get_attr_payload_as(Nl80211Attribute::WiphyFreq) else {
             continue;
         };
 
