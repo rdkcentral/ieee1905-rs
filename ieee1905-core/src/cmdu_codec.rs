@@ -1291,6 +1291,8 @@ impl MediaType {
     pub const WIRELESS_802_11ac_5: Self = Self(0x0105);
     pub const WIRELESS_802_11ad_60: Self = Self(0x0106);
     pub const WIRELESS_802_11af: Self = Self(0x0107);
+    pub const WIRELESS_802_11ax: Self = Self(0x0108);
+    pub const WIRELESS_802_11be: Self = Self(0x0109);
 
     pub fn parse(input: [u8; 2]) -> Self {
         Self(u16::from_be_bytes(input))
@@ -1319,6 +1321,8 @@ impl Display for MediaType {
                 5 => write!(f, "IEEE 802.11ac (5 GHz)"),
                 6 => write!(f, "IEEE 802.11ad (60 GHz)"),
                 7 => write!(f, "IEEE 802.11af"),
+                8 => write!(f, "IEEE 802.11ax"),
+                9 => write!(f, "IEEE 802.11be"),
                 _ => write!(f, "IEEE 802.11 Unknown({b})"),
             }
             _ => write!(f, "MediaType({b})"),

@@ -451,12 +451,12 @@ fn get_wireless_media_type(frequency: u32, rate_info: &GenlAttrHandle<Nl80211Rat
 
     if rate_info.get_attribute(Nl80211RateInfo::EhtMcs).is_some() {
         // 802.11be
-        return MediaType::WIRELESS_802_11ac_5;
+        return MediaType::WIRELESS_802_11be;
     }
 
     if rate_info.get_attribute(Nl80211RateInfo::HeMcs).is_some() {
         // 802.11ax
-        return MediaType::WIRELESS_802_11ac_5;
+        return MediaType::WIRELESS_802_11ax;
     }
 
     if rate_info.get_attribute(Nl80211RateInfo::VhtMcs).is_some() {
