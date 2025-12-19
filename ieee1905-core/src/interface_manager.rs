@@ -34,7 +34,7 @@ use neli::consts::socket::NlFamily;
 use neli::genl::{AttrTypeBuilder, GenlAttrHandle, Genlmsghdr, GenlmsghdrBuilder, NlattrBuilder, NoUserHeader};
 use neli::nl::{NlPayload, Nlmsghdr};
 use neli::router::asynchronous::{NlRouter, NlRouterReceiverHandle};
-use neli::rtnl::{Ifinfomsg, IfinfomsgBuilder};
+use neli::rtnl::{Ifinfomsg, IfinfomsgBuilder, RtAttrHandle};
 use neli::types::GenlBuffer;
 use neli::utils::Groups;
 use netdev::interface::types::InterfaceType;
@@ -298,23 +298,19 @@ async fn get_all_interfaces() -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
             let _stats = unsafe { std::ptr::read_unaligned(stats.as_ptr().cast::<RtnlLinkStats64>()) };
         }
 
-        let mut vlan_id = None;
-        if let Ok(attribute) = attr_handle.get_nested_attributes::<IflaInfo>(Ifla::Linkinfo) {
-            let kind = attribute.get_attr_payload_as_with_len_borrowed::<&[u8]>(IflaInfo::Kind)?;
-            match kind {
-                b"vlan\0" => {
-                    let data = attribute.get_nested_attributes::<IflaVlan>(IflaInfo::Data)?;
-                    let id = data.get_attr_payload_as::<u16>(IflaVlan::Id)?;
-                    vlan_id = Some(id);
-                }
-                b"veth\0" => {}
-                b"bridge\0" => {}
-                _ => {}
+        fn get_vlan_id(handle: &RtAttrHandle<Ifla>) -> Option<u16> {
+            let link_info = handle.get_nested_attributes::<IflaInfo>(Ifla::Linkinfo).ok()?;
+            let kind = link_info.get_attr_payload_as_with_len_borrowed::<&[u8]>(IflaInfo::Kind).ok()?;
+            if kind == b"vlan\0" {
+                let data = link_info.get_nested_attributes::<IflaVlan>(IflaInfo::Data).ok()?;
+                return data.get_attr_payload_as(IflaVlan::Id).ok();
             }
+            None
         }
 
         let if_index = i32::from(*payload.ifi_index());
-        let bridge_if_index = attr_handle.get_attr_payload_as::<u32>(Ifla::Master).ok();
+        let vlan_id = get_vlan_id(&attr_handle);
+        let bridge_if_index = attr_handle.get_attr_payload_as(Ifla::Master).ok();
 
         interfaces.push(EthernetInterfaceInfo {
             mac: MacAddr::from(mac),
@@ -430,8 +426,7 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
                 .map(MacAddr::from);
 
             if let Ok(sta_info) = handle.get_nested_attributes::<Nl80211StaInfo>(Nl80211Attribute::StaInfo) {
-                if let Some(rate_info) = sta_info.get_attribute(Nl80211StaInfo::TxBitrate) {
-                    let rate_info = rate_info.get_attr_handle::<Nl80211RateInfo>()?;
+                if let Ok(rate_info) = sta_info.get_nested_attributes::<Nl80211RateInfo>(Nl80211StaInfo::TxBitrate) {
                     interface.media_type = get_wireless_media_type(interface.frequency, &rate_info);
                 }
             }

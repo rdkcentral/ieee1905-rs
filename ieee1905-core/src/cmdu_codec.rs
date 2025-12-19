@@ -1274,7 +1274,7 @@ impl LinkMetricResultCode {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub struct MediaType(pub u16);
 
 #[allow(non_upper_case_globals)]
@@ -1300,6 +1300,12 @@ impl MediaType {
 
     pub fn serialize(&self) -> [u8; 2] {
         self.0.to_be_bytes()
+    }
+}
+
+impl Debug for MediaType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MediaType({:04X?})", self.0)
     }
 }
 
