@@ -290,12 +290,12 @@ async fn get_all_interfaces() -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
 
         if let Ok(stats) = attr_handle.get_attr_payload_as_with_len_borrowed::<&[u8]>(Ifla::Stats) {
             debug_assert_eq!(stats.len(), size_of::<RtnlLinkStats>());
-            let _stats = unsafe { &*stats.as_ptr().cast::<RtnlLinkStats>() };
+            let _stats = unsafe { std::ptr::read_unaligned(stats.as_ptr().cast::<RtnlLinkStats>()) };
         }
 
         if let Ok(stats) = attr_handle.get_attr_payload_as_with_len_borrowed::<&[u8]>(Ifla::Stats64) {
             debug_assert_eq!(stats.len(), size_of::<RtnlLinkStats64>());
-            let _stats = unsafe { &*stats.as_ptr().cast::<RtnlLinkStats64>() };
+            let _stats = unsafe { std::ptr::read_unaligned(stats.as_ptr().cast::<RtnlLinkStats64>()) };
         }
 
         let mut vlan_id = None;
@@ -495,6 +495,7 @@ fn get_wifi_center_frequency_index(center_frequency: u32) -> Option<u8> {
     let starting_frequency = match center_frequency {
         2_400..2_500 => Some(2407),
         5_150..5_900 => Some(5000),
+        5_925..7_125 => Some(5950),
         _ => None,
     };
     starting_frequency.map(|e| center_frequency.saturating_sub(e).div(5) as u8)
