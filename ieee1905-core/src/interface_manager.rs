@@ -250,7 +250,7 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905InterfaceData>> {
 }
 
 #[derive(Debug)]
-struct EthernetInterfaceInfo {
+struct LinkEthernetInfo {
     mac: MacAddr,
     if_index: i32,
     if_name: String,
@@ -258,7 +258,7 @@ struct EthernetInterfaceInfo {
     vlan_id: Option<u16>,
 }
 
-async fn get_all_interfaces() -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
+async fn get_all_interfaces() -> anyhow::Result<Vec<LinkEthernetInfo>> {
     let socket = NlRouter::connect(NlFamily::Route, None, Groups::empty()).await?.0;
     let if_info_msg = IfinfomsgBuilder::default()
         .ifi_family(RtAddrFamily::Unspecified)
@@ -312,7 +312,7 @@ async fn get_all_interfaces() -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
         let vlan_id = get_vlan_id(&attr_handle);
         let bridge_if_index = attr_handle.get_attr_payload_as(Ifla::Master).ok();
 
-        interfaces.push(EthernetInterfaceInfo {
+        interfaces.push(LinkEthernetInfo {
             mac: MacAddr::from(mac),
             if_index,
             if_name,
