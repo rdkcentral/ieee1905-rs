@@ -40,6 +40,7 @@ pub mod tlv_lldpdu_codec;
 pub mod topology_manager;
 pub mod crypto_engine;
 pub mod rbus;
+mod linux;
 
 // ───── Submodules: TLVs grouped under namespaces ─────
 pub mod lldpdu {

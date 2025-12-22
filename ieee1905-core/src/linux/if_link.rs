@@ -1,0 +1,68 @@
+//
+// /usr/include/linux/if_link.h
+//
+
+///
+/// struct rtnl_link_stats - The main device statistics structure.
+///
+#[derive(Debug, Copy, Clone)]
+#[repr(C)]
+pub struct RtnlLinkStats {
+    pub rx_packets: u32,
+    pub tx_packets: u32,
+    pub rx_bytes: u32,
+    pub tx_bytes: u32,
+    pub rx_errors: u32,
+    pub tx_errors: u32,
+    pub rx_dropped: u32,
+    pub tx_dropped: u32,
+    pub multicast: u32,
+    pub collisions: u32,
+    pub rx_length_errors: u32,
+    pub rx_over_errors: u32,
+    pub rx_crc_errors: u32,
+    pub rx_frame_errors: u32,
+    pub rx_fifo_errors: u32,
+    pub rx_missed_errors: u32,
+    pub tx_aborted_errors: u32,
+    pub tx_carrier_errors: u32,
+    pub tx_fifo_errors: u32,
+    pub tx_heartbeat_errors: u32,
+    pub tx_window_errors: u32,
+    pub rx_compressed: u32,
+    pub tx_compressed: u32,
+    pub rx_no_handler: u32,
+}
+
+///
+/// struct rtnl_link_stats64 - The main device statistics structure.
+///
+#[derive(Debug, Copy, Clone)]
+#[repr(C)]
+pub struct RtnlLinkStats64 {
+    pub rx_packets: u64,
+    pub tx_packets: u64,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub rx_errors: u64,
+    pub tx_errors: u64,
+    pub rx_dropped: u64,
+    pub tx_dropped: u64,
+    pub multicast: u64,
+    pub collisions: u64,
+    pub rx_length_errors: u64,
+    pub rx_over_errors: u64,
+    pub rx_crc_errors: u64,
+    pub rx_frame_errors: u64,
+    pub rx_fifo_errors: u64,
+    pub rx_missed_errors: u64,
+    pub tx_aborted_errors: u64,
+    pub tx_carrier_errors: u64,
+    pub tx_fifo_errors: u64,
+    pub tx_heartbeat_errors: u64,
+    pub tx_window_errors: u64,
+    pub rx_compressed: u64,
+    pub tx_compressed: u64,
+    pub rx_no_handler: u64,
+    pub rx_other_host_dropped: u64,
+}

@@ -29,7 +29,7 @@ use nom::{
 };
 
 use pnet::datalink::MacAddr;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display, Formatter};
 use anyhow::bail;
 use nom::combinator::{all_consuming, cond};
 use nom::multi::many0;
@@ -299,7 +299,7 @@ impl MacAddress {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct LocalInterface {
     pub mac_address: MacAddr,
-    pub media_type: u16,
+    pub media_type: MediaType,
     pub special_info: Vec<u8>, // Special info field
 }
 
@@ -307,7 +307,7 @@ impl LocalInterface {
     pub fn new(mac_address: MacAddr, media_type: u16, special_info: Vec<u8>) -> Self {
         Self {
             mac_address,
-            media_type,
+            media_type: MediaType(media_type),
             special_info,
         }
     }
@@ -327,7 +327,7 @@ impl LocalInterface {
         ]);
 
         // Serialize media type (2 bytes)
-        bytes.extend_from_slice(&self.media_type.to_be_bytes());
+        bytes.extend_from_slice(&self.media_type.serialize());
 
         // Serialize special_info: first byte is the length, followed by the content
         bytes.push(self.special_info.len() as u8);
@@ -349,7 +349,7 @@ impl LocalInterface {
         let mac_address = MacAddr::new(input[0], input[1], input[2], input[3], input[4], input[5]);
 
         // Parse media type (2 bytes)
-        let media_type = u16::from_be_bytes([input[6], input[7]]);
+        let media_type = MediaType::parse([input[6], input[7]]);
 
         // Parse special_info
         let (input, special_info_length) = be_u8(&input[8..])?;
@@ -1270,6 +1270,69 @@ impl LinkMetricResultCode {
         let mut vec = Vec::new();
         vec.extend(code.to_be_bytes());
         vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct MediaType(pub u16);
+
+#[allow(non_upper_case_globals)]
+impl MediaType {
+    // ethernet
+    pub const ETHERNET_802_3u: Self = Self(0x0000);
+    pub const ETHERNET_802_3ab: Self = Self(0x0001);
+    // wireless
+    pub const WIRELESS_802_11b_2_4: Self = Self(0x0100);
+    pub const WIRELESS_802_11g_2_4: Self = Self(0x0101);
+    pub const WIRELESS_802_11a_5: Self = Self(0x0102);
+    pub const WIRELESS_802_11n_2_4: Self = Self(0x0103);
+    pub const WIRELESS_802_11n_5: Self = Self(0x0104);
+    pub const WIRELESS_802_11ac_5: Self = Self(0x0105);
+    pub const WIRELESS_802_11ad_60: Self = Self(0x0106);
+    pub const WIRELESS_802_11af: Self = Self(0x0107);
+    pub const WIRELESS_802_11ax: Self = Self(0x0108);
+    pub const WIRELESS_802_11be: Self = Self(0x0109);
+
+    pub fn parse(input: [u8; 2]) -> Self {
+        Self(u16::from_be_bytes(input))
+    }
+
+    pub fn serialize(&self) -> [u8; 2] {
+        self.0.to_be_bytes()
+    }
+}
+
+impl Debug for MediaType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MediaType({:04X?})", self.0)
+    }
+}
+
+impl Display for MediaType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let [a, b] = self.0.to_be_bytes();
+        match a {
+            0 => match b {
+                0 => write!(f, "IEEE 802.3u fast Ethernet"),
+                1 => write!(f, "IEEE 802.3ab gigabit Ethernet"),
+                _ => write!(f, "IEEE 802.3 Unknown({b})"),
+            }
+            1 => match b {
+                0 => write!(f, "IEEE 802.11b (2.4 GHz)"),
+                1 => write!(f, "IEEE 802.11g (2.4 GHz)"),
+                2 => write!(f, "IEEE 802.11a (5 GHz)"),
+                3 => write!(f, "IEEE 802.11n (2.4 GHz)"),
+                4 => write!(f, "IEEE 802.11n (5 GHz)"),
+                5 => write!(f, "IEEE 802.11ac (5 GHz)"),
+                6 => write!(f, "IEEE 802.11ad (60 GHz)"),
+                7 => write!(f, "IEEE 802.11af"),
+                8 => write!(f, "IEEE 802.11ax"),
+                9 => write!(f, "IEEE 802.11be"),
+                _ => write!(f, "IEEE 802.11 Unknown({b})"),
+            }
+            _ => write!(f, "MediaType({b})"),
+        }
     }
 }
 
