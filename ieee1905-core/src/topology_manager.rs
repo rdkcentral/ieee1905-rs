@@ -26,12 +26,6 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use pnet::datalink::MacAddr;
-use tokio::{
-    sync::{OnceCell, RwLock},
-    task::{yield_now},
-    time::{interval, Duration, Instant},
-};
-use tracing::{debug, info, instrument, warn};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -39,13 +33,23 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Row, Table, Wrap},
     Terminal,
 };
+use tokio::{
+    sync::{OnceCell, RwLock},
+    task::yield_now,
+    time::{interval, Duration, Instant},
+};
+use tracing::{debug, info, instrument, warn};
 // Standard library
-use std::{io, sync::Arc};
 use indexmap::IndexMap;
+use std::{io, sync::Arc};
 use tokio::task::JoinSet;
 // Internal modules
-use crate::{cmdu::IEEE1905Neighbor, interface_manager::{get_forwarding_interface_mac, get_interfaces}, next_task_id};
 use crate::lldpdu::PortId;
+use crate::{
+    cmdu::IEEE1905Neighbor,
+    interface_manager::{get_forwarding_interface_mac, get_interfaces},
+    next_task_id,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateLocal {
@@ -219,14 +223,20 @@ impl Ieee1905NodeInfo {
 
         if let Some(local) = new_node_state_local {
             if self.node_state_local != local {
-                info!("{} local state changed: {:?} -> {local:?}", self.al_mac, self.node_state_local);
+                info!(
+                    "{} local state changed: {:?} -> {local:?}",
+                    self.al_mac, self.node_state_local
+                );
                 self.node_state_local = local;
             }
         }
 
         if let Some(remote) = new_node_state_remote {
             if self.node_state_remote != remote {
-                info!("{} remote state changed: {:?} -> {remote:?}", self.al_mac, self.node_state_remote);
+                info!(
+                    "{} remote state changed: {:?} -> {remote:?}",
+                    self.al_mac, self.node_state_remote
+                );
                 self.node_state_remote = remote;
             }
         }
@@ -342,7 +352,9 @@ impl TopologyDatabase {
         //  initialized eagerly from main, and propagated as a dependency
 
         // Get local MAC address from forwarding interface
-        let local_mac = Arc::new(RwLock::new(get_forwarding_interface_mac(interface_name.clone()).unwrap()));
+        let local_mac = Arc::new(RwLock::new(
+            get_forwarding_interface_mac(interface_name.clone()).unwrap(),
+        ));
 
         Arc::new(TopologyDatabase {
             al_mac_address: Arc::new(RwLock::new(al_mac_address)), // Wrapped in Arc<RwLock<T>>
@@ -401,20 +413,24 @@ impl TopologyDatabase {
     /// **Retrieves a device node from the database**
     pub async fn find_device_by_port(&self, mac: MacAddr) -> Option<Ieee1905Node> {
         let nodes = self.nodes.read().await;
-        nodes.values().find(|node| {
-            if node.device_data.al_mac == mac {
-                return true;
-            }
-            if node.device_data.destination_frame_mac == mac {
-                return true;
-            }
-            if node.device_data.destination_mac == Some(mac) {
-                return true;
-            }
-            node.device_data.local_interface_list.as_ref().is_some_and(|interfaces| {
-                interfaces.iter().any(|e| e.mac == mac)
+        nodes
+            .values()
+            .find(|node| {
+                if node.device_data.al_mac == mac {
+                    return true;
+                }
+                if node.device_data.destination_frame_mac == mac {
+                    return true;
+                }
+                if node.device_data.destination_mac == Some(mac) {
+                    return true;
+                }
+                node.device_data
+                    .local_interface_list
+                    .as_ref()
+                    .is_some_and(|interfaces| interfaces.iter().any(|e| e.mac == mac))
             })
-        }).cloned()
+            .cloned()
     }
 
     /// **Getter for `local_interface_list`**
@@ -433,10 +449,7 @@ impl TopologyDatabase {
         nodes.get(&al_mac).map(|node| node.metadata.last_seen)
     }
 
-    pub async fn get_node_states(
-        &self,
-        al_mac: MacAddr,
-    ) -> Option<(StateLocal, StateRemote)> {
+    pub async fn get_node_states(&self, al_mac: MacAddr) -> Option<(StateLocal, StateRemote)> {
         let nodes = self.nodes.read().await;
         let node = nodes.get(&al_mac)?;
         Some((
@@ -573,7 +586,14 @@ impl TopologyDatabase {
                             let local_state = node.metadata.node_state_local;
 
                             node.device_data.update(device_data.destination_mac, None);
-                            node.metadata.update(Some(operation), local_msg_id, remote_msg_id, None, None, None);
+                            node.metadata.update(
+                                Some(operation),
+                                local_msg_id,
+                                remote_msg_id,
+                                None,
+                                None,
+                                None,
+                            );
 
                             if local_state == StateLocal::Idle {
                                 TransmissionEvent::SendTopologyQuery(al_mac)
@@ -644,7 +664,8 @@ impl TopologyDatabase {
                                         device_data.local_interface_list,
                                     );
 
-                                    let multicast_mac = MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13);
+                                    let multicast_mac =
+                                        MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13);
                                     debug!("Event: Send Topology Notification");
                                     TransmissionEvent::SendTopologyNotification(multicast_mac)
                                 } else {
@@ -673,7 +694,9 @@ impl TopologyDatabase {
                             TransmissionEvent::None
                         }
                         UpdateType::ResponseSent => {
-                            if let StateRemote::ConvergingRemote(_) = node.metadata.node_state_remote {
+                            if let StateRemote::ConvergingRemote(_) =
+                                node.metadata.node_state_remote
+                            {
                                 node.metadata.update(
                                     Some(operation),
                                     local_msg_id,
@@ -729,7 +752,8 @@ impl TopologyDatabase {
                             TransmissionEvent::SendTopologyQuery(al_mac)
                         }
                         UpdateType::QueryReceived => {
-                            new_node.metadata.node_state_remote = StateRemote::ConvergingRemote(Instant::now());
+                            new_node.metadata.node_state_remote =
+                                StateRemote::ConvergingRemote(Instant::now());
                             nodes.insert(al_mac, new_node);
                             tracing::debug!(al_mac = ?al_mac, "Inserted node from query");
                             TransmissionEvent::SendTopologyResponse(al_mac)
@@ -754,7 +778,8 @@ impl TopologyDatabase {
         let mut nodes = self.nodes.write().await;
         for node in nodes.values_mut() {
             if let StateRemote::ConvergedRemote = node.metadata.node_state_remote {
-                node.metadata.update(None, None, None, None, None, Some(StateRemote::Idle));
+                node.metadata
+                    .update(None, None, None, None, None, Some(StateRemote::Idle));
             }
         }
     }
@@ -872,27 +897,26 @@ impl TopologyDatabase {
                         Constraint::Length(15),
                     ],
                 )
-                    .header(Row::new(vec![
-                        "AL MAC",
-                        "StateLocal",
-                        "StateRemote",
-                        "Last Seen",
-                        "DestinationMac",
-                        "LLDP",
-                        "Interface",
-                        "Media Type",
-                    ]))
-                    .block(block2)
-                    .column_spacing(1);
+                .header(Row::new(vec![
+                    "AL MAC",
+                    "StateLocal",
+                    "StateRemote",
+                    "Last Seen",
+                    "DestinationMac",
+                    "LLDP",
+                    "Interface",
+                    "Media Type",
+                ]))
+                .block(block2)
+                .column_spacing(1);
 
                 f.render_widget(table, chunks[1]);
 
                 //Footer
                 let block3 = Block::default().borders(Borders::ALL);
-                let paragraph3 =
-                    Paragraph::new(vec![Line::from(Span::raw("Press 'q' to quit."))])
-                        .block(block3)
-                        .wrap(Wrap { trim: true });
+                let paragraph3 = Paragraph::new(vec![Line::from(Span::raw("Press 'q' to quit."))])
+                    .block(block3)
+                    .wrap(Wrap { trim: true });
 
                 f.render_widget(paragraph3, chunks[2]);
             })?;
@@ -914,9 +938,9 @@ impl TopologyDatabase {
 
 #[cfg(test)]
 mod tests {
-    use pnet::datalink::MacAddr;
     use crate::topology_manager::{Ieee1905DeviceData, Ieee1905InterfaceData, UpdateType};
     use crate::TopologyDatabase;
+    use pnet::datalink::MacAddr;
 
     #[tokio::test]
     async fn test_remote_controller_won() {
@@ -936,12 +960,29 @@ mod tests {
             non_ieee1905_neighbors: None,
             ieee1905_neighbors: None,
         };
-        let device = Ieee1905DeviceData::new(device_al_mac, device_al_mac, Some(device_mac), Some(vec!(interface)), None);
-        db.update_ieee1905_topology(device.clone(), UpdateType::DiscoveryReceived, None,  None, None, None).await;
+        let device = Ieee1905DeviceData::new(
+            device_al_mac,
+            device_al_mac,
+            Some(device_mac),
+            Some(vec![interface]),
+            None,
+        );
+        db.update_ieee1905_topology(
+            device.clone(),
+            UpdateType::DiscoveryReceived,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
 
         assert!(db.find_device_by_port(device_mac).await.is_some());
         assert!(db.find_device_by_port(device_al_mac).await.is_some());
         assert!(db.find_device_by_port(device_if_mac).await.is_some());
-        assert!(db.find_device_by_port(MacAddr::new(0, 0, 0, 0, 0, 4)).await.is_none());
+        assert!(db
+            .find_device_by_port(MacAddr::new(0, 0, 0, 0, 0, 4))
+            .await
+            .is_none());
     }
 }

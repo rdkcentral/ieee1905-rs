@@ -22,11 +22,11 @@
 use pnet::datalink::{self, MacAddr};
 
 // Standard library
+use netdev::interface::types::InterfaceType;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::process::Command;
 use std::str;
-use netdev::interface::types::InterfaceType;
 // Internal modules
 use crate::topology_manager::Ieee1905InterfaceData;
 
@@ -46,7 +46,10 @@ pub fn get_local_al_mac(interface_name: String) -> Option<MacAddr> {
     let interfaces = datalink::interfaces();
 
     // Find the first Ethernet interface (`ethX`)
-    if let Some(iface) = interfaces.iter().find(|iface| iface.name.starts_with(&interface_name)) {
+    if let Some(iface) = interfaces
+        .iter()
+        .find(|iface| iface.name.starts_with(&interface_name))
+    {
         return iface.mac;
     }
     tracing::debug!("No Al Mac found, using default.");
@@ -61,15 +64,15 @@ pub fn get_forwarding_interface_mac(interface_name: String) -> Option<MacAddr> {
     if let Some(mac_addr) = interfaces
         .iter()
         .find(|iface| iface.name.starts_with(&interface_name))
-        .and_then(|iface| iface.mac) // Extract and return MAC address if found
-        {
-            tracing::debug!("Ethernet interface found for forwarding {mac_addr}");
-            Some(mac_addr)
-        }
-        else{
-            tracing::debug!("No Ethernet interface found for forwarding, using default.");
-            Some(MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
-        }
+        .and_then(|iface| iface.mac)
+    // Extract and return MAC address if found
+    {
+        tracing::debug!("Ethernet interface found for forwarding {mac_addr}");
+        Some(mac_addr)
+    } else {
+        tracing::debug!("No Ethernet interface found for forwarding, using default.");
+        Some(MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
+    }
 }
 
 /// **Returns `Some(String)` if found, otherwise `None`.**
@@ -87,7 +90,8 @@ pub fn get_forwarding_interface_name(interface_name: String) -> Option<String> {
 /// Retrieves a list of all physical ethernet interfaces.
 pub fn get_physical_ethernet_interfaces() -> Vec<InterfaceInfo> {
     let interfaces = netdev::get_interfaces();
-    interfaces.into_iter()
+    interfaces
+        .into_iter()
         .filter_map(|interface| {
             if interface.if_type != InterfaceType::Ethernet || !interface.is_physical() {
                 return None;
@@ -123,15 +127,24 @@ pub fn get_bridge_of(interface_name: &str) -> Option<BridgeInfo> {
 
     Some(BridgeInfo {
         name: link.file_name()?.to_string_lossy().into_owned(),
-        index: fs::read_to_string(format!("{path}/ifindex")).ok()?.trim().parse().ok()?,
-        address: fs::read_to_string(format!("{path}/address")).ok()?.trim().parse().ok()?,
+        index: fs::read_to_string(format!("{path}/ifindex"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?,
+        address: fs::read_to_string(format!("{path}/address"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?,
     })
 }
 
 /// Retrieves VLAN ID from `/proc/net/vlan/config`
 pub fn get_vlan_id(interface_name: &str) -> Option<u8> {
     let contents = fs::read_to_string("/proc/net/vlan/config").ok()?;
-    for line in contents.lines().skip(2) { // Skip headers
+    for line in contents.lines().skip(2) {
+        // Skip headers
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 2 && parts[0] == interface_name {
             return parts[1].parse().ok();
@@ -150,11 +163,12 @@ pub fn get_neighbor_macs(interface_name: &str) -> Vec<MacAddr> {
         .arg("neigh")
         .arg("show")
         .arg("dev")
-        .arg(interface_name)  // Now filters by specific interface
+        .arg(interface_name) // Now filters by specific interface
         .output();
 
     if let Ok(output) = output {
-        if let Ok(stdout) = str::from_utf8(&output.stdout) { // Convert raw output to string
+        if let Ok(stdout) = str::from_utf8(&output.stdout) {
+            // Convert raw output to string
             for line in stdout.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 5 && parts.contains(&"lladdr") {
@@ -175,8 +189,6 @@ pub fn get_neighbor_macs(interface_name: &str) -> Vec<MacAddr> {
     mac_addresses.into_iter().collect() // Convert HashSet to Vec
 }
 
-
-
 /// Helper function to parse a MAC address from a string
 fn parse_mac(mac_str: &str) -> Result<MacAddr, ()> {
     let bytes: Vec<u8> = mac_str
@@ -185,12 +197,13 @@ fn parse_mac(mac_str: &str) -> Result<MacAddr, ()> {
         .collect();
 
     if bytes.len() == 6 {
-        Ok(MacAddr::new(bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]))
+        Ok(MacAddr::new(
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+        ))
     } else {
         Err(())
     }
 }
-
 
 /// Retrieves a list of interfaces with additional metadata.
 pub fn get_interfaces() -> Vec<Ieee1905InterfaceData> {
@@ -206,7 +219,6 @@ pub fn get_interfaces() -> Vec<Ieee1905InterfaceData> {
 
             // Find corresponding netdev interface
             if let Some(net_iface) = netdev_interfaces.iter().find(|n| n.name == interface_name) {
-
                 // Determine media type
                 let media_type = match net_iface.if_type {
                     InterfaceType::Ethernet => 0x01,        // Ethernet
@@ -214,7 +226,11 @@ pub fn get_interfaces() -> Vec<Ieee1905InterfaceData> {
                     _ => continue,                          // Skip non-Ethernet/Wi-Fi interfaces
                 };
 
-                let metric = if media_type == 0x01 { Some(10) } else { Some(100) };
+                let metric = if media_type == 0x01 {
+                    Some(10)
+                } else {
+                    Some(100)
+                };
 
                 let vlan = get_vlan_id(&net_iface.name);
                 //let non_ieee1905_neighbors = Some(get_neighbor_macs(&interface_name));
@@ -222,7 +238,10 @@ pub fn get_interfaces() -> Vec<Ieee1905InterfaceData> {
                 let ieee1905_neighbors = None;
 
                 if let Some(bridging_info) = get_bridge_of(&interface_name) {
-                    interfaces_by_bridge.entry(bridging_info.index).or_default().push(mac);
+                    interfaces_by_bridge
+                        .entry(bridging_info.index)
+                        .or_default()
+                        .push(mac);
                 }
 
                 interfaces.push(Ieee1905InterfaceData {

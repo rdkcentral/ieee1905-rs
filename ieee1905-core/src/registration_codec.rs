@@ -21,10 +21,9 @@
 // External crates
 use nom::{
     bytes::complete::take,
-    number::complete::{be_u8, be_u16},
     error::ErrorKind,
-    Err as NomErr,
-    IResult,
+    number::complete::{be_u16, be_u8},
+    Err as NomErr, IResult,
 };
 use pnet::datalink::MacAddr;
 
@@ -40,7 +39,12 @@ impl ServiceOperation {
         let op = match val {
             0x01 => ServiceOperation::Enable,
             0x02 => ServiceOperation::Disable,
-            _ => return Err(nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Tag))),
+            _ => {
+                return Err(nom::Err::Failure(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Tag,
+                )))
+            }
         };
         Ok((input, op))
     }
@@ -53,7 +57,7 @@ impl ServiceOperation {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ServiceType {
     EasyMeshAgent = 0x01,
-    EasyMeshController = 0x02
+    EasyMeshController = 0x02,
 }
 
 impl ServiceType {
@@ -62,7 +66,12 @@ impl ServiceType {
         let st = match val {
             0x01 => ServiceType::EasyMeshAgent,
             0x02 => ServiceType::EasyMeshController,
-             _ => return Err(nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Tag))),
+            _ => {
+                return Err(nom::Err::Failure(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Tag,
+                )))
+            }
         };
         Ok((input, st))
     }
@@ -90,7 +99,12 @@ impl RegistrationResult {
             0x02 => RegistrationResult::NoRangesAvailable,
             0x03 => RegistrationResult::ServiceNotSupported,
             0x04 => RegistrationResult::OperationNotSupported,
-            _ => return Err(nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Tag))),
+            _ => {
+                return Err(nom::Err::Failure(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Tag,
+                )))
+            }
         };
         Ok((input, result))
     }
@@ -109,12 +123,21 @@ pub struct AlServiceRegistrationRequest {
 impl AlServiceRegistrationRequest {
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         if input.len() < 2 {
-            return Err(NomErr::Failure(nom::error::Error::new(input, ErrorKind::LengthValue)));
+            return Err(NomErr::Failure(nom::error::Error::new(
+                input,
+                ErrorKind::LengthValue,
+            )));
         }
 
         let (input, service_operation) = ServiceOperation::parse(input)?;
         let (input, service_type) = ServiceType::parse(input)?;
-        Ok((input, Self { service_operation, service_type }))
+        Ok((
+            input,
+            Self {
+                service_operation,
+                service_type,
+            },
+        ))
     }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -135,15 +158,25 @@ pub struct AlServiceRegistrationResponse {
 impl AlServiceRegistrationResponse {
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, mac_bytes) = take(6usize)(input)?;
-        let mac = MacAddr::new(mac_bytes[0], mac_bytes[1], mac_bytes[2], mac_bytes[3], mac_bytes[4], mac_bytes[5]);
+        let mac = MacAddr::new(
+            mac_bytes[0],
+            mac_bytes[1],
+            mac_bytes[2],
+            mac_bytes[3],
+            mac_bytes[4],
+            mac_bytes[5],
+        );
         let (input, start_id) = be_u16(input)?;
         let (input, end_id) = be_u16(input)?;
         let (input, result) = RegistrationResult::parse(input)?;
-        Ok((input, Self {
-            al_mac_address_local: mac,
-            message_id_range: (start_id, end_id),
-            result,
-        }))
+        Ok((
+            input,
+            Self {
+                al_mac_address_local: mac,
+                message_id_range: (start_id, end_id),
+                result,
+            },
+        ))
     }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -174,7 +207,12 @@ impl TopologyChangeType {
         let change_type = match value {
             0x01 => TopologyChangeType::Add,
             0x02 => TopologyChangeType::Delete,
-            _ => return Err(nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Tag))),
+            _ => {
+                return Err(nom::Err::Failure(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Tag,
+                )))
+            }
         };
         Ok((input, change_type))
     }
@@ -195,15 +233,24 @@ impl AlTopologyChange {
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, mac_bytes) = take(6usize)(input)?;
-        let mac = MacAddr::new(mac_bytes[0], mac_bytes[1], mac_bytes[2], mac_bytes[3], mac_bytes[4], mac_bytes[5]);
+        let mac = MacAddr::new(
+            mac_bytes[0],
+            mac_bytes[1],
+            mac_bytes[2],
+            mac_bytes[3],
+            mac_bytes[4],
+            mac_bytes[5],
+        );
         let (input, change_type) = TopologyChangeType::parse(input)?;
-        Ok((input, Self {
-            al_mac_address_remote: mac,
-            change_type,
-        }))
+        Ok((
+            input,
+            Self {
+                al_mac_address_remote: mac,
+                change_type,
+            },
+        ))
     }
 }
-
 
 #[cfg(test)]
 pub mod tests {
@@ -214,8 +261,20 @@ pub mod tests {
     fn test_parse_proper_registration_request() {
         // Expect successes parsing valid registration request
         assert!(AlServiceRegistrationRequest::parse(&[1, 1]).is_ok());
-        assert_eq!(AlServiceRegistrationRequest::parse(&[1, 1]).unwrap().1.service_operation, ServiceOperation::Enable);
-        assert_eq!(AlServiceRegistrationRequest::parse(&[1, 1]).unwrap().1.service_type, ServiceType::EasyMeshAgent);
+        assert_eq!(
+            AlServiceRegistrationRequest::parse(&[1, 1])
+                .unwrap()
+                .1
+                .service_operation,
+            ServiceOperation::Enable
+        );
+        assert_eq!(
+            AlServiceRegistrationRequest::parse(&[1, 1])
+                .unwrap()
+                .1
+                .service_type,
+            ServiceType::EasyMeshAgent
+        );
     }
 
     // Verify the correctness of parsing valid ServiceOperation codes
@@ -243,11 +302,26 @@ pub mod tests {
         assert!(RegistrationResult::parse(&[2]).is_ok());
         assert!(RegistrationResult::parse(&[3]).is_ok());
         assert!(RegistrationResult::parse(&[4]).is_ok());
-        assert_eq!(RegistrationResult::parse(&[0]).unwrap().1, RegistrationResult::Unknown);
-        assert_eq!(RegistrationResult::parse(&[1]).unwrap().1, RegistrationResult::Success);
-        assert_eq!(RegistrationResult::parse(&[2]).unwrap().1, RegistrationResult::NoRangesAvailable);
-        assert_eq!(RegistrationResult::parse(&[3]).unwrap().1, RegistrationResult::ServiceNotSupported);
-        assert_eq!(RegistrationResult::parse(&[4]).unwrap().1, RegistrationResult::OperationNotSupported);
+        assert_eq!(
+            RegistrationResult::parse(&[0]).unwrap().1,
+            RegistrationResult::Unknown
+        );
+        assert_eq!(
+            RegistrationResult::parse(&[1]).unwrap().1,
+            RegistrationResult::Success
+        );
+        assert_eq!(
+            RegistrationResult::parse(&[2]).unwrap().1,
+            RegistrationResult::NoRangesAvailable
+        );
+        assert_eq!(
+            RegistrationResult::parse(&[3]).unwrap().1,
+            RegistrationResult::ServiceNotSupported
+        );
+        assert_eq!(
+            RegistrationResult::parse(&[4]).unwrap().1,
+            RegistrationResult::OperationNotSupported
+        );
     }
 
     // Verify serializing and parsing of AlServiceRegistrationResponse
@@ -274,7 +348,9 @@ pub mod tests {
         registration_response_data.push(result);
 
         // Do the parsing of AlServiceRegistrationResponse
-        let parsed = AlServiceRegistrationResponse::parse(&registration_response_data[..]).unwrap().1;
+        let parsed = AlServiceRegistrationResponse::parse(&registration_response_data[..])
+            .unwrap()
+            .1;
 
         // Expect success comparing serialized and then parsed data with original ones
         assert_eq!(parsed.serialize(), registration_response_data);
@@ -293,7 +369,9 @@ pub mod tests {
         let registration_request: Vec<u8> = vec![service_operation, service_type];
 
         // Do the parsing of AlServiceRegistrationRequest
-        let parsed = AlServiceRegistrationRequest::parse(&registration_request[..]).unwrap().1;
+        let parsed = AlServiceRegistrationRequest::parse(&registration_request[..])
+            .unwrap()
+            .1;
 
         // Expect success comparing serialized and then parsed data with original ones
         assert_eq!(parsed.serialize(), registration_request);
@@ -374,7 +452,9 @@ pub mod tests {
     #[test]
     fn test_try_to_parse_inappropriate_registration_result() {
         // The value of 5 is not allowed (not covered in RegistrationResult enum) so expect ErrorKind::Tag error
-        if let Err(NomErr::Failure(nom::error::Error { code, .. })) = RegistrationResult::parse(&[5]) {
+        if let Err(NomErr::Failure(nom::error::Error { code, .. })) =
+            RegistrationResult::parse(&[5])
+        {
             assert_eq!(code, ErrorKind::Tag);
         }
     }
@@ -391,21 +471,44 @@ pub mod tests {
 
         // Check if not consumed part is properly returned, untouched and unparsed by parser at all
         // Expect returning slice of &[5, 6, 7] values because of parsing: &[4, 5, 6, 7]
-        assert_eq!(RegistrationResult::parse(&[4, 5, 6, 7]).unwrap().0, &[5, 6, 7]);
+        assert_eq!(
+            RegistrationResult::parse(&[4, 5, 6, 7]).unwrap().0,
+            &[5, 6, 7]
+        );
     }
 
     // Verify the correctness of parsing and returning not parsed data of AlServiceRegistrationRequest
     #[test]
     fn test_check_consumption_of_registration_request_parser() {
         // Expect none of returned data because of parsing valid values: &[1, 2]
-        assert_eq!(AlServiceRegistrationRequest::parse(&[1, 2]).unwrap().0.len(), 0);
+        assert_eq!(
+            AlServiceRegistrationRequest::parse(&[1, 2])
+                .unwrap()
+                .0
+                .len(),
+            0
+        );
 
         // Expect '3' of returned data because of parsing valid: &[1, 2] and ignored value of 3
-        assert_eq!(AlServiceRegistrationRequest::parse(&[1, 2, 3]).unwrap().0.len(), 1);
-        assert_eq!(AlServiceRegistrationRequest::parse(&[1, 2, 3]).unwrap().0, &[3]);
+        assert_eq!(
+            AlServiceRegistrationRequest::parse(&[1, 2, 3])
+                .unwrap()
+                .0
+                .len(),
+            1
+        );
+        assert_eq!(
+            AlServiceRegistrationRequest::parse(&[1, 2, 3]).unwrap().0,
+            &[3]
+        );
 
         // Check if not consumed part is properly returned, untouched and unparsed by parser at all
         // Expect success returning slice of &[3, 4, 5] values because of parsing: &[1, 2, 3, 4, 5]
-        assert_eq!(AlServiceRegistrationRequest::parse(&[1, 2, 3, 4, 5]).unwrap().0, &[3, 4, 5]);
+        assert_eq!(
+            AlServiceRegistrationRequest::parse(&[1, 2, 3, 4, 5])
+                .unwrap()
+                .0,
+            &[3, 4, 5]
+        );
     }
 }

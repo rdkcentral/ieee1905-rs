@@ -19,21 +19,20 @@
 
 #![deny(warnings)]
 // External crates
-use nom::{Err as NomErr, Needed};
 use nom::{
     bytes::complete::take,
     error::{Error, ErrorKind},
     number::complete::{be_u16, be_u8},
-    Parser,
-    IResult,
+    IResult, Parser,
 };
+use nom::{Err as NomErr, Needed};
 
-use pnet::datalink::MacAddr;
-use std::fmt::Debug;
 use anyhow::bail;
 use nom::combinator::{all_consuming, cond};
 use nom::multi::many0;
 use nom::number::complete::be_u32;
+use pnet::datalink::MacAddr;
+use std::fmt::Debug;
 // Internal modules
 use crate::cmdu_reassembler::CmduReassemblyError;
 use crate::tlv_cmdu_codec::TLV;
@@ -122,18 +121,18 @@ impl MessageVersion {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MultiApProfile {
-    Profile1,        // 0x01
-    Profile2,        // 0x02
-    Profile3,        // 0x03
-    Reserved(u8),    // 0x04..=0xFF
+    Profile1,     // 0x01
+    Profile2,     // 0x02
+    Profile3,     // 0x03
+    Reserved(u8), // 0x04..=0xFF
 }
 impl MultiApProfile {
     pub fn to_u8(self) -> u8 {
         match self {
-            MultiApProfile::Profile1   => 0x01,
-            MultiApProfile::Profile2   => 0x02,
-            MultiApProfile::Profile3   => 0x03,
-            MultiApProfile::Reserved(v)=> v,
+            MultiApProfile::Profile1 => 0x01,
+            MultiApProfile::Profile2 => 0x02,
+            MultiApProfile::Profile3 => 0x03,
+            MultiApProfile::Reserved(v) => v,
         }
     }
     pub fn from_u8(v: u8) -> Result<Self, ()> {
@@ -974,12 +973,20 @@ impl ClientAssociation {
         let (input, assoc_byte) = take(1usize)(input)?;
 
         let sta_mac = MacAddr::new(
-            sta_bytes[0], sta_bytes[1], sta_bytes[2],
-            sta_bytes[3], sta_bytes[4], sta_bytes[5],
+            sta_bytes[0],
+            sta_bytes[1],
+            sta_bytes[2],
+            sta_bytes[3],
+            sta_bytes[4],
+            sta_bytes[5],
         );
         let ap_mac = MacAddr::new(
-            ap_bytes[0], ap_bytes[1], ap_bytes[2],
-            ap_bytes[3], ap_bytes[4], ap_bytes[5],
+            ap_bytes[0],
+            ap_bytes[1],
+            ap_bytes[2],
+            ap_bytes[3],
+            ap_bytes[4],
+            ap_bytes[5],
         );
 
         let assoc_bits = assoc_byte[0];
@@ -995,7 +1002,14 @@ impl ClientAssociation {
             AssociationState::LeftBss
         };
 
-        Ok((input, Self { sta_mac, ap_mac, association_state }))
+        Ok((
+            input,
+            Self {
+                sta_mac,
+                ap_mac,
+                association_state,
+            },
+        ))
     }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -1060,11 +1074,14 @@ impl LinkMetricQuery {
         let (input, neighbor_mac) = cond(specific_neighbor, take_mac_addr).parse(input)?;
         let (input, requested_metrics) = be_u8(input)?;
 
-        Ok((input, Self {
-            neighbor_type,
-            neighbor_mac,
-            requested_metrics,
-        }))
+        Ok((
+            input,
+            Self {
+                neighbor_type,
+                neighbor_mac,
+                requested_metrics,
+            },
+        ))
     }
 
     pub fn serialize(&self) -> anyhow::Result<Vec<u8>> {
@@ -1096,13 +1113,17 @@ impl LinkMetricTx {
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, source_al_mac) = take_mac_addr(input)?;
         let (input, neighbour_al_mac) = take_mac_addr(input)?;
-        let (input, interface_pairs) = all_consuming(many0(LinkMetricTxPair::parse)).parse(input)?;
+        let (input, interface_pairs) =
+            all_consuming(many0(LinkMetricTxPair::parse)).parse(input)?;
 
-        Ok((input, Self {
-            source_al_mac,
-            neighbour_al_mac,
-            interface_pairs,
-        }))
+        Ok((
+            input,
+            Self {
+                source_al_mac,
+                neighbour_al_mac,
+                interface_pairs,
+            },
+        ))
     }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -1142,17 +1163,20 @@ impl LinkMetricTxPair {
         let (input, link_availability) = be_u16(input)?;
         let (input, phy_rate) = be_u16(input)?;
 
-        Ok((input, Self {
-            receiver_interface_mac,
-            neighbour_interface_mac,
-            interface_type,
-            has_more_ieee802_bridges,
-            packet_errors,
-            transmitted_packets,
-            mac_throughput_capacity,
-            link_availability,
-            phy_rate,
-        }))
+        Ok((
+            input,
+            Self {
+                receiver_interface_mac,
+                neighbour_interface_mac,
+                interface_type,
+                has_more_ieee802_bridges,
+                packet_errors,
+                transmitted_packets,
+                mac_throughput_capacity,
+                link_availability,
+                phy_rate,
+            },
+        ))
     }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -1182,13 +1206,17 @@ impl LinkMetricRx {
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, source_al_mac) = take_mac_addr(input)?;
         let (input, neighbour_al_mac) = take_mac_addr(input)?;
-        let (input, interface_pairs) = all_consuming(many0(LinkMetricRxPair::parse)).parse(input)?;
+        let (input, interface_pairs) =
+            all_consuming(many0(LinkMetricRxPair::parse)).parse(input)?;
 
-        Ok((input, Self {
-            source_al_mac,
-            neighbour_al_mac,
-            interface_pairs,
-        }))
+        Ok((
+            input,
+            Self {
+                source_al_mac,
+                neighbour_al_mac,
+                interface_pairs,
+            },
+        ))
     }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -1222,14 +1250,17 @@ impl LinkMetricRxPair {
         let (input, transmitted_packets) = be_u32(input)?;
         let (input, rssi) = be_u8(input)?;
 
-        Ok((input, Self {
-            receiver_interface_mac,
-            neighbour_interface_mac,
-            interface_type,
-            packet_errors,
-            transmitted_packets,
-            rssi,
-        }))
+        Ok((
+            input,
+            Self {
+                receiver_interface_mac,
+                neighbour_interface_mac,
+                interface_type,
+                packet_errors,
+                transmitted_packets,
+                rssi,
+            },
+        ))
     }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -1589,7 +1620,10 @@ pub mod tests {
         let cmdu = make_dummy_cmdu(vec![100]);
 
         // Expect success getting message version of CMDU
-        assert_eq!(cmdu.get_message_version(), Some(MessageVersion::Version2013));
+        assert_eq!(
+            cmdu.get_message_version(),
+            Some(MessageVersion::Version2013)
+        );
     }
 
     // Verify the correctness of conversion to u16 from CMDUType
@@ -2688,13 +2722,18 @@ pub mod tests {
         };
 
         let bytes = original.serialize();
-        assert_eq!(bytes, [
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, // sta_mac
-            0x06, 0x05, 0x04, 0x03, 0x02, 0x01, // ap_mac
-            0x80,                               // association_state
-        ]);
+        assert_eq!(
+            bytes,
+            [
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, // sta_mac
+                0x06, 0x05, 0x04, 0x03, 0x02, 0x01, // ap_mac
+                0x80, // association_state
+            ]
+        );
 
-        let parsed = ClientAssociation::parse(&bytes, bytes.len() as u16).unwrap().1;
+        let parsed = ClientAssociation::parse(&bytes, bytes.len() as u16)
+            .unwrap()
+            .1;
         assert_eq!(parsed, original);
     }
 
@@ -2707,7 +2746,9 @@ pub mod tests {
         let bytes = original.serialize();
         assert_eq!(bytes, [0x01]);
 
-        let parsed = MultiApProfileValue::parse(&bytes, bytes.len() as u16).unwrap().1;
+        let parsed = MultiApProfileValue::parse(&bytes, bytes.len() as u16)
+            .unwrap()
+            .1;
         assert_eq!(parsed, original);
     }
 
@@ -2730,7 +2771,10 @@ pub mod tests {
 
         let parsed = LinkMetricQuery::parse(&original).unwrap().1;
         assert_eq!(parsed.neighbor_type, LinkMetricQuery::NEIGHBOR_SPECIFIC);
-        assert_eq!(parsed.neighbor_mac, Some(MacAddr::new(0x40, 0x41, 0x42, 0x43, 0x44, 0x45)));
+        assert_eq!(
+            parsed.neighbor_mac,
+            Some(MacAddr::new(0x40, 0x41, 0x42, 0x43, 0x44, 0x45))
+        );
         assert_eq!(parsed.requested_metrics, LinkMetricQuery::METRIC_RX);
 
         let serialized = parsed.serialize().unwrap();
@@ -2745,22 +2789,34 @@ pub mod tests {
             // interface pair 1
             0x60, 0x61, 0x62, 0x63, 0x64, 0x66, // receiver interface mac
             0x70, 0x71, 0x72, 0x73, 0x74, 0x77, // neighbour interface mac
-            0x00, 0x01,                         // interface type
-            0x00,                               // no more bridges
-            0x00, 0x00, 0x00, 0x13,             // packet errors
-            0x00, 0x00, 0x00, 0x42,             // transmitted packets
-            0x00, 0x80,                         // mac throughput capacity
-            0x00, 0x64,                         // link availability
-            0x00, 0x10,                         // phy rate
+            0x00, 0x01, // interface type
+            0x00, // no more bridges
+            0x00, 0x00, 0x00, 0x13, // packet errors
+            0x00, 0x00, 0x00, 0x42, // transmitted packets
+            0x00, 0x80, // mac throughput capacity
+            0x00, 0x64, // link availability
+            0x00, 0x10, // phy rate
         ];
 
         let parsed = LinkMetricTx::parse(&original).unwrap().1;
-        assert_eq!(parsed.source_al_mac, MacAddr::new(0x40, 0x41, 0x42, 0x43, 0x44, 0x45));
-        assert_eq!(parsed.neighbour_al_mac, MacAddr::new(0x50, 0x51, 0x52, 0x53, 0x54, 0x55));
+        assert_eq!(
+            parsed.source_al_mac,
+            MacAddr::new(0x40, 0x41, 0x42, 0x43, 0x44, 0x45)
+        );
+        assert_eq!(
+            parsed.neighbour_al_mac,
+            MacAddr::new(0x50, 0x51, 0x52, 0x53, 0x54, 0x55)
+        );
 
         let pair = &parsed.interface_pairs[0];
-        assert_eq!(pair.receiver_interface_mac, MacAddr::new(0x60, 0x61, 0x62, 0x63, 0x64, 0x66));
-        assert_eq!(pair.neighbour_interface_mac, MacAddr::new(0x70, 0x71, 0x72, 0x73, 0x74, 0x77));
+        assert_eq!(
+            pair.receiver_interface_mac,
+            MacAddr::new(0x60, 0x61, 0x62, 0x63, 0x64, 0x66)
+        );
+        assert_eq!(
+            pair.neighbour_interface_mac,
+            MacAddr::new(0x70, 0x71, 0x72, 0x73, 0x74, 0x77)
+        );
         assert_eq!(pair.interface_type, 1);
         assert_eq!(pair.has_more_ieee802_bridges, 0);
         assert_eq!(pair.packet_errors, 0x13);
@@ -2781,19 +2837,31 @@ pub mod tests {
             // interface pair 1
             0x60, 0x61, 0x62, 0x63, 0x64, 0x66, // receiver interface mac
             0x70, 0x71, 0x72, 0x73, 0x74, 0x77, // neighbour interface mac
-            0x00, 0x01,                         // interface type
-            0x00, 0x00, 0x00, 0x13,             // packet errors
-            0x00, 0x00, 0x00, 0x42,             // transmitted packets
-            0x10,                               // rssi
+            0x00, 0x01, // interface type
+            0x00, 0x00, 0x00, 0x13, // packet errors
+            0x00, 0x00, 0x00, 0x42, // transmitted packets
+            0x10, // rssi
         ];
 
         let parsed = LinkMetricRx::parse(&original).unwrap().1;
-        assert_eq!(parsed.source_al_mac, MacAddr::new(0x40, 0x41, 0x42, 0x43, 0x44, 0x45));
-        assert_eq!(parsed.neighbour_al_mac, MacAddr::new(0x50, 0x51, 0x52, 0x53, 0x54, 0x55));
+        assert_eq!(
+            parsed.source_al_mac,
+            MacAddr::new(0x40, 0x41, 0x42, 0x43, 0x44, 0x45)
+        );
+        assert_eq!(
+            parsed.neighbour_al_mac,
+            MacAddr::new(0x50, 0x51, 0x52, 0x53, 0x54, 0x55)
+        );
 
         let pair = &parsed.interface_pairs[0];
-        assert_eq!(pair.receiver_interface_mac, MacAddr::new(0x60, 0x61, 0x62, 0x63, 0x64, 0x66));
-        assert_eq!(pair.neighbour_interface_mac, MacAddr::new(0x70, 0x71, 0x72, 0x73, 0x74, 0x77));
+        assert_eq!(
+            pair.receiver_interface_mac,
+            MacAddr::new(0x60, 0x61, 0x62, 0x63, 0x64, 0x66)
+        );
+        assert_eq!(
+            pair.neighbour_interface_mac,
+            MacAddr::new(0x70, 0x71, 0x72, 0x73, 0x74, 0x77)
+        );
         assert_eq!(pair.interface_type, 1);
         assert_eq!(pair.packet_errors, 0x13);
         assert_eq!(pair.transmitted_packets, 0x42);
@@ -2834,7 +2902,10 @@ pub mod tests {
         assert_eq!(MultiApProfile::from_u8(0x01), Ok(MultiApProfile::Profile1));
         assert_eq!(MultiApProfile::from_u8(0x02), Ok(MultiApProfile::Profile2));
         assert_eq!(MultiApProfile::from_u8(0x03), Ok(MultiApProfile::Profile3));
-        assert_eq!(MultiApProfile::from_u8(0x80), Ok(MultiApProfile::Reserved(0x80)));
+        assert_eq!(
+            MultiApProfile::from_u8(0x80),
+            Ok(MultiApProfile::Reserved(0x80))
+        );
         assert_eq!(MultiApProfile::from_u8(0x00), Err(()));
     }
 

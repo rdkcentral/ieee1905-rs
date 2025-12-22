@@ -17,12 +17,12 @@
  * limitations under the License.
 */
 
-use pnet::datalink::MacAddr;
-use crate::lldpdu::{LLDPDU, LLDPTLVType, TLV, ChassisId, PortId, TimeToLiveTLV};
 use crate::ethernet_subject_transmission::EthernetSender;
-use tokio::time::{sleep, Duration};
-use tracing::{debug, info, error, instrument};
+use crate::lldpdu::{ChassisId, LLDPTLVType, PortId, TimeToLiveTLV, LLDPDU, TLV};
 use crate::next_task_id;
+use pnet::datalink::MacAddr;
+use tokio::time::{sleep, Duration};
+use tracing::{debug, error, info, instrument};
 
 /// Launches the discovery process for L2 devices using LLDP.
 #[instrument(skip_all, name = "lldp_discovery_transmission", fields(task = next_task_id()))]
@@ -86,14 +86,21 @@ pub async fn lldp_discovery_worker(
 
         // Serialize the LLDPDU
         let serialized_lldpdu = lldpdu.serialize();
-        debug!("Serialized LLDPDU ({} bytes): {:?}", serialized_lldpdu.len(), serialized_lldpdu);
+        debug!(
+            "Serialized LLDPDU ({} bytes): {:?}",
+            serialized_lldpdu.len(),
+            serialized_lldpdu
+        );
 
         // Transmit the LLDPDU
         let destination_mac = MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x0E); // LLDP Multicast
         let source_mac = port_id; // Use port_id as source MAC
         let ethertype = 0x88CC; // EtherType for LLDP
 
-        match sender.enqueue_frame(destination_mac, source_mac, ethertype, serialized_lldpdu).await {
+        match sender
+            .enqueue_frame(destination_mac, source_mac, ethertype, serialized_lldpdu)
+            .await
+        {
             Ok(()) => info!("LLDPDU sent successfully through {port_name}"),
             Err(e) => error!("Failed to send LLDPDU: {}", e),
         }
