@@ -11,12 +11,13 @@ publish = false
 name = "ieee1905"
 
 [features]
-default = []
+default = ["rbus"]
+rbus = ["rbus-core", "rbus-provider"]
 enable_tokio_console = []
 
 [dependencies]
-rbus-core = { path = "../rbus-core" }
-rbus-provider = { path = "../rbus-provider" }
+rbus-core = { path = "../rbus-core", optional = true }
+rbus-provider = { path = "../rbus-provider", optional = true }
 
 pnet = "0.35.0"
 nom = "8.0.0"
