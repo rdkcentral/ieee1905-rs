@@ -24,7 +24,8 @@ console-subscriber = "0.5.0"
 async-trait = "0.1.89"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
-tui = "0.19"
+##tui = "0.19"
+ratatui = { version = "0.26", default-features = false, features = ["crossterm"] }
 crossterm = "0.29.0"
 netdev = "0.39.0"
 anyhow = "1.0.100"

@@ -32,11 +32,11 @@ use tokio::{
     time::{interval, Duration, Instant},
 };
 use tracing::{debug, info, instrument, warn};
-use tui::{
+use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
-    text::{Span, Spans},
-    widgets::{Block, Borders, Paragraph, Row, Table},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Row, Table, Wrap},
     Terminal,
 };
 // Standard library
@@ -789,24 +789,24 @@ impl TopologyDatabase {
                     .borders(Borders::ALL);
 
                 let mut lines = vec![
-                    Spans::from(vec![Span::raw(format!("Local AL MAC: {local_mac}"))]),
-                    Spans::from(vec![Span::raw("Interfaces:")]),
+                    Line::from(Span::raw(format!("Local AL MAC: {local_mac}"))),
+                    Line::from(Span::raw("Interfaces:")),
                 ];
 
                 if let Some(interface_list) = &interfaces {
                     for iface in interface_list {
-                        lines.push(Spans::from(vec![Span::raw(format!(
+                        lines.push(Line::from(Span::raw(format!(
                             "- MAC: {}, MediaType: {}",
                             iface.mac, iface.media_type,
-                        ))]));
+                        ))));
                     }
                 } else {
-                    lines.push(Spans::from(vec![Span::raw("- No interfaces available")]));
+                    lines.push(Line::from(Span::raw("- No interfaces available")));
                 }
 
                 let paragraph1 = Paragraph::new(lines)
                     .block(block1)
-                    .wrap(tui::widgets::Wrap { trim: true });
+                    .wrap(Wrap { trim: true });
 
                 f.render_widget(paragraph1, chunks[0]);
 
@@ -859,7 +859,19 @@ impl TopologyDatabase {
                     ])
                 });
 
-                let table = Table::new(rows)
+                let table = Table::new(
+                    rows,
+                    [
+                        Constraint::Length(20),
+                        Constraint::Length(25),
+                        Constraint::Length(25),
+                        Constraint::Length(15),
+                        Constraint::Length(20),
+                        Constraint::Length(20),
+                        Constraint::Length(20),
+                        Constraint::Length(15),
+                    ],
+                )
                     .header(Row::new(vec![
                         "AL MAC",
                         "StateLocal",
@@ -871,16 +883,6 @@ impl TopologyDatabase {
                         "Media Type",
                     ]))
                     .block(block2)
-                    .widths(&[
-                        Constraint::Length(20),
-                        Constraint::Length(25),
-                        Constraint::Length(25),
-                        Constraint::Length(15),
-                        Constraint::Length(20),
-                        Constraint::Length(20),
-                        Constraint::Length(20),
-                        Constraint::Length(15),
-                    ])
                     .column_spacing(1);
 
                 f.render_widget(table, chunks[1]);
@@ -888,9 +890,9 @@ impl TopologyDatabase {
                 //Footer
                 let block3 = Block::default().borders(Borders::ALL);
                 let paragraph3 =
-                    Paragraph::new(vec![Spans::from(vec![Span::raw("Press 'q' to quit.")])])
+                    Paragraph::new(vec![Line::from(Span::raw("Press 'q' to quit."))])
                         .block(block3)
-                        .wrap(tui::widgets::Wrap { trim: true });
+                        .wrap(Wrap { trim: true });
 
                 f.render_widget(paragraph3, chunks[2]);
             })?;
