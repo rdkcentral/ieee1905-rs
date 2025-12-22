@@ -32,7 +32,7 @@ use pnet::datalink::MacAddr;
 use std::fmt::{Debug, Display, Formatter};
 use anyhow::bail;
 use nom::combinator::{all_consuming, cond};
-use nom::multi::many0;
+use nom::multi::{count, many0};
 use nom::number::complete::be_u32;
 // Internal modules
 use crate::cmdu_reassembler::CmduReassemblyError;
@@ -300,14 +300,14 @@ impl MacAddress {
 pub struct LocalInterface {
     pub mac_address: MacAddr,
     pub media_type: MediaType,
-    pub special_info: Vec<u8>, // Special info field
+    pub special_info: MediaTypeSpecialInfo,
 }
 
 impl LocalInterface {
-    pub fn new(mac_address: MacAddr, media_type: u16, special_info: Vec<u8>) -> Self {
+    pub fn new(mac_address: MacAddr, media_type: MediaType, special_info: MediaTypeSpecialInfo) -> Self {
         Self {
             mac_address,
-            media_type: MediaType(media_type),
+            media_type,
             special_info,
         }
     }
@@ -327,40 +327,39 @@ impl LocalInterface {
         ]);
 
         // Serialize media type (2 bytes)
-        bytes.extend_from_slice(&self.media_type.serialize());
+        bytes.extend(self.media_type.serialize());
 
         // Serialize special_info: first byte is the length, followed by the content
-        bytes.push(self.special_info.len() as u8);
-        bytes.extend_from_slice(&self.special_info);
+        let special_info = self.special_info.serialize(self.media_type);
+        bytes.push(special_info.len() as u8);
+        bytes.extend(special_info);
 
         bytes
     }
 
     /// Parses a `LocalInterface` from a byte slice.
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        if input.len() < 8 {
-            return Err(NomErr::Failure(nom::error::Error::new(
-                input,
-                ErrorKind::Eof,
-            )));
-        }
-
         // Parse MAC address (6 bytes)
-        let mac_address = MacAddr::new(input[0], input[1], input[2], input[3], input[4], input[5]);
+        let (input, mac_address) = take_mac_addr(input)?;
 
         // Parse media type (2 bytes)
-        let media_type = MediaType::parse([input[6], input[7]]);
+        let (input, media_type) = MediaType::parse(input)?;
 
         // Parse special_info
-        let (input, special_info_length) = be_u8(&input[8..])?;
+        let (input, special_info_length) = be_u8(input)?;
         let (input, special_info) = take(special_info_length as usize)(input)?;
+        let special_info = if special_info.is_empty() {
+            MediaTypeSpecialInfo::default()
+        } else {
+            MediaTypeSpecialInfo::parse(media_type, special_info)?.1
+        };
 
         Ok((
             input,
             LocalInterface {
                 mac_address,
                 media_type,
-                special_info: special_info.to_vec(),
+                special_info,
             },
         ))
     }
@@ -408,7 +407,7 @@ impl DeviceInformation {
     }
 
     /// Parses a `DeviceInformation` TLV from raw bytes.
-    pub fn parse(input: &[u8], input_length: u16) -> IResult<&[u8], Self> {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         // Parse AlMacAddress (6 bytes)
         let (input, al_mac_bytes) = take(6usize)(input)?;
         let al_mac_address = MacAddr::new(
@@ -424,30 +423,13 @@ impl DeviceInformation {
         let (input, local_interface_count) = be_u8(input)?;
 
         // Parse each LocalInterface
-        let mut local_interface_list = Vec::new();
-        let mut remaining_input = input;
-        for _ in 0..local_interface_count {
-            let (new_input, local_interface) = LocalInterface::parse(remaining_input)?;
-            local_interface_list.push(local_interface);
-            remaining_input = new_input;
-        }
-
-        // Ensure the parsed length matches the TLV length
-        let expected_length = 6
-            + 1
-            + local_interface_list
-                .iter()
-                .map(|li| 8 + 1 + li.special_info.len())
-                .sum::<usize>() as u16;
-        if expected_length != input_length {
-            return Err(NomErr::Failure(nom::error::Error::new(
-                remaining_input,
-                ErrorKind::LengthValue,
-            )));
-        }
+        let (input, local_interface_list) = all_consuming(count(
+            LocalInterface::parse,
+            local_interface_count as usize,
+        )).parse(input)?;
 
         Ok((
-            remaining_input,
+            input,
             DeviceInformation {
                 al_mac_address,
                 local_interface_count,
@@ -1294,8 +1276,9 @@ impl MediaType {
     pub const WIRELESS_802_11ax: Self = Self(0x0108);
     pub const WIRELESS_802_11be: Self = Self(0x0109);
 
-    pub fn parse(input: [u8; 2]) -> Self {
-        Self(u16::from_be_bytes(input))
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, value) = be_u16(input)?;
+        Ok((input, Self(value)))
     }
 
     pub fn serialize(&self) -> [u8; 2] {
@@ -1333,6 +1316,90 @@ impl Display for MediaType {
             }
             _ => write!(f, "MediaType({b})"),
         }
+    }
+}
+
+///
+/// Media-specific information (IEEE 1905-2013, Table 6-12)
+///
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaTypeSpecialInfo {
+    Wifi(MediaTypeSpecialInfoWifi),
+    Other(Vec<u8>),
+}
+
+impl MediaTypeSpecialInfo {
+    pub fn parse(media_type: MediaType, input: &[u8]) -> IResult<&[u8], Self> {
+        if (0x0100..0x0108).contains(&media_type.0) {
+            // Wifi6 and Wifi7 don't have extras
+            let (input, result) = MediaTypeSpecialInfoWifi::parse(input)?;
+            return Ok((input, Self::Wifi(result)));
+        }
+        Ok((&[], Self::Other(input.to_vec())))
+    }
+
+    pub fn serialize(&self, media_type: MediaType) -> Vec<u8> {
+        if (0x0108..0x01ff).contains(&media_type.0) {
+            // Wifi6 and Wifi7 don't have extras
+            return Default::default();
+        }
+        match self {
+            MediaTypeSpecialInfo::Wifi(e) => e.serialize(),
+            MediaTypeSpecialInfo::Other(e) => e.clone(),
+        }
+    }
+}
+
+impl Default for MediaTypeSpecialInfo {
+    fn default() -> Self {
+        Self::Other(Default::default())
+    }
+}
+
+///
+/// IEEE 802.11 specific information
+///
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaTypeSpecialInfoWifi {
+    pub bssid: MacAddr,
+    pub role: u8,
+    pub reserved: u8,
+    pub ap_channel_band: u8,
+    pub ap_channel_center_frequency_index1: u8,
+    pub ap_channel_center_frequency_index2: u8,
+}
+
+impl MediaTypeSpecialInfoWifi {
+    const MASK_ROLE: u8 = 0x0F;
+    const MASK_RESERVED: u8 = 0xF0;
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, bssid) = take_mac_addr(input)?;
+        let (input, role_plus) = be_u8(input)?;
+        let (input, ap_channel_band) = be_u8(input)?;
+        let (input, ap_channel_center_frequency_index1) = be_u8(input)?;
+        let (input, ap_channel_center_frequency_index2) = be_u8(input)?;
+
+        Ok((input, Self {
+            bssid,
+            role: role_plus & Self::MASK_ROLE,
+            reserved: role_plus & Self::MASK_RESERVED,
+            ap_channel_band,
+            ap_channel_center_frequency_index1,
+            ap_channel_center_frequency_index2,
+        }))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let role_plus = (self.role & Self::MASK_ROLE) | (self.reserved & Self::MASK_RESERVED);
+
+        let mut vec = Vec::new();
+        vec.extend(self.bssid.octets());
+        vec.extend(role_plus.to_be_bytes());
+        vec.extend(self.ap_channel_band.to_be_bytes());
+        vec.extend(self.ap_channel_center_frequency_index1.to_be_bytes());
+        vec.extend(self.ap_channel_center_frequency_index2.to_be_bytes());
+        vec
     }
 }
 
@@ -2475,8 +2542,8 @@ pub mod tests {
 
         // Subtest using LocalInterface::new()
         let mac: MacAddr = MacAddr(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02);
-        let media_type: u16 = 0x01; // Set ethernet type
-        let special_info: Vec<u8> = vec![]; // Empty "special info" data
+        let media_type = MediaType::ETHERNET_802_3ab; // Set ethernet type
+        let special_info = MediaTypeSpecialInfo::default(); // Empty "special info" data
         let local_interface = LocalInterface::new(mac, media_type, special_info);
 
         // Expect success comparing serialized data and original
@@ -2493,10 +2560,9 @@ pub mod tests {
         let device_information = DeviceInformation::new(mac, vec![local_interface.1]);
 
         let serialized = device_information.serialize();
-        let len = serialized.len() as u16;
 
         // Expect that parsing DeviceInformation data succeed
-        match DeviceInformation::parse(&serialized, len) {
+        match DeviceInformation::parse(&serialized) {
             Ok((_, parsed)) => {
                 assert_eq!(serialized, parsed.serialize());
             }
@@ -2885,6 +2951,25 @@ pub mod tests {
     }
 
     #[test]
+    fn test_media_type_special_info_wifi_serialization() {
+        let original = [
+            0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, // BSSID
+            0x04,                               // role
+            0x00, 0x01, 0x00,
+        ];
+
+        let parsed = MediaTypeSpecialInfoWifi::parse(&original).unwrap().1;
+        assert_eq!(parsed.bssid.octets(), [0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6]);
+        assert_eq!(parsed.role, 0x04);
+        assert_eq!(parsed.ap_channel_band, 0x00);
+        assert_eq!(parsed.ap_channel_center_frequency_index1, 0x01);
+        assert_eq!(parsed.ap_channel_center_frequency_index2, 0x00);
+
+        let serialized = parsed.serialize();
+        assert_eq!(serialized, original);
+    }
+
+    #[test]
     fn test_multi_ap_profile_serialization() {
         assert_eq!(MultiApProfile::Profile1.to_u8(), 0x01);
         assert_eq!(MultiApProfile::Profile2.to_u8(), 0x02);
@@ -2949,10 +3034,11 @@ pub mod tests {
 
         // Expect ErrorKind::Eof error trying to parse provided too small slice of data
         match LocalInterface::parse(data) {
-            Err(NomErr::Failure(err)) => {
-                assert_eq!(err.code, ErrorKind::Eof)
+            Err(NomErr::Error(err)) => {
+                assert_eq!(err.input.len(), 1);
+                assert_eq!(err.code, ErrorKind::Eof);
             }
-            Ok(_) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => {
+            _ => {
                 panic!("ErrorKind::Eof should be returned");
             }
         }
@@ -2977,16 +3063,13 @@ pub mod tests {
         // Add dummy, not needed byte 0xFF
         device_information_data.push(0xff);
 
-        let len = device_information_data.len() as u16;
-
         // Expect LenghtValue error trying to parse the DeviceInformation data because of one dummy, not needed byte: 0xFF
-        match DeviceInformation::parse(device_information_data.as_slice(), len) {
-            Err(NomErr::Failure(err)) => {
-                assert_eq!(err.code, ErrorKind::LengthValue);
+        match DeviceInformation::parse(device_information_data.as_slice()) {
+            Err(NomErr::Error(err)) => {
+                assert_eq!(err.input, &[0xff]);
+                assert_eq!(err.code, ErrorKind::Eof);
             }
-            Ok((_, _)) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => {
-                panic!("Failure::LengthValue should be returned")
-            }
+            _ => panic!("Failure::LengthValue should be returned"),
         };
     }
 

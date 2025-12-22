@@ -267,18 +267,12 @@ pub fn cmdu_topology_response_transmission(
 
         // Construct DeviceInformation TLV
         let ieee1905_local_interfaces: Vec<LocalInterface> = {
-            let local_mac = topology_db.local_mac.read().await.clone();
             let interfaces = topology_db.local_interface_list.read().await;
-            interfaces.as_ref().unwrap_or(&Vec::new()).iter()
-                .filter_map(|iface| {
-                    if iface.mac != local_mac {
-                        return None;
-                    }
-                    Some(LocalInterface {
-                        mac_address: iface.mac,
-                        media_type: iface.media_type,
-                        special_info: vec![], // No additional special info
-                    })
+            interfaces.as_deref().unwrap_or_default().iter()
+                .map(|iface| LocalInterface {
+                    mac_address: iface.mac,
+                    media_type: iface.media_type,
+                    special_info: iface.media_type_extra.clone(),
                 })
                 .collect()
         };
@@ -339,10 +333,11 @@ pub fn cmdu_topology_response_transmission(
         };
         //Vendor Specific TLV (OUI 00:90:96, payload 00 01 00)
         let device_information = DeviceInformation::new(local_al_mac_address, ieee1905_local_interfaces);
+        let device_information_vec = device_information.serialize();
         let device_information_tlv = TLV {
             tlv_type: IEEE1905TLVType::DeviceInformation.to_u8(),
-            tlv_length: device_information.serialize().len() as u16,
-            tlv_value: Some(device_information.serialize()),
+            tlv_length: device_information_vec.len() as u16,
+            tlv_value: Some(device_information_vec),
         };
 
         //TODO biridging TUPLE
