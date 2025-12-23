@@ -26,10 +26,12 @@ pub mod cmdu_message_id_generator;
 pub mod cmdu_observer;
 pub mod cmdu_proxy;
 pub mod cmdu_reassembler;
+pub mod crypto_engine;
 pub mod device_edge_manager;
 pub mod ethernet_subject_reception;
 pub mod ethernet_subject_transmission;
 pub mod interface_manager;
+mod linux;
 pub mod lldpdu_codec;
 pub mod lldpdu_observer;
 pub mod lldpdu_proxy;
@@ -38,39 +40,34 @@ pub mod sdu_codec;
 pub mod tlv_cmdu_codec;
 pub mod tlv_lldpdu_codec;
 pub mod topology_manager;
-pub mod crypto_engine;
-mod linux;
 
 #[cfg(feature = "rbus")]
 pub mod rbus;
 
 // ───── Submodules: TLVs grouped under namespaces ─────
 pub mod lldpdu {
+    pub use crate::lldpdu_codec::{ChassisId, LLDPTLVType, PortId, TimeToLiveTLV, LLDPDU};
     pub use crate::tlv_lldpdu_codec::TLV;
-    pub use crate::lldpdu_codec::{
-        ChassisId, LLDPTLVType, PortId, TimeToLiveTLV, LLDPDU,
-    };
 }
 
 pub mod cmdu {
-    pub use crate::tlv_cmdu_codec::TLV;
     pub use crate::cmdu_codec::{
-        IEEE1905TLVType, CMDU, CMDUType,
-        AlMacAddress, MacAddress, LocalInterface, DeviceInformation,
-        BridgingTuple, DeviceBridgingCapability, VendorSpecificInfo,
-        IEEE1905Neighbor, Ieee1905NeighborDevice,
-        NonIEEE1905Neighbor, NonIEEE1905LocalInterfaceNeighborhood, NonIeee1905NeighborDevices,
+        AlMacAddress, BridgingTuple, CMDUType, DeviceBridgingCapability, DeviceInformation,
+        IEEE1905Neighbor, IEEE1905TLVType, Ieee1905NeighborDevice, LocalInterface, MacAddress,
+        NonIEEE1905LocalInterfaceNeighborhood, NonIEEE1905Neighbor, NonIeee1905NeighborDevices,
+        VendorSpecificInfo, CMDU,
     };
+    pub use crate::tlv_cmdu_codec::TLV;
 }
 
 use std::sync::atomic::{AtomicU32, Ordering};
 // ───── Reexports: commonly used components ─────
-pub use sdu_codec::SDU;
-pub use ethernet_subject_transmission::EthernetSender;
-pub use ethernet_subject_reception::EthernetReceiver;
-pub use lldpdu_observer::LLDPObserver;
-pub use cmdu_observer::CMDUObserver;
 pub use cmdu_message_id_generator::MessageIdGenerator;
+pub use cmdu_observer::CMDUObserver;
+pub use ethernet_subject_reception::EthernetReceiver;
+pub use ethernet_subject_transmission::EthernetSender;
+pub use lldpdu_observer::LLDPObserver;
+pub use sdu_codec::SDU;
 pub use topology_manager::TopologyDatabase;
 
 pub fn next_task_id() -> u32 {

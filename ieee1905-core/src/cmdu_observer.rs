@@ -17,14 +17,14 @@
  * limitations under the License.
 */
 
-use tracing::{error, info_span, trace, warn, Instrument};
-use async_trait::async_trait;
-use pnet::datalink::MacAddr;
-use std::sync::Arc;
-use crate::cmdu::{CMDU, CMDUType};
+use crate::cmdu::{CMDUType, CMDU};
 use crate::cmdu_handler::CMDUHandler;
 use crate::ethernet_subject_reception::EthernetFrameObserver;
 use crate::next_task_id;
+use async_trait::async_trait;
+use pnet::datalink::MacAddr;
+use std::sync::Arc;
+use tracing::{error, info_span, trace, warn, Instrument};
 
 #[derive(Clone)]
 pub struct CMDUObserver {
@@ -39,7 +39,13 @@ impl CMDUObserver {
 
 #[async_trait]
 impl EthernetFrameObserver for CMDUObserver {
-    async fn on_frame(&self, interface_mac: MacAddr, frame: &[u8], source_mac: MacAddr, destination_mac: MacAddr) {
+    async fn on_frame(
+        &self,
+        interface_mac: MacAddr,
+        frame: &[u8],
+        source_mac: MacAddr,
+        destination_mac: MacAddr,
+    ) {
         let frame_owned = frame.to_vec();
         tracing::trace!("Parsing CMDU on_frame <{frame_owned:?}>");
         match CMDU::parse(&frame_owned) {
@@ -57,14 +63,20 @@ impl EthernetFrameObserver for CMDUObserver {
 
                 trace!("Processing CMDU type: {cmdu_type:?}");
                 let handler = Arc::clone(&self.handler); // Explicit type annotation
-                //TODO to clean up
-                //let interface_name = handler_ref.interface_name.clone(); // --> not needed for now unles we pass the interface to the handler
+                                                         //TODO to clean up
+                                                         //let interface_name = handler_ref.interface_name.clone(); // --> not needed for now unles we pass the interface to the handler
 
-                tokio::task::spawn(async move {
-                    if let Err(e) = handler.handle_cmdu(&cmdu, source_mac, destination_mac).await {
-                        error!("Failed to handle CMDU: {e:?}");
+                tokio::task::spawn(
+                    async move {
+                        if let Err(e) = handler
+                            .handle_cmdu(&cmdu, source_mac, destination_mac)
+                            .await
+                        {
+                            error!("Failed to handle CMDU: {e:?}");
+                        }
                     }
-                }.instrument(info_span!(parent: None, "handle_cmdu", task = next_task_id())));
+                    .instrument(info_span!(parent: None, "handle_cmdu", task = next_task_id())),
+                );
             }
             Err(e) => {
                 error!("Failed to parse CMDU: {:?}", e);

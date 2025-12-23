@@ -17,13 +17,13 @@
  * limitations under the License.
 */
 
-use std::sync::Arc;
 use once_cell::sync::Lazy;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use cryptoki::{
     context::{CInitializeArgs, Pkcs11},
-    object::{Attribute, ObjectClass, KeyType, ObjectHandle},
+    object::{Attribute, KeyType, ObjectClass, ObjectHandle},
     session::{Session, UserType},
     types::AuthPin,
 };
@@ -41,7 +41,9 @@ pub static CRYPTO_CONTEXT: Lazy<Arc<Mutex<CryptoContext>>> = Lazy::new(|| {
     let pin = std::env::var("SOFTHSM_USER_PIN").expect("Missing PIN");
 
     let pkcs11 = Pkcs11::new(lib_path).expect("Failed to load PKCS#11");
-    pkcs11.initialize(CInitializeArgs::OsThreads).expect("Init failed");
+    pkcs11
+        .initialize(CInitializeArgs::OsThreads)
+        .expect("Init failed");
 
     let slot = pkcs11.get_slots_with_token().expect("No slot").remove(0);
     let mut session = pkcs11.open_ro_session(slot).expect("Session failed");

@@ -24,25 +24,30 @@ use std::collections::HashSet;
 use pnet::datalink::{self, MacAddr};
 
 // Standard library
-use std::fs;
-use std::ops::Div;
-use std::process::Command;
-use indexmap::{IndexMap};
+use crate::cmdu_codec::{MediaType, MediaTypeSpecialInfo, MediaTypeSpecialInfoWifi};
+use crate::linux::if_link::{RtnlLinkStats, RtnlLinkStats64};
+use crate::linux::nl80211::{
+    Nl80211Attribute, Nl80211ChannelWidth, Nl80211Command, Nl80211IfType, Nl80211RateInfo,
+    Nl80211StaInfo, NL80211_GENL_NAME,
+};
+use crate::topology_manager::Ieee1905InterfaceData;
+use indexmap::IndexMap;
 use neli::consts::nl::{GenlId, NlmF};
 use neli::consts::rtnl::{Arphrd, Ifla, IflaInfo, IflaVlan, RtAddrFamily, Rtm};
 use neli::consts::socket::NlFamily;
-use neli::genl::{AttrTypeBuilder, GenlAttrHandle, Genlmsghdr, GenlmsghdrBuilder, NlattrBuilder, NoUserHeader};
+use neli::genl::{
+    AttrTypeBuilder, GenlAttrHandle, Genlmsghdr, GenlmsghdrBuilder, NlattrBuilder, NoUserHeader,
+};
 use neli::nl::{NlPayload, Nlmsghdr};
 use neli::router::asynchronous::{NlRouter, NlRouterReceiverHandle};
 use neli::rtnl::{Ifinfomsg, IfinfomsgBuilder, RtAttrHandle};
 use neli::types::GenlBuffer;
 use neli::utils::Groups;
 use netdev::interface::types::InterfaceType;
+use std::fs;
+use std::ops::Div;
+use std::process::Command;
 use tracing::warn;
-use crate::cmdu_codec::{MediaType, MediaTypeSpecialInfo, MediaTypeSpecialInfoWifi};
-use crate::linux::if_link::{RtnlLinkStats, RtnlLinkStats64};
-use crate::linux::nl80211::{Nl80211Attribute, Nl80211ChannelWidth, Nl80211Command, Nl80211IfType, Nl80211RateInfo, Nl80211StaInfo, NL80211_GENL_NAME};
-use crate::topology_manager::Ieee1905InterfaceData;
 
 pub struct InterfaceInfo {
     pub name: String,
@@ -60,7 +65,10 @@ pub fn get_local_al_mac(interface_name: String) -> Option<MacAddr> {
     let interfaces = datalink::interfaces();
 
     // Find the first Ethernet interface (`ethX`)
-    if let Some(iface) = interfaces.iter().find(|iface| iface.name.starts_with(&interface_name)) {
+    if let Some(iface) = interfaces
+        .iter()
+        .find(|iface| iface.name.starts_with(&interface_name))
+    {
         return iface.mac;
     }
     tracing::debug!("No Al Mac found, using default.");
@@ -75,15 +83,15 @@ pub fn get_forwarding_interface_mac(interface_name: String) -> Option<MacAddr> {
     if let Some(mac_addr) = interfaces
         .iter()
         .find(|iface| iface.name.starts_with(&interface_name))
-        .and_then(|iface| iface.mac) // Extract and return MAC address if found
-        {
-            tracing::debug!("Ethernet interface found for forwarding {mac_addr}");
-            Some(mac_addr)
-        }
-        else{
-            tracing::debug!("No Ethernet interface found for forwarding, using default.");
-            Some(MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
-        }
+        .and_then(|iface| iface.mac)
+    // Extract and return MAC address if found
+    {
+        tracing::debug!("Ethernet interface found for forwarding {mac_addr}");
+        Some(mac_addr)
+    } else {
+        tracing::debug!("No Ethernet interface found for forwarding, using default.");
+        Some(MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
+    }
 }
 
 /// **Returns `Some(String)` if found, otherwise `None`.**
@@ -101,7 +109,8 @@ pub fn get_forwarding_interface_name(interface_name: String) -> Option<String> {
 /// Retrieves a list of all physical ethernet interfaces.
 pub fn get_physical_ethernet_interfaces() -> Vec<InterfaceInfo> {
     let interfaces = netdev::get_interfaces();
-    interfaces.into_iter()
+    interfaces
+        .into_iter()
         .filter_map(|interface| {
             if interface.if_type != InterfaceType::Ethernet || !interface.is_physical() {
                 return None;
@@ -137,15 +146,24 @@ pub fn get_bridge_of(interface_name: &str) -> Option<BridgeInfo> {
 
     Some(BridgeInfo {
         name: link.file_name()?.to_string_lossy().into_owned(),
-        index: fs::read_to_string(format!("{path}/ifindex")).ok()?.trim().parse().ok()?,
-        address: fs::read_to_string(format!("{path}/address")).ok()?.trim().parse().ok()?,
+        index: fs::read_to_string(format!("{path}/ifindex"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?,
+        address: fs::read_to_string(format!("{path}/address"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?,
     })
 }
 
 /// Retrieves VLAN ID from `/proc/net/vlan/config`
 pub fn get_vlan_id(interface_name: &str) -> Option<u16> {
     let contents = fs::read_to_string("/proc/net/vlan/config").ok()?;
-    for line in contents.lines().skip(2) { // Skip headers
+    for line in contents.lines().skip(2) {
+        // Skip headers
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 2 && parts[0] == interface_name {
             return parts[1].parse().ok();
@@ -164,11 +182,12 @@ pub fn get_neighbor_macs(interface_name: &str) -> Vec<MacAddr> {
         .arg("neigh")
         .arg("show")
         .arg("dev")
-        .arg(interface_name)  // Now filters by specific interface
+        .arg(interface_name) // Now filters by specific interface
         .output();
 
     if let Ok(output) = output {
-        if let Ok(stdout) = str::from_utf8(&output.stdout) { // Convert raw output to string
+        if let Ok(stdout) = str::from_utf8(&output.stdout) {
+            // Convert raw output to string
             for line in stdout.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 5 && parts.contains(&"lladdr") {
@@ -189,8 +208,6 @@ pub fn get_neighbor_macs(interface_name: &str) -> Vec<MacAddr> {
     mac_addresses.into_iter().collect() // Convert HashSet to Vec
 }
 
-
-
 /// Helper function to parse a MAC address from a string
 fn parse_mac(mac_str: &str) -> Result<MacAddr, ()> {
     let bytes: Vec<u8> = mac_str
@@ -199,7 +216,9 @@ fn parse_mac(mac_str: &str) -> Result<MacAddr, ()> {
         .collect();
 
     if bytes.len() == 6 {
-        Ok(MacAddr::new(bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]))
+        Ok(MacAddr::new(
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+        ))
     } else {
         Err(())
     }
@@ -247,7 +266,8 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905InterfaceData>> {
             bssid: wireless.bssid.unwrap_or_default(),
             role: convert_if_type_to_role(wireless.if_type, wireless.frequency).unwrap_or_default(),
             reserved: 0,
-            ap_channel_band: convert_channel_width_to_band(wireless.channel_width).unwrap_or_default(),
+            ap_channel_band: convert_channel_width_to_band(wireless.channel_width)
+                .unwrap_or_default(),
             ap_channel_center_frequency_index1: wireless.center_freq_index1.unwrap_or_default(),
             ap_channel_center_frequency_index2: wireless.center_freq_index2.unwrap_or_default(),
         });
@@ -265,16 +285,20 @@ struct LinkEthernetInfo {
 }
 
 async fn get_all_interfaces() -> anyhow::Result<Vec<LinkEthernetInfo>> {
-    let socket = NlRouter::connect(NlFamily::Route, None, Groups::empty()).await?.0;
+    let socket = NlRouter::connect(NlFamily::Route, None, Groups::empty())
+        .await?
+        .0;
     let if_info_msg = IfinfomsgBuilder::default()
         .ifi_family(RtAddrFamily::Unspecified)
         .build()?;
 
-    let mut recv: NlRouterReceiverHandle<Rtm, Ifinfomsg> = socket.send(
-        Rtm::Getlink,
-        NlmF::DUMP | NlmF::ACK,
-        NlPayload::Payload(if_info_msg),
-    ).await?;
+    let mut recv: NlRouterReceiverHandle<Rtm, Ifinfomsg> = socket
+        .send(
+            Rtm::Getlink,
+            NlmF::DUMP | NlmF::ACK,
+            NlPayload::Payload(if_info_msg),
+        )
+        .await?;
 
     let mut interfaces = Vec::new();
     while let Some(message) = recv.next().await {
@@ -296,19 +320,28 @@ async fn get_all_interfaces() -> anyhow::Result<Vec<LinkEthernetInfo>> {
 
         if let Ok(stats) = attr_handle.get_attr_payload_as_with_len_borrowed::<&[u8]>(Ifla::Stats) {
             debug_assert_eq!(stats.len(), size_of::<RtnlLinkStats>());
-            let _stats = unsafe { std::ptr::read_unaligned(stats.as_ptr().cast::<RtnlLinkStats>()) };
+            let _stats =
+                unsafe { std::ptr::read_unaligned(stats.as_ptr().cast::<RtnlLinkStats>()) };
         }
 
-        if let Ok(stats) = attr_handle.get_attr_payload_as_with_len_borrowed::<&[u8]>(Ifla::Stats64) {
+        if let Ok(stats) = attr_handle.get_attr_payload_as_with_len_borrowed::<&[u8]>(Ifla::Stats64)
+        {
             debug_assert_eq!(stats.len(), size_of::<RtnlLinkStats64>());
-            let _stats = unsafe { std::ptr::read_unaligned(stats.as_ptr().cast::<RtnlLinkStats64>()) };
+            let _stats =
+                unsafe { std::ptr::read_unaligned(stats.as_ptr().cast::<RtnlLinkStats64>()) };
         }
 
         fn get_vlan_id(handle: &RtAttrHandle<Ifla>) -> Option<u16> {
-            let link_info = handle.get_nested_attributes::<IflaInfo>(Ifla::Linkinfo).ok()?;
-            let kind = link_info.get_attr_payload_as_with_len_borrowed::<&[u8]>(IflaInfo::Kind).ok()?;
+            let link_info = handle
+                .get_nested_attributes::<IflaInfo>(Ifla::Linkinfo)
+                .ok()?;
+            let kind = link_info
+                .get_attr_payload_as_with_len_borrowed::<&[u8]>(IflaInfo::Kind)
+                .ok()?;
             if kind == b"vlan\0" {
-                let data = link_info.get_nested_attributes::<IflaVlan>(IflaInfo::Data).ok()?;
+                let data = link_info
+                    .get_nested_attributes::<IflaVlan>(IflaInfo::Data)
+                    .ok()?;
                 return data.get_attr_payload_as(IflaVlan::Id).ok();
             }
             None
@@ -345,11 +378,17 @@ struct WirelessInterfaceInfo {
 }
 
 async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>> {
-    let socket = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?.0;
+    let socket = NlRouter::connect(NlFamily::Generic, None, Groups::empty())
+        .await?
+        .0;
     let family_id = socket.resolve_genl_family(NL80211_GENL_NAME).await?;
 
     let nl_message_attrs = NlattrBuilder::default()
-        .nla_type(AttrTypeBuilder::default().nla_type(Nl80211Attribute::IfName).build()?)
+        .nla_type(
+            AttrTypeBuilder::default()
+                .nla_type(Nl80211Attribute::IfName)
+                .build()?,
+        )
         .nla_payload(())
         .build()?;
 
@@ -359,11 +398,14 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
         .version(1)
         .build()?;
 
-    let mut recv: NlRouterReceiverHandle<GenlId, Genlmsghdr<Nl80211Command, Nl80211Attribute>> = socket.send(
-        family_id,
-        NlmF::DUMP | NlmF::ACK,
-        NlPayload::Payload(nl_message),
-    ).await?;
+    let mut recv: NlRouterReceiverHandle<GenlId, Genlmsghdr<Nl80211Command, Nl80211Attribute>> =
+        socket
+            .send(
+                family_id,
+                NlmF::DUMP | NlmF::ACK,
+                NlPayload::Payload(nl_message),
+            )
+            .await?;
 
     let mut interfaces = Vec::new();
     while let Some(message) = recv.next().await {
@@ -387,9 +429,15 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
         };
 
         let if_type = handle.get_attr_payload_as(Nl80211Attribute::IfType).ok();
-        let channel_width = handle.get_attr_payload_as(Nl80211Attribute::ChannelWidth).ok();
-        let center_freq1 = handle.get_attr_payload_as(Nl80211Attribute::CenterFreq1).ok();
-        let center_freq2 = handle.get_attr_payload_as(Nl80211Attribute::CenterFreq2).ok();
+        let channel_width = handle
+            .get_attr_payload_as(Nl80211Attribute::ChannelWidth)
+            .ok();
+        let center_freq1 = handle
+            .get_attr_payload_as(Nl80211Attribute::CenterFreq1)
+            .ok();
+        let center_freq2 = handle
+            .get_attr_payload_as(Nl80211Attribute::CenterFreq2)
+            .ok();
 
         interfaces.push(WirelessInterfaceInfo {
             mac: MacAddr::from(mac),
@@ -407,7 +455,11 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
 
     for interface in interfaces.iter_mut() {
         let nl_attrs = NlattrBuilder::default()
-            .nla_type(AttrTypeBuilder::default().nla_type(Nl80211Attribute::IfIndex).build()?)
+            .nla_type(
+                AttrTypeBuilder::default()
+                    .nla_type(Nl80211Attribute::IfIndex)
+                    .build()?,
+            )
             .nla_payload(interface.if_index)
             .build()?;
 
@@ -417,11 +469,14 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
             .version(1)
             .build()?;
 
-        let mut recv: NlRouterReceiverHandle<GenlId, Genlmsghdr<Nl80211Command, Nl80211Attribute>> = socket.send(
-            family_id,
-            NlmF::DUMP | NlmF::ACK,
-            NlPayload::Payload(nl_message),
-        ).await?;
+        let mut recv: NlRouterReceiverHandle<GenlId, Genlmsghdr<Nl80211Command, Nl80211Attribute>> =
+            socket
+                .send(
+                    family_id,
+                    NlmF::DUMP | NlmF::ACK,
+                    NlPayload::Payload(nl_message),
+                )
+                .await?;
 
         while let Some(message) = recv.next().await {
             let message: Nlmsghdr<GenlId, Genlmsghdr<Nl80211Command, Nl80211Attribute>> = message?;
@@ -430,12 +485,17 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
             };
 
             let handle = payload.attrs().get_attr_handle();
-            interface.bssid = handle.get_attr_payload_as::<[u8; 6]>(Nl80211Attribute::Mac)
+            interface.bssid = handle
+                .get_attr_payload_as::<[u8; 6]>(Nl80211Attribute::Mac)
                 .ok()
                 .map(MacAddr::from);
 
-            if let Ok(sta_info) = handle.get_nested_attributes::<Nl80211StaInfo>(Nl80211Attribute::StaInfo) {
-                if let Ok(rate_info) = sta_info.get_nested_attributes::<Nl80211RateInfo>(Nl80211StaInfo::TxBitrate) {
+            if let Ok(sta_info) =
+                handle.get_nested_attributes::<Nl80211StaInfo>(Nl80211Attribute::StaInfo)
+            {
+                if let Ok(rate_info) =
+                    sta_info.get_nested_attributes::<Nl80211RateInfo>(Nl80211StaInfo::TxBitrate)
+                {
                     interface.media_type = get_wireless_media_type(interface.frequency, &rate_info);
                 }
             }
@@ -445,7 +505,10 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
     Ok(interfaces)
 }
 
-fn get_wireless_media_type(frequency: u32, rate_info: &GenlAttrHandle<Nl80211RateInfo>) -> MediaType {
+fn get_wireless_media_type(
+    frequency: u32,
+    rate_info: &GenlAttrHandle<Nl80211RateInfo>,
+) -> MediaType {
     let is_2_4 = frequency < 3000;
 
     if frequency > 57_000 {
@@ -482,7 +545,9 @@ fn get_wireless_media_type(frequency: u32, rate_info: &GenlAttrHandle<Nl80211Rat
         return MediaType::WIRELESS_802_11a_5;
     }
 
-    let bitrate = rate_info.get_attr_payload_as::<u32>(Nl80211RateInfo::Bitrate32).unwrap_or_default();
+    let bitrate = rate_info
+        .get_attr_payload_as::<u32>(Nl80211RateInfo::Bitrate32)
+        .unwrap_or_default();
     if bitrate > 11_0 {
         // 802.11b
         MediaType::WIRELESS_802_11b_2_4
@@ -539,7 +604,13 @@ fn convert_channel_width_to_band(width: Option<Nl80211ChannelWidth>) -> Option<u
 ///
 fn convert_if_type_to_role(if_type: Option<Nl80211IfType>, frequency: u32) -> Option<u8> {
     Some(match if_type? {
-        Nl80211IfType::Station => if frequency > 57_000 { 0b1010 } else { 0b0100 },
+        Nl80211IfType::Station => {
+            if frequency > 57_000 {
+                0b1010
+            } else {
+                0b0100
+            }
+        }
         Nl80211IfType::Ap => 0b0000,
         Nl80211IfType::ApVlan => 0b0000,
         Nl80211IfType::P2pClient => 0b1000,
