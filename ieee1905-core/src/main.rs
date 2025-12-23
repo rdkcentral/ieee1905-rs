@@ -37,11 +37,10 @@ use anyhow::anyhow;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
-use tracing::{error, instrument};
+use tracing::instrument;
 use tracing_subscriber::{prelude::*, EnvFilter};
 use tracing_appender::rolling;
 use tracing_subscriber::fmt::format::FmtSpan;
-use ieee1905::rbus::RBusConnection;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -170,9 +169,12 @@ fn main() -> anyhow::Result<()> {
     //the keys are stored in  ctx.gtk_key and ctx.pmk_key
     //We need to insert the PIN value to access softHSM2 as env variable or hardcoded
 
-    let rbus_handle = RBusConnection::open();
-    if let Err(e) = rbus_handle {
-        error!("failed to open RBus connection: {e}");
+    #[cfg(feature = "rbus")]
+    {
+        let rbus_handle = ieee1905::rbus::RBusConnection::open();
+        if let Err(e) = rbus_handle {
+            tracing::error!("failed to open RBus connection: {e}");
+        }
     }
 
     loop {
