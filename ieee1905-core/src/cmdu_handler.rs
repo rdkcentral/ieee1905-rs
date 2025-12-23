@@ -523,12 +523,13 @@ impl CMDUHandler {
                 }
                 IEEE1905TLVType::DeviceInformation => {
                     if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = DeviceInformation::parse(value, tlv.tlv_length) {
+                        if let Ok((_, parsed)) = DeviceInformation::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                             interfaces.extend(parsed.local_interface_list.into_iter().map(
                                 |iface| Ieee1905InterfaceData {
                                     mac: iface.mac_address,
                                     media_type: iface.media_type,
+                                    media_type_extra: iface.special_info,
                                     bridging_flag: false,
                                     bridging_tuple: None,
                                     vlan: None,

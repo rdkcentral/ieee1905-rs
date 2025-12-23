@@ -45,7 +45,7 @@ use indexmap::IndexMap;
 use tokio::task::JoinSet;
 // Internal modules
 use crate::{cmdu::IEEE1905Neighbor, interface_manager::get_forwarding_interface_mac, next_task_id};
-use crate::cmdu_codec::MediaType;
+use crate::cmdu_codec::{MediaType, MediaTypeSpecialInfo};
 use crate::interface_manager::get_interfaces;
 use crate::lldpdu::PortId;
 
@@ -90,6 +90,7 @@ pub enum TransmissionEvent {
 pub struct Ieee1905InterfaceData {
     pub mac: MacAddr,
     pub media_type: MediaType,
+    pub media_type_extra: MediaTypeSpecialInfo,
     pub bridging_flag: bool,
     pub bridging_tuple: Option<u32>,
     pub vlan: Option<u16>,
@@ -111,6 +112,7 @@ impl Ieee1905InterfaceData {
         Self {
             mac,
             media_type,
+            media_type_extra: Default::default(),
             bridging_flag,
             bridging_tuple,
             vlan,
@@ -931,6 +933,7 @@ mod tests {
         let interface = Ieee1905InterfaceData {
             mac: device_if_mac,
             media_type: MediaType::ETHERNET_802_3ab,
+            media_type_extra: Default::default(),
             bridging_flag: false,
             bridging_tuple: None,
             vlan: None,

@@ -39,9 +39,9 @@ use neli::types::GenlBuffer;
 use neli::utils::Groups;
 use netdev::interface::types::InterfaceType;
 use tracing::warn;
-use crate::cmdu_codec::MediaType;
+use crate::cmdu_codec::{MediaType, MediaTypeSpecialInfo, MediaTypeSpecialInfoWifi};
 use crate::linux::if_link::{RtnlLinkStats, RtnlLinkStats64};
-use crate::linux::nl80211::{Nl80211Attribute, Nl80211ChannelWidth, Nl80211Command, Nl80211RateInfo, Nl80211StaInfo, NL80211_GENL_NAME};
+use crate::linux::nl80211::{Nl80211Attribute, Nl80211ChannelWidth, Nl80211Command, Nl80211IfType, Nl80211RateInfo, Nl80211StaInfo, NL80211_GENL_NAME};
 use crate::topology_manager::Ieee1905InterfaceData;
 
 pub struct InterfaceInfo {
@@ -211,6 +211,7 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905InterfaceData>> {
         let interface = Ieee1905InterfaceData {
             mac: ethernet.mac,
             media_type: MediaType::ETHERNET_802_3ab,
+            media_type_extra: Default::default(),
             bridging_flag: ethernet.bridge_if_index.is_some(),
             bridging_tuple: ethernet.bridge_if_index,
             vlan: ethernet.vlan_id,
@@ -242,9 +243,14 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905InterfaceData>> {
             continue;
         }
         interface.media_type = wireless.media_type;
-        let _ = wireless.channel_width;
-        let _ = wireless.center_freq_index1;
-        let _ = wireless.center_freq_index2;
+        interface.media_type_extra = MediaTypeSpecialInfo::Wifi(MediaTypeSpecialInfoWifi {
+            bssid: wireless.bssid.unwrap_or_default(),
+            role: convert_if_type_to_role(wireless.if_type, wireless.frequency).unwrap_or_default(),
+            reserved: 0,
+            ap_channel_band: convert_channel_width_to_band(wireless.channel_width).unwrap_or_default(),
+            ap_channel_center_frequency_index1: wireless.center_freq_index1.unwrap_or_default(),
+            ap_channel_center_frequency_index2: wireless.center_freq_index2.unwrap_or_default(),
+        });
     }
     Ok(interfaces.into_values().map(|e| e.0).collect())
 }
@@ -330,6 +336,7 @@ struct WirelessInterfaceInfo {
     bssid: Option<MacAddr>,
     if_index: i32,
     if_name: String,
+    if_type: Option<Nl80211IfType>,
     frequency: u32,
     channel_width: Option<Nl80211ChannelWidth>,
     center_freq_index1: Option<u8>,
@@ -379,6 +386,7 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
             continue;
         };
 
+        let if_type = handle.get_attr_payload_as(Nl80211Attribute::IfType).ok();
         let channel_width = handle.get_attr_payload_as(Nl80211Attribute::ChannelWidth).ok();
         let center_freq1 = handle.get_attr_payload_as(Nl80211Attribute::CenterFreq1).ok();
         let center_freq2 = handle.get_attr_payload_as(Nl80211Attribute::CenterFreq2).ok();
@@ -388,6 +396,7 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
             bssid: None,
             if_index,
             if_name,
+            if_type,
             frequency,
             channel_width,
             center_freq_index1: center_freq1.and_then(get_wifi_center_frequency_index),
@@ -494,4 +503,47 @@ fn get_wifi_center_frequency_index(center_frequency: u32) -> Option<u8> {
         _ => None,
     };
     starting_frequency.map(|e| center_frequency.saturating_sub(e).div(5) as u8)
+}
+
+///
+/// https://schupen.net/lib/wifi/802.11ac-2013.pdf
+///
+/// Set to 0 for 20 MHz or 40 MHz operating channel width.
+/// Set to 1 for 80 MHz operating channel width.
+/// Set to 2 for 160 MHz operating channel width.
+/// Set to 3 for 80+80 MHz operating channel width.
+/// Values in the range 4 to 255 are reserved.
+///
+fn convert_channel_width_to_band(width: Option<Nl80211ChannelWidth>) -> Option<u8> {
+    Some(match width? {
+        Nl80211ChannelWidth::Width20NoHt => 0,
+        Nl80211ChannelWidth::Width20 => 0,
+        Nl80211ChannelWidth::Width40 => 0,
+        Nl80211ChannelWidth::Width80 => 1,
+        Nl80211ChannelWidth::Width80p80 => 3,
+        Nl80211ChannelWidth::Width160 => 2,
+        _ => return None,
+    })
+}
+
+///
+/// https://schupen.net/lib/wifi/802.11ac-2013.pdf
+///
+/// “0000” – AP
+/// “0001” – “0011” Reserved
+/// “0100” – non-AP/non-PCP STA
+/// “1000” – Wi-Fi P2P Client (see [B04])
+/// “1001” – Wi-Fi P2P Group Owner (see [B04])
+/// “1010” – 802.11adPCP
+/// “1011” – “1111” Reserved
+///
+fn convert_if_type_to_role(if_type: Option<Nl80211IfType>, frequency: u32) -> Option<u8> {
+    Some(match if_type? {
+        Nl80211IfType::Station => if frequency > 57_000 { 0b1010 } else { 0b0100 },
+        Nl80211IfType::Ap => 0b0000,
+        Nl80211IfType::ApVlan => 0b0000,
+        Nl80211IfType::P2pClient => 0b1000,
+        Nl80211IfType::P2pGo => 0b1001,
+        _ => return None,
+    })
 }
