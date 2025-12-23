@@ -62,7 +62,7 @@ pub(crate) enum RBusProviderElementError {
 pub(crate) struct RBusProviderGetterArgsInner<'a, UserData> {
     pub property: &'a RBusProperty,
     pub path_full: &'a BStr,
-    pub path_chunks: &'a[&'a BStr],
+    pub path_chunks: &'a [&'a BStr],
     pub table_idx: &'a mut Vec<u32>,
     pub user_data: &'a mut UserData,
 }
@@ -73,7 +73,7 @@ pub(crate) struct RBusProviderGetterArgsInner<'a, UserData> {
 pub(crate) struct RBusProviderTableSyncArgsInner<'a, UserData> {
     pub handle: &'a RBusHandle,
     pub path_full: &'a BStr,
-    pub path_chunks: &'a[&'a BStr],
+    pub path_chunks: &'a [&'a BStr],
     pub table_idx: &'a mut Vec<u32>,
     pub user_data: &'a mut UserData,
 }

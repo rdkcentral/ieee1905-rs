@@ -1,6 +1,6 @@
+use anyhow::anyhow;
 use bindgen::EnumVariation;
 use std::path::{Path, PathBuf};
-use anyhow::anyhow;
 
 const RBUS_DIR: &str = "./c_src";
 

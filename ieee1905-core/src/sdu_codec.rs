@@ -19,19 +19,13 @@
 
 #![deny(warnings)]
 // External crates
-use nom::{
-    bytes::complete::take,
-    multi::many0,
-    number::complete::be_u8,
-    Parser,
-    IResult,
-};
+use nom::{bytes::complete::take, multi::many0, number::complete::be_u8, IResult, Parser};
 use pnet::datalink::MacAddr;
 
 // Standard library
 use crate::cmdu_codec::*;
-use std::fmt::Debug;
 use nom::error::{Error, ErrorKind};
+use std::fmt::Debug;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct SDU {
@@ -215,7 +209,9 @@ mod tests {
         assert_eq!(sdu, parsed_sdu);
 
         // Parse CMDU which is SDU payload
-        let parsed_cmd = CMDU::parse(&parsed_sdu.payload).expect("Failed to parse CMDU").1;
+        let parsed_cmd = CMDU::parse(&parsed_sdu.payload)
+            .expect("Failed to parse CMDU")
+            .1;
 
         // Expect success comparing serialized and parsed CMDU with original one
         assert_eq!(parsed_cmd, cmdu_topology_query);
@@ -280,10 +276,10 @@ mod tests {
         match SDU::parse(&serialized_sdu) {
             Err(NomErr::Error(_)) | Err(NomErr::Incomplete(_)) | Ok(_) => {
                 panic!("ErrorKind::Tag should be returned on lack of EndOfMessage TLV in CMDU");
-            },
+            }
             Err(NomErr::Failure(e)) => {
                 assert_eq!(e.code, nom::error::ErrorKind::Tag);
-            },
+            }
         }
     }
 

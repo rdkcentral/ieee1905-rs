@@ -16,25 +16,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
-use std::process::exit;
 use futures::{SinkExt, StreamExt};
-use tokio::net::UnixStream;
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
-use ieee1905::sdu_codec::SDU;
-use ieee1905::registration_codec::{
-    AlServiceRegistrationRequest,
-    AlServiceRegistrationResponse,
-    ServiceOperation,
-    ServiceType,
-};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use ieee1905::cmdu::CMDU;
 use ieee1905::cmdu_codec::MessageVersion;
+use ieee1905::registration_codec::{
+    AlServiceRegistrationRequest, AlServiceRegistrationResponse, ServiceOperation, ServiceType,
+};
+use ieee1905::sdu_codec::SDU;
+use std::process::exit;
+use tokio::net::UnixStream;
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 // Send response to transmitter containing complete SDU: (SDU + CMDU + TLVs)
 // Only the TLV chain is a 1-to-1 copy without any modifications as SDU and CMDU headers
 // need to be changed for proper SDU delivery
-async fn send_echoed_packet(socket: &mut Framed<&mut UnixStream, LengthDelimitedCodec>, bytes: Vec<u8>) {
+async fn send_echoed_packet(
+    socket: &mut Framed<&mut UnixStream, LengthDelimitedCodec>,
+    bytes: Vec<u8>,
+) {
     println!("Sending SDU packet with copied TLV chain");
 
     let sdu = SDU::parse(bytes.as_slice());
@@ -70,7 +70,10 @@ async fn send_echoed_packet(socket: &mut Framed<&mut UnixStream, LengthDelimited
                 payload: payload,
             };
 
-            println!("Sending SDU: source: {:?}  destination: {:?}", sdu.source_al_mac_address, sdu.destination_al_mac_address);
+            println!(
+                "Sending SDU: source: {:?}  destination: {:?}",
+                sdu.source_al_mac_address, sdu.destination_al_mac_address
+            );
 
             // Assertion for proper SDU delivery to transmitter
             assert_eq!(sdu.payload[0], MessageVersion::Version2013.to_u8());
@@ -176,10 +179,13 @@ async fn main() -> anyhow::Result<()> {
                 match res {
                     Ok(bytes) => {
                         tracing::trace!("Got some bytes: [{}] <{:?}>", bytes.len(), bytes);
-                        tracing::trace!("Expecting id {:?}",fragment_id_expected);
+                        tracing::trace!("Expecting id {:?}", fragment_id_expected);
                         match SDU::parse(&bytes) {
                             Ok(tuple) => {
-                                tracing::trace!("Bytes parsed to SDU. Left bytes {:?}",tuple.0.len());
+                                tracing::trace!(
+                                    "Bytes parsed to SDU. Left bytes {:?}",
+                                    tuple.0.len()
+                                );
                                 let fragment = tuple.1;
                                 tracing::trace!("SDU: {:?}", fragment);
                                 if fragment.is_fragment == 0 && fragment.is_last_fragment == 1 {
@@ -187,8 +193,15 @@ async fn main() -> anyhow::Result<()> {
                                     let complete_sdu = fragment.clone();
 
                                     tracing::debug!("Sending single message");
-                                    tracing::trace!("Got complete SDU [{}] <{complete_sdu:?}>", complete_sdu.payload.len());
-                                    send_echoed_packet(&mut framed_data_socket, complete_sdu.serialize()).await;
+                                    tracing::trace!(
+                                        "Got complete SDU [{}] <{complete_sdu:?}>",
+                                        complete_sdu.payload.len()
+                                    );
+                                    send_echoed_packet(
+                                        &mut framed_data_socket,
+                                        complete_sdu.serialize(),
+                                    )
+                                    .await;
                                     continue;
                                 }
 
@@ -199,8 +212,7 @@ async fn main() -> anyhow::Result<()> {
                                         fragment.fragment_id
                                     );
                                     panic!("Fragment out of order");
-                                }
-                                else{
+                                } else {
                                     tracing::trace!("Fragment id match!");
                                 }
 
@@ -223,7 +235,11 @@ async fn main() -> anyhow::Result<()> {
                                     final_message.payload = assembled_payload.clone();
                                     tracing::info!("Got reassembled SDU {final_message:?}");
                                     fragment_id_expected = 0;
-                                    send_echoed_packet(&mut framed_data_socket, final_message.serialize()).await;
+                                    send_echoed_packet(
+                                        &mut framed_data_socket,
+                                        final_message.serialize(),
+                                    )
+                                    .await;
                                     continue;
                                 }
                                 tracing::trace!("Increasing expected ID");

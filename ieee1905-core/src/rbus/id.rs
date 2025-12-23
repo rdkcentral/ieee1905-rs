@@ -1,5 +1,5 @@
 use crate::rbus::peek_topology_database;
-use rbus_core::{RBusError};
+use rbus_core::RBusError;
 use rbus_provider::element::property::{RBusProviderGetter, RBusProviderGetterArgs};
 
 ///

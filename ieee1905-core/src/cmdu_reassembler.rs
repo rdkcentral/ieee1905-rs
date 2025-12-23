@@ -17,27 +17,27 @@
  * limitations under the License.
 */
 
-use pnet::datalink::MacAddr;
-use tokio::sync::Mutex;
-use tokio::time::Duration;
-use tokio::task::JoinSet;
-use std::collections::{BTreeMap, HashMap};
-use std::collections::hash_map::Entry;
-use std::sync::Arc;
-use std::time::Instant;
-use tracing::{info_span, Instrument};
 use crate::cmdu::CMDU;
 use crate::next_task_id;
+use pnet::datalink::MacAddr;
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::Mutex;
+use tokio::task::JoinSet;
+use tokio::time::Duration;
+use tracing::{info_span, Instrument};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CmduReassemblyError {
     EmptyFragments,
     InconsistentMetadata,
-    MissingFragments,                   // Missing CMDU fragment in CMDU chain
-    MissingLastFragment,                // Missing last CMDU fragment with CMDU.flags == 0x80
+    MissingFragments,    // Missing CMDU fragment in CMDU chain
+    MissingLastFragment, // Missing last CMDU fragment with CMDU.flags == 0x80
     WaitingForMoreFragments,
-    MessageComplete,                    // The whole CMDU is completed
-    DuplicatedFragment                  // Duplicated value of fragment.fragment noticed
+    MessageComplete,    // The whole CMDU is completed
+    DuplicatedFragment, // Duplicated value of fragment.fragment noticed
 }
 
 #[derive(Debug, Clone)]
@@ -58,43 +58,61 @@ impl CmduReassembler {
         let buffer_clone = buffer.clone();
 
         let mut join_set = JoinSet::new();
-        join_set.spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(3));
+        join_set.spawn(
+            async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(3));
 
-            loop {
-                ticker.tick().await;
+                loop {
+                    ticker.tick().await;
 
-                let mut buffer = buffer_clone.lock().await;
-                let now = Instant::now();
+                    let mut buffer = buffer_clone.lock().await;
+                    let now = Instant::now();
 
-                buffer.retain(|key, entry| {
-                    let elapsed = now.duration_since(entry.first_received);
+                    buffer.retain(|key, entry| {
+                        let elapsed = now.duration_since(entry.first_received);
 
-                    if elapsed > Duration::from_secs(3) {
-                        if entry.fragments.is_empty() {
-                            tracing::error!("Reassembly error for {:?}: EmptyFragments", key);
-                        } else if !entry.fragments.values().any(|f| f.is_last_fragment()) {
-                            tracing::error!("Reassembly error for {:?}: MissingLastFragment", key);
-                        } else {
-                            let last_id = entry.fragments.keys().max().cloned().unwrap_or(0);
-                            if entry.fragments.len() < (last_id + 1) as usize {
-                                tracing::error!("Reassembly error for {:?}: MissingFragments", key);
+                        if elapsed > Duration::from_secs(3) {
+                            if entry.fragments.is_empty() {
+                                tracing::error!("Reassembly error for {:?}: EmptyFragments", key);
+                            } else if !entry.fragments.values().any(|f| f.is_last_fragment()) {
+                                tracing::error!(
+                                    "Reassembly error for {:?}: MissingLastFragment",
+                                    key
+                                );
+                            } else {
+                                let last_id = entry.fragments.keys().max().cloned().unwrap_or(0);
+                                if entry.fragments.len() < (last_id + 1) as usize {
+                                    tracing::error!(
+                                        "Reassembly error for {:?}: MissingFragments",
+                                        key
+                                    );
+                                }
                             }
+                            tracing::trace!("Other CMDU's did not arrive removing the reassembler");
+                            false // remove expired entry
+                        } else {
+                            tracing::trace!("Waiting for rest of the packets!");
+                            true // keep
                         }
-                        tracing::trace!("Other CMDU's did not arrive removing the reassembler");
-                        false // remove expired entry
-                    } else {
-                        tracing::trace!("Waiting for rest of the packets!");
-                        true // keep
-                    }
-                });
+                    });
+                }
             }
-        }.instrument(info_span!(parent: None, "cmdu_reassembler_cleaner", task = next_task_id())));
+            .instrument(
+                info_span!(parent: None, "cmdu_reassembler_cleaner", task = next_task_id()),
+            ),
+        );
 
-        Self { _join_set: join_set, buffer }
+        Self {
+            _join_set: join_set,
+            buffer,
+        }
     }
 
-    pub async fn push_fragment(&self, source_mac: MacAddr, fragment: CMDU) -> Option<Result<CMDU, CmduReassemblyError>> {
+    pub async fn push_fragment(
+        &self,
+        source_mac: MacAddr,
+        fragment: CMDU,
+    ) -> Option<Result<CMDU, CmduReassemblyError>> {
         tracing::trace!("Pushing fragments {fragment:?}");
         let key = (source_mac, fragment.message_id);
         let mut buffer = self.buffer.lock().await;
@@ -107,7 +125,10 @@ impl CmduReassembler {
             }),
         };
 
-        let inserted = entry.get_mut().fragments.insert(fragment.fragment, fragment.clone());
+        let inserted = entry
+            .get_mut()
+            .fragments
+            .insert(fragment.fragment, fragment.clone());
         if inserted.is_some() {
             tracing::trace!("Duplicated fragment: {:?}", fragment.fragment);
             return Some(Err(CmduReassemblyError::DuplicatedFragment));
@@ -125,15 +146,14 @@ impl CmduReassembler {
     }
 }
 
-
 #[cfg(test)]
 pub mod tests {
-    use tracing::{error, trace};
+    use super::*;
     use crate::cmdu::TLV;
     use crate::cmdu_codec::tests::make_dummy_cmdu;
-    use tokio::time::sleep;
     use crate::cmdu_codec::MessageVersion;
-    use super::*;
+    use tokio::time::sleep;
+    use tracing::{error, trace};
 
     // Create CMDU reassembler instance but don't push any fragments to it
     #[tokio::test]
@@ -164,14 +184,19 @@ pub mod tests {
             message_type: 0x04,
             message_id: 0x1122,
             fragment: 0,
-            flags: 0x00,     // last fragment flag is not set intentionally as this is not last fragment
+            flags: 0x00, // last fragment flag is not set intentionally as this is not last fragment
             payload: tlv.serialize(),
         };
 
         let cmdu_reasm = CmduReassembler::new();
 
         // Push the only fragment
-        let _ = cmdu_reasm.push_fragment(MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66), cmdu.clone()).await;
+        let _ = cmdu_reasm
+            .push_fragment(
+                MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66),
+                cmdu.clone(),
+            )
+            .await;
 
         // Expect one fragment in CMDU reassembler buffer before 3 seconds timeout elapsed
         assert!(!cmdu_reasm.buffer.lock().await.is_empty());
@@ -225,13 +250,33 @@ pub mod tests {
         let cmdu_reasm = CmduReassembler::new();
 
         // Add both CMDUs to CMDU reassembler buffer
-        let _ = cmdu_reasm.push_fragment(MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66), cmdu1.clone()).await;
-        let _ = cmdu_reasm.push_fragment(MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66), cmdu2.clone()).await;
+        let _ = cmdu_reasm
+            .push_fragment(
+                MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66),
+                cmdu1.clone(),
+            )
+            .await;
+        let _ = cmdu_reasm
+            .push_fragment(
+                MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66),
+                cmdu2.clone(),
+            )
+            .await;
 
         // Verify that there is one entry in HashMap for MAC: 11:22:33:44:55:66 and message_id 0x1122
         assert_eq!(cmdu_reasm.buffer.lock().await.len(), 1);
         // Verify that there are 2 entries in BTreeMap (2 CMDU fragments)
-        assert_eq!(cmdu_reasm.buffer.lock().await.get(&(MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66), 0x1122)).unwrap().fragments.len(), 2);
+        assert_eq!(
+            cmdu_reasm
+                .buffer
+                .lock()
+                .await
+                .get(&(MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66), 0x1122))
+                .unwrap()
+                .fragments
+                .len(),
+            2
+        );
 
         // Wait longer that 3 seconds of timeout of async from new()
         sleep(Duration::from_secs(4)).await;
@@ -248,9 +293,9 @@ pub mod tests {
         let mut cmdu2 = make_dummy_cmdu(vec![50, 60]);
 
         cmdu0.fragment = 0;
-        cmdu1.fragment = 2;         // skip fragment id == 1 to signal missed fragment 1
+        cmdu1.fragment = 2; // skip fragment id == 1 to signal missed fragment 1
         cmdu2.fragment = 3;
-        cmdu2.flags = 0x80;         // set last fragment flag
+        cmdu2.flags = 0x80; // set last fragment flag
 
         let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
         let fragments = vec![cmdu0, cmdu1, cmdu2];

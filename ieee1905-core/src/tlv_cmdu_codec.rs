@@ -19,18 +19,16 @@
 
 #![deny(warnings)]
 // External crates
+use nom::Err as NomErr;
 use nom::{
-    bytes::complete::take,      // Parses a specified number of bytes from the input.
-    error::ErrorKind,            // Represents specific parsing error types.
-    number::complete::{be_u8, be_u16}, // Parses unsigned integers in big-endian format.
-    IResult,                     // Represents the result of a parsing operation, either success or failure.
-};
-use nom::Err as NomErr;           // Alias for errors returned by `nom` parsers.
+    bytes::complete::take, // Parses a specified number of bytes from the input.
+    error::ErrorKind,      // Represents specific parsing error types.
+    number::complete::{be_u16, be_u8}, // Parses unsigned integers in big-endian format.
+    IResult, // Represents the result of a parsing operation, either success or failure.
+}; // Alias for errors returned by `nom` parsers.
 
 // Standard library
-use std::fmt::Debug;              // Allows the `TLV` struct to be formatted for debugging purposes.
-
-
+use std::fmt::Debug; // Allows the `TLV` struct to be formatted for debugging purposes.
 
 ///////////////////////////////////////////////////////////////////////////
 /// A `TLV` represents a single Type-Length-Value structure commonly used
@@ -73,8 +71,11 @@ impl TLV {
 
         // Ensure the remaining input is sufficient for the specified value length.
         if input.len() < tlv_length as usize {
-            tracing::error!("Expected {tlv_length} but got only {}",input.len());
-            return Err(NomErr::Failure(nom::error::Error::new(input, ErrorKind::LengthValue)));
+            tracing::error!("Expected {tlv_length} but got only {}", input.len());
+            return Err(NomErr::Failure(nom::error::Error::new(
+                input,
+                ErrorKind::LengthValue,
+            )));
         }
 
         // Extract the TLV value based on the parsed length.
@@ -116,8 +117,8 @@ impl TLV {
 
 #[cfg(test)]
 mod tests {
-    use nom::error::ErrorKind;
     use super::TLV;
+    use nom::error::ErrorKind;
 
     // Verify parsing of valid TLV with some payload
     #[test]
@@ -143,7 +144,7 @@ mod tests {
         let (remaining, tlv) = result.unwrap();
 
         // Expect successes
-        assert_eq!(remaining.len(),0);
+        assert_eq!(remaining.len(), 0);
         assert_eq!(tlv.tlv_type, 1);
         assert_eq!(tlv.tlv_length, 0);
         assert_eq!(tlv.tlv_value, None);
@@ -196,11 +197,11 @@ mod tests {
         // Expect ErrorKind::LengthValue error after parsing TLV
         match parsed {
             Ok(_) => {
-               panic!("Expected parsing to fail due to insufficient data, but it succeeded.")
+                panic!("Expected parsing to fail due to insufficient data, but it succeeded.")
             }
             Err(nom::Err::Failure(e)) => {
                 assert_eq!(e.code, ErrorKind::LengthValue);
-            },
+            }
             Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => {
                 panic!("Expected parsing to fail with LengthValue error, but it failed with a different error.");
             }

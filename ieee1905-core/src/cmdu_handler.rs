@@ -112,7 +112,8 @@ impl CMDUHandler {
         } else {
             cmdu.clone()
         };
-        self.dispatch_cmdu(cmdu_to_process, source_mac, destination_mac).await;
+        self.dispatch_cmdu(cmdu_to_process, source_mac, destination_mac)
+            .await;
         Ok(())
     }
 
@@ -137,10 +138,13 @@ impl CMDUHandler {
 
         match CMDUType::from_u16(cmdu.message_type) {
             CMDUType::TopologyDiscovery => {
-                self.handle_topology_discovery(&tlvs, message_id, source_mac).await;
+                self.handle_topology_discovery(&tlvs, message_id, source_mac)
+                    .await;
             }
             CMDUType::TopologyNotification => {
-                let handled = self.handle_topology_notification(&tlvs, message_id, source_mac).await;
+                let handled = self
+                    .handle_topology_notification(&tlvs, message_id, source_mac)
+                    .await;
                 if !handled {
                     if let Err(e) = self
                         .handle_sdu_from_cmdu_reception(
@@ -176,7 +180,9 @@ impl CMDUHandler {
                 }
             }
             CMDUType::TopologyResponse => {
-                let handled = self.handle_topology_response(&tlvs, message_id, source_mac).await;
+                let handled = self
+                    .handle_topology_response(&tlvs, message_id, source_mac)
+                    .await;
                 if !handled {
                     if let Err(e) = self
                         .handle_sdu_from_cmdu_reception(
@@ -330,7 +336,12 @@ impl CMDUHandler {
 
     /// Handles and logs TLVs for Topology Query.
     #[instrument(skip_all, name = "query")]
-    async fn handle_topology_query(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) -> bool {
+    async fn handle_topology_query(
+        &self,
+        tlvs: &[TLV],
+        message_id: u16,
+        source_mac: MacAddr,
+    ) -> bool {
         debug!(
             source = %source_mac,
             msg_id = message_id,
@@ -398,10 +409,8 @@ impl CMDUHandler {
 
         info!("Topology Query received from REMOTE_PORT_MAC={source_mac}");
 
-        let topology_db = TopologyDatabase::get_instance(
-            self.local_al_mac,
-            self.interface_name.clone(),
-        ).await;
+        let topology_db =
+            TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
 
         let device_data = if let Some(remote_al_mac) = remote_al_mac {
             Ieee1905DeviceData {
@@ -471,7 +480,12 @@ impl CMDUHandler {
 
     /// Handles and logs TLVs for Topology Response.
     #[instrument(skip_all, name = "response")]
-    async fn handle_topology_response(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) -> bool {
+    async fn handle_topology_response(
+        &self,
+        tlvs: &[TLV],
+        message_id: u16,
+        source_mac: MacAddr,
+    ) -> bool {
         debug!(
             source = %source_mac,
             msg_id = message_id,
@@ -544,16 +558,21 @@ impl CMDUHandler {
                 IEEE1905TLVType::Ieee1905NeighborDevices => {
                     if let Some(ref value) = tlv.tlv_value {
                         let devices_count = ((tlv.tlv_length - 6) / 7) as usize;
-                        if let Ok((_, parsed)) = Ieee1905NeighborDevice::parse(value, devices_count) {
-                            ieee_neighbors_map.insert(parsed.local_mac_address, parsed.neighborhood_list);
+                        if let Ok((_, parsed)) = Ieee1905NeighborDevice::parse(value, devices_count)
+                        {
+                            ieee_neighbors_map
+                                .insert(parsed.local_mac_address, parsed.neighborhood_list);
                         }
                     }
                 }
                 IEEE1905TLVType::NonIeee1905NeighborDevices => {
                     if let Some(ref value) = tlv.tlv_value {
                         let devices_count = (tlv.tlv_length - 6) / 6;
-                        if let Ok((_, parsed)) = NonIeee1905NeighborDevices::parse(value, devices_count) {
-                            non_ieee_neighbors_map.insert(parsed.local_mac_address, parsed.neighborhood_list);
+                        if let Ok((_, parsed)) =
+                            NonIeee1905NeighborDevices::parse(value, devices_count)
+                        {
+                            non_ieee_neighbors_map
+                                .insert(parsed.local_mac_address, parsed.neighborhood_list);
                         }
                     }
                 }
@@ -584,10 +603,8 @@ impl CMDUHandler {
             }
         }
 
-        let topology_db = TopologyDatabase::get_instance(
-            self.local_al_mac,
-            self.interface_name.clone(),
-        ).await;
+        let topology_db =
+            TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
 
         let Some(node) = topology_db.find_device_by_port(source_mac).await.clone() else {
             warn!(
@@ -617,12 +634,16 @@ impl CMDUHandler {
 
         if let Some(device_bridging_capability) = device_bridging_capability {
             let mut bridge_index_by_interface = HashMap::new();
-            for (index, macs) in device_bridging_capability.bridging_tuples_list.iter().enumerate() {
+            for (index, macs) in device_bridging_capability
+                .bridging_tuples_list
+                .iter()
+                .enumerate()
+            {
                 for mac in macs.bridging_mac_list.iter() {
                     bridge_index_by_interface.insert(mac, index as u32);
                 }
             }
-            
+
             for interface in interfaces.iter_mut() {
                 if let Some(bridge_index) = bridge_index_by_interface.get(&interface.mac) {
                     interface.bridging_flag = true;
@@ -691,7 +712,12 @@ impl CMDUHandler {
 
     /// Handles and logs TLVs from the CMDU payload for Topology Notification.
     #[instrument(skip_all, name = "notification")]
-    async fn handle_topology_notification(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) -> bool {
+    async fn handle_topology_notification(
+        &self,
+        tlvs: &[TLV],
+        message_id: u16,
+        source_mac: MacAddr,
+    ) -> bool {
         debug!(
             source = %source_mac,
             msg_id = message_id,
@@ -706,12 +732,7 @@ impl CMDUHandler {
 
         for (index, tlv) in tlvs.iter().enumerate() {
             let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
-            debug!(
-                index,
-                ?tlv_type,
-                length = tlv.tlv_length,
-                "Processing TLV"
-            );
+            debug!(index, ?tlv_type, length = tlv.tlv_length, "Processing TLV");
 
             match tlv_type {
                 IEEE1905TLVType::AlMacAddress => {
@@ -861,7 +882,11 @@ impl CMDUHandler {
                     end_of_message_found = true;
                     trace!("End of CMDU Message found");
                 }
-                _ => trace!("TLV Type: {:#x?}, Raw Data: {:?}", tlv.tlv_type, tlv.tlv_value),
+                _ => trace!(
+                    "TLV Type: {:#x?}, Raw Data: {:?}",
+                    tlv.tlv_type,
+                    tlv.tlv_value
+                ),
             }
         }
 
@@ -880,7 +905,9 @@ impl CMDUHandler {
 
         if let Some(updated_node) = topology_db.get_device(source_mac).await {
             trace!("Node: {updated_node:?}");
-            if updated_node.metadata.has_converged() && updated_node.device_data.al_mac != self.local_al_mac {
+            if updated_node.metadata.has_converged()
+                && updated_node.device_data.al_mac != self.local_al_mac
+            {
                 debug!(
                     remote= %source_mac,
                     metadata = ?updated_node.metadata,
@@ -911,7 +938,9 @@ impl CMDUHandler {
                 trace!("Sending SDU from CMDU: <{sdu:?}>");
                 service_access_point_data_indication(&sdu).await?;
             } else {
-                trace!("Skipping as not in converged mode or update device data equal to local al mac");
+                trace!(
+                    "Skipping as not in converged mode or update device data equal to local al mac"
+                );
             }
         } else {
             trace!("Cannot find device for {} topology_db", source_mac);

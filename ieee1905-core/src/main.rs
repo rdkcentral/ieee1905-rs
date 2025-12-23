@@ -31,16 +31,16 @@ use ieee1905::lldpdu_proxy::lldp_discovery_worker;
 use ieee1905::topology_manager::*;
 use ieee1905::{next_task_id, CMDUObserver};
 //use ieee1905::crypto_engine::CRYPTO_CONTEXT;
+use anyhow::anyhow;
 use std::sync::Arc;
 use std::time::Duration;
-use anyhow::anyhow;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::instrument;
-use tracing_subscriber::{prelude::*, EnvFilter};
 use tracing_appender::rolling;
 use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -192,7 +192,7 @@ fn main() -> anyhow::Result<()> {
         runtime.shutdown_timeout(Duration::from_secs(2));
         tracing::info!("Runtime released");
     }
-    
+
     tracing::info!("Closing app.");
     Ok(())
 }
@@ -211,11 +211,9 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
             "eth_default".to_string() // Default interface name if none found
         };
 
-
     // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
-    let al_mac = get_local_al_mac(cli.interface.clone()).ok_or_else(|| {
-        anyhow!("failed to get local al mac")
-    })?;
+    let al_mac = get_local_al_mac(cli.interface.clone())
+        .ok_or_else(|| anyhow!("failed to get local al mac"))?;
     tracing::info!("AL MAC address: {}", al_mac);
 
     // // Initialize Database
@@ -246,7 +244,10 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     // Initialize Ethernet Sender
 
     let forwarding_interface_tx = forwarding_interface.clone();
-    let sender = Arc::new(EthernetSender::new(&forwarding_interface_tx, Arc::clone(&mutex_tx)));
+    let sender = Arc::new(EthernetSender::new(
+        &forwarding_interface_tx,
+        Arc::clone(&mutex_tx),
+    ));
 
     // Initialization for adaptation layer SAP
 
@@ -277,7 +278,7 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
             al_mac,
             forwarding_interface.clone(),
         )
-            .await,
+        .await,
     );
 
     // Initialize CMDU Observer
@@ -301,14 +302,23 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     // Sart of the discovery process
 
     for interface in get_physical_ethernet_interfaces() {
-        tracing::info!("Starting LLDP Discovery on {}/{}", interface.name, interface.mac);
+        tracing::info!(
+            "Starting LLDP Discovery on {}/{}",
+            interface.name,
+            interface.mac
+        );
 
         let mut lldp_receiver = EthernetReceiver::new();
         lldp_receiver.subscribe(lldp_observer.clone());
         join_sets.push(lldp_receiver.run(&interface.name)?);
 
         let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx));
-        tokio::task::spawn(lldp_discovery_worker(lldp_sender, chassis_id, interface.mac, interface.name));
+        tokio::task::spawn(lldp_discovery_worker(
+            lldp_sender,
+            chassis_id,
+            interface.mac,
+            interface.name,
+        ));
     }
 
     let discovery_interface_ieee1905 = forwarding_interface.clone();

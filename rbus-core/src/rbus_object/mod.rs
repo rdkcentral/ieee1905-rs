@@ -1,7 +1,7 @@
+use crate::RBusValue;
 use crate::rbus_property::RBusProperty;
 use rbus_sys::*;
 use std::ffi::CStr;
-use crate::RBusValue;
 
 #[repr(transparent)]
 pub struct RBusObject(pub(super) rbusObject_t);
