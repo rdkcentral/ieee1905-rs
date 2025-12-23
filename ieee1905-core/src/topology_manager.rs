@@ -26,19 +26,19 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use pnet::datalink::MacAddr;
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Row, Table},
+    Terminal,
+};
 use tokio::{
     sync::{OnceCell, RwLock},
     task::yield_now,
     time::{interval, Duration, Instant},
 };
 use tracing::{debug, error, info, instrument, warn};
-use tui::{
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    text::{Span, Spans},
-    widgets::{Block, Borders, Paragraph, Row, Table},
-    Terminal,
-};
 // Standard library
 use indexmap::IndexMap;
 use std::{io, sync::Arc};
@@ -809,7 +809,7 @@ impl TopologyDatabase {
                         Constraint::Min(10),
                         Constraint::Length(3),
                     ])
-                    .split(f.size());
+                    .split(f.area());
 
                 // ─────────────────────── BLOQUE 1: TOPOLOGY MANAGER
                 let block1 = Block::default()
@@ -817,24 +817,24 @@ impl TopologyDatabase {
                     .borders(Borders::ALL);
 
                 let mut lines = vec![
-                    Spans::from(vec![Span::raw(format!("Local AL MAC: {local_mac}"))]),
-                    Spans::from(vec![Span::raw("Interfaces:")]),
+                    Line::from(vec![Span::raw(format!("Local AL MAC: {local_mac}"))]),
+                    Line::from(vec![Span::raw("Interfaces:")]),
                 ];
 
                 if let Some(interface_list) = &interfaces {
                     for iface in interface_list {
-                        lines.push(Spans::from(vec![Span::raw(format!(
+                        lines.push(Line::from(vec![Span::raw(format!(
                             "- MAC: {}, MediaType: {}",
                             iface.mac, iface.media_type,
                         ))]));
                     }
                 } else {
-                    lines.push(Spans::from(vec![Span::raw("- No interfaces available")]));
+                    lines.push(Line::from(vec![Span::raw("- No interfaces available")]));
                 }
 
                 let paragraph1 = Paragraph::new(lines)
                     .block(block1)
-                    .wrap(tui::widgets::Wrap { trim: true });
+                    .wrap(ratatui::widgets::Wrap { trim: true });
 
                 f.render_widget(paragraph1, chunks[0]);
 
@@ -887,19 +887,9 @@ impl TopologyDatabase {
                     ])
                 });
 
-                let table = Table::new(rows)
-                    .header(Row::new(vec![
-                        "AL MAC",
-                        "StateLocal",
-                        "StateRemote",
-                        "Last Seen",
-                        "DestinationMac",
-                        "LLDP",
-                        "Interface",
-                        "Media Type",
-                    ]))
-                    .block(block2)
-                    .widths(&[
+                let table = Table::new(
+                    rows,
+                    &[
                         Constraint::Length(20),
                         Constraint::Length(25),
                         Constraint::Length(25),
@@ -908,17 +898,29 @@ impl TopologyDatabase {
                         Constraint::Length(20),
                         Constraint::Length(20),
                         Constraint::Length(25),
-                    ])
-                    .column_spacing(1);
+                    ],
+                )
+                .header(Row::new(vec![
+                    "AL MAC",
+                    "StateLocal",
+                    "StateRemote",
+                    "Last Seen",
+                    "DestinationMac",
+                    "LLDP",
+                    "Interface",
+                    "Media Type",
+                ]))
+                .block(block2)
+                .column_spacing(1);
 
                 f.render_widget(table, chunks[1]);
 
                 //Footer
                 let block3 = Block::default().borders(Borders::ALL);
                 let paragraph3 =
-                    Paragraph::new(vec![Spans::from(vec![Span::raw("Press 'q' to quit.")])])
+                    Paragraph::new(vec![Line::from(vec![Span::raw("Press 'q' to quit.")])])
                         .block(block3)
-                        .wrap(tui::widgets::Wrap { trim: true });
+                        .wrap(ratatui::widgets::Wrap { trim: true });
 
                 f.render_widget(paragraph3, chunks[2]);
             })?;
