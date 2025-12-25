@@ -170,12 +170,9 @@ fn main() -> anyhow::Result<()> {
     //We need to insert the PIN value to access softHSM2 as env variable or hardcoded
 
     #[cfg(feature = "rbus")]
-    {
-        let rbus_handle = ieee1905::rbus::RBusConnection::open();
-        if let Err(e) = rbus_handle {
-            tracing::error!("failed to open RBus connection: {e}");
-        }
-    }
+    let _rbus_handle = ieee1905::rbus::RBusConnection::open().inspect_err(|e| {
+        tracing::error!("failed to open RBus connection: {e}");
+    });
 
     loop {
         tracing::info!("Starting runtime");

@@ -52,7 +52,10 @@ where
         mut path: &[&BStr],
         args: RBusProviderGetterArgsInner<'_, Self::UserData>,
     ) -> Result<(), RBusProviderElementError> {
-        if path.split_off_first() != Some(&self.name.as_ref()) {
+        let Some(path_name) = path.split_off_first() else {
+            return Err(RBusProviderElementError::WrongElement);
+        };
+        if path_name != &self.name.as_ref() {
             return Err(RBusProviderElementError::WrongElement);
         }
         if !path.is_empty() {
@@ -62,6 +65,7 @@ where
         }
         self.getter.get(RBusProviderGetterArgs {
             property: args.property,
+            path_name,
             path_full: args.path_full,
             path_chunks: args.path_chunks,
             table_idx: args.table_idx,
@@ -89,6 +93,7 @@ where
 ///
 pub struct RBusProviderGetterArgs<'a, UserData> {
     pub property: &'a RBusProperty,
+    pub path_name: &'a BStr,
     pub path_full: &'a BStr,
     pub path_chunks: &'a [&'a BStr],
     pub table_idx: &'a [u32],

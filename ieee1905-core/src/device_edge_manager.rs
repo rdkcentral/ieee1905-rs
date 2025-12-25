@@ -132,6 +132,7 @@ pub async fn update_edge_devices(al_mac: MacAddr, interface_name: String) {
                 al_mac,
                 destination_frame_mac: al_mac,
                 destination_mac: node.device_data.destination_mac,
+                local_interface_mac: MacAddr::default(),
                 local_interface_list: Some(updated_interfaces),
                 registry_role: None,
             };

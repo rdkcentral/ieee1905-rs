@@ -69,7 +69,7 @@ impl EthernetFrameObserver for CMDUObserver {
                 tokio::task::spawn(
                     async move {
                         if let Err(e) = handler
-                            .handle_cmdu(&cmdu, source_mac, destination_mac)
+                            .handle_cmdu(&cmdu, source_mac, destination_mac, interface_mac)
                             .await
                         {
                             error!("Failed to handle CMDU: {e:?}");
