@@ -18,6 +18,7 @@
 */
 
 #![deny(warnings)]
+
 use clap::Parser;
 use ieee1905::al_sap::AlServiceAccessPoint;
 use ieee1905::cmdu_handler::*;
@@ -30,6 +31,7 @@ use ieee1905::lldpdu_observer::LLDPObserver;
 use ieee1905::lldpdu_proxy::lldp_discovery_worker;
 use ieee1905::topology_manager::*;
 use ieee1905::{next_task_id, CMDUObserver};
+use std::ops::Not;
 //use ieee1905::crypto_engine::CRYPTO_CONTEXT;
 use anyhow::anyhow;
 use std::sync::Arc;
@@ -78,88 +80,10 @@ fn main() -> anyhow::Result<()> {
     // Start the Tokio console subscriber
     std::env::set_var("RUST_CONSOLE_BIND", "0.0.0.0:6669");
 
-    // Modify this filter for your tracing during run time
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(cli.filter.clone())); //add 'tokio=trace' to debug the runtime
-
-    // To show logs in stdout
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_target(true)
-        .with_level(true)
-        .with_span_events(FmtSpan::CLOSE);
-
-    let file_appender = rolling::daily("logs", "app.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(non_blocking)
-        .with_target(true)
-        .with_level(true)
-        .with_span_events(FmtSpan::CLOSE);
-
-    #[cfg(feature = "enable_tokio_console")]
-    {
-        // To register your tracing
-        if cli.console_subscriber {
-            if cli.topology_ui {
-                tracing_subscriber::registry()
-                    .with(file_layer)
-                    .with(filter)
-                    .with(console_subscriber::spawn())
-                    .init();
-            } else {
-                tracing_subscriber::registry()
-                    .with(file_layer)
-                    .with(filter)
-                    .with(fmt_layer)
-                    .with(console_subscriber::spawn())
-                    .init();
-            }
-        } else {
-            if cli.topology_ui {
-                tracing_subscriber::registry()
-                    .with(file_layer)
-                    .with(filter)
-                    .init();
-            } else {
-                tracing_subscriber::registry()
-                    .with(file_layer)
-                    .with(filter)
-                    .with(fmt_layer)
-                    .init();
-            }
-        }
-    }
-
-    #[cfg(not(feature = "enable_tokio_console"))]
-    {
-        tracing::info!("Tokio console: Disabled");
-        if cli.topology_ui {
-            tracing_subscriber::registry()
-                .with(file_layer)
-                .with(filter)
-                //.with(fmt_layer)
-                .init();
-        } else {
-            tracing_subscriber::registry()
-                .with(file_layer)
-                .with(filter)
-                .with(fmt_layer)
-                .init();
-        }
-    }
-
-    tracing::debug!("Logger initialized with RUST_LOG."); // Start your application tracing
-
+    let _guard = init_logger(&cli);
     tracing::info!("Tracing initialized!");
 
     tracing::info!("Fragmentation type: SIZE BASED");
-
-    #[cfg(feature = "enable_tokio_console")]
-    tracing::info!("Tokio console: Enabled");
-
-    #[cfg(not(feature = "enable_tokio_console"))]
-    tracing::info!("Tokio console: Disabled");
 
     tracing::info!("TOPOLOGY_UI {:?}", cli.topology_ui);
 
@@ -195,6 +119,47 @@ fn main() -> anyhow::Result<()> {
 
     tracing::info!("Closing app.");
     Ok(())
+}
+
+fn init_logger(cli: &CliArgs) -> impl Drop {
+    // modify this filter for your tracing during run time
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&cli.filter));
+
+    // logging to stdout
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_level(true)
+        .with_span_events(FmtSpan::CLOSE);
+
+    // logging to fs
+    let file_appender = rolling::daily("logs", "app.log");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_target(true)
+        .with_level(true)
+        .with_span_events(FmtSpan::CLOSE);
+
+    // combined logger
+    let logging_layer = file_layer.and_then(cli.topology_ui.not().then_some(fmt_layer));
+
+    #[cfg(feature = "enable_tokio_console")]
+    if cli.console_subscriber {
+        tracing::info!("Tokio console: Enabled");
+        tracing_subscriber::registry()
+            .with(logging_layer.with_filter(filter))
+            .with(console_subscriber::spawn())
+            .init();
+        return guard;
+    }
+
+    tracing::info!("Tokio console: Disabled");
+    tracing_subscriber::registry()
+        .with(logging_layer)
+        .with(filter)
+        .init();
+    guard
 }
 
 #[instrument(skip_all, name = "main", fields(task = next_task_id()))]
