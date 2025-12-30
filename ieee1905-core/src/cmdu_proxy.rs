@@ -20,7 +20,9 @@ use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
-use crate::topology_manager::{StateLocal, StateRemote, TopologyDatabase, UpdateType};
+use crate::topology_manager::{
+    Ieee1905Node, StateLocal, StateRemote, TopologyDatabase, UpdateType,
+};
 use crate::SDU;
 use crate::{next_task_id, MessageIdGenerator};
 use pnet::datalink::MacAddr;
@@ -603,6 +605,158 @@ pub fn cmdu_topology_notification_transmission(
             info_span!(parent: None, "cmdu_notification_transmission", task = next_task_id()),
         ),
     );
+}
+
+#[instrument(skip_all, name = "cmdu_link_metric_response_transmission", fields(task = next_task_id()))]
+pub async fn cmdu_link_metric_response_transmission(
+    interface: String,
+    sender: Arc<EthernetSender>,
+    message_id: u16,
+    local_al_mac_address: MacAddr,
+    remote_al_mac_address: MacAddr,
+    include_rx: bool,
+    include_tx: bool,
+    neighbors: Vec<Ieee1905Node>,
+) {
+    debug!(
+        %interface,
+        message_id,
+        "Creating CMDU Link Metric Response"
+    );
+
+    // Retrieve device data from the topology database
+    let topology_db = TopologyDatabase::get_instance(local_al_mac_address, interface.clone()).await;
+    let Some(node) = topology_db.get_device(remote_al_mac_address).await else {
+        debug!("Could not find node in topology database for AL_MAC={remote_al_mac_address}");
+        return;
+    };
+
+    let source_mac = topology_db.get_forwarding_interface_mac().await;
+    let target_mac = node.device_data.destination_frame_mac;
+
+    let mut tlvs = Vec::new();
+    for neighbor in neighbors {
+        let local_interfaces = topology_db.local_interface_list.read().await;
+        let local_interfaces = local_interfaces.as_deref().unwrap_or_default();
+        let Some(interface) = local_interfaces.iter().find(|e| e.mac == source_mac) else {
+            warn!("Could not find local interface with mac {source_mac}");
+            continue;
+        };
+
+        let link_stats = interface.link_stats.unwrap_or_default();
+        let neighbour_if1 = neighbor.device_data.destination_mac;
+        let neighbour_if2 = neighbor.device_data.destination_frame_mac;
+        let neighbour_if = neighbour_if1.unwrap_or(neighbour_if2);
+
+        fn to_u16_sat(value: u64) -> u16 {
+            u16::try_from(value).unwrap_or(u16::MAX)
+        }
+
+        fn to_u32_sat(value: u64) -> u32 {
+            u32::try_from(value).unwrap_or(u32::MAX)
+        }
+
+        if include_rx {
+            let pair = LinkMetricRxPair {
+                receiver_interface_mac: interface.mac,
+                neighbour_interface_mac: neighbour_if,
+                interface_type: interface.media_type,
+                packet_errors: to_u32_sat(link_stats.rx_errors),
+                transmitted_packets: to_u32_sat(link_stats.rx_packets),
+                rssi: interface.signal_strength_dbm.unwrap_or(0xffu8 as i8),
+            };
+
+            let metric = LinkMetricRx {
+                source_al_mac: local_al_mac_address,
+                neighbour_al_mac: neighbor.device_data.al_mac,
+                interface_pairs: vec![pair],
+            };
+
+            let metric_buf = metric.serialize();
+            tlvs.push(TLV {
+                tlv_type: IEEE1905TLVType::LinkMetricRx.to_u8(),
+                tlv_length: metric_buf.len() as u16,
+                tlv_value: Some(metric_buf),
+            })
+        }
+
+        if include_tx {
+            let phy_rate = to_u16_sat(interface.phy_rate.unwrap_or_default() / 1_000_000);
+            let pair = LinkMetricTxPair {
+                receiver_interface_mac: interface.mac,
+                neighbour_interface_mac: neighbour_if,
+                interface_type: interface.media_type,
+                has_more_ieee802_bridges: interface.bridging_flag.into(),
+                packet_errors: to_u32_sat(link_stats.tx_errors),
+                transmitted_packets: to_u32_sat(link_stats.tx_packets),
+                mac_throughput_capacity: phy_rate,
+                link_availability: interface.link_availability.unwrap_or(100).into(),
+                phy_rate,
+            };
+
+            let metric = LinkMetricTx {
+                source_al_mac: local_al_mac_address,
+                neighbour_al_mac: neighbor.device_data.al_mac,
+                interface_pairs: vec![pair],
+            };
+
+            let metric_buf = metric.serialize();
+            tlvs.push(TLV {
+                tlv_type: IEEE1905TLVType::LinkMetricTx.to_u8(),
+                tlv_length: metric_buf.len() as u16,
+                tlv_value: Some(metric_buf),
+            })
+        }
+    }
+
+    // End of message TLV
+    tlvs.push(TLV {
+        tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
+        tlv_length: 0,
+        tlv_value: None,
+    });
+
+    // Construct CMDU
+    let cmdu = CMDU {
+        message_version: MessageVersion::Version2013.to_u8(),
+        reserved: 0,
+        message_type: CMDUType::LinkMetricResponse.to_u16(),
+        message_id,
+        fragment: 0,
+        flags: 0x80,
+        payload: tlvs.iter().map(TLV::serialize).flatten().collect(),
+    };
+
+    let serialized_cmdu = cmdu.serialize();
+    debug!(
+        message_id,
+        ?serialized_cmdu,
+        "Serialized CMDU for Link Metric Response"
+    );
+
+    // Send the CMDU via EthernetSender
+    match sender
+        .enqueue_frame(
+            target_mac,
+            source_mac,
+            EthernetSender::ETHER_TYPE,
+            serialized_cmdu,
+        )
+        .await
+    {
+        Ok(()) => debug!(
+            interface,
+            message_id,
+            al_mac = %local_al_mac_address,
+            "CMDU Link Metric Response sent successfully",
+        ),
+        Err(e) => error!(
+            interface,
+            message_id,
+            al_mac = %local_al_mac_address,
+            "Failed to send CMDU Link Metric Response: {e}",
+        ),
+    }
 }
 
 pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>, sdu: SDU) {
