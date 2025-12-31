@@ -263,6 +263,7 @@ pub struct Ieee1905DeviceData {
     pub al_mac: MacAddr,
     pub destination_frame_mac: MacAddr,
     pub destination_mac: Option<MacAddr>,
+    pub local_interface_mac: MacAddr,
     pub local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
     pub registry_role: Option<Role>,
 }
@@ -273,6 +274,7 @@ impl Ieee1905DeviceData {
         al_mac: MacAddr,
         destination_frame_mac: MacAddr,
         destination_mac: Option<MacAddr>,
+        local_interface_mac: MacAddr,
         local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
         registry_role: Option<Role>,
     ) -> Self {
@@ -280,6 +282,7 @@ impl Ieee1905DeviceData {
             al_mac,
             destination_frame_mac,
             destination_mac,
+            local_interface_mac,
             local_interface_list,
             registry_role,
         }
@@ -583,6 +586,7 @@ impl TopologyDatabase {
                     if let Some(device_vendor) = device_vendor {
                         node.metadata.device_vendor = device_vendor;
                     }
+                    node.device_data.local_interface_mac = device_data.local_interface_mac;
 
                     transmission_event = match operation {
                         UpdateType::DiscoveryReceived => {
@@ -970,6 +974,7 @@ mod tests {
             device_al_mac,
             device_al_mac,
             Some(device_mac),
+            db.local_mac.read().await.clone(),
             Some(vec![interface]),
             None,
         );

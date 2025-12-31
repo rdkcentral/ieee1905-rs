@@ -1309,6 +1309,11 @@ impl MediaType {
     pub const WIRELESS_802_11af: Self = Self(0x0107);
     pub const WIRELESS_802_11ax: Self = Self(0x0108);
     pub const WIRELESS_802_11be: Self = Self(0x0109);
+    // IEEE 1901
+    pub const IEEE_1901_Wavelet: Self = Self(0x0200);
+    pub const IEEE_1901_FFT: Self = Self(0x0201);
+    // MoCA
+    pub const MoCA_1_1: Self = Self(0x0300);
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, value) = be_u16(input)?;

@@ -67,6 +67,7 @@ impl CMDUHandler {
         cmdu: &CMDU,
         source_mac: MacAddr,
         destination_mac: MacAddr,
+        local_interface_mac: MacAddr,
     ) -> anyhow::Result<()> {
         trace!(
             src = %source_mac,
@@ -112,16 +113,28 @@ impl CMDUHandler {
         } else {
             cmdu.clone()
         };
-        self.dispatch_cmdu(cmdu_to_process, source_mac, destination_mac)
-            .await;
+
+        self.dispatch_cmdu(
+            cmdu_to_process,
+            source_mac,
+            destination_mac,
+            local_interface_mac,
+        ).await;
         Ok(())
     }
 
     /// Handles a parsed CMDU, logs details, and extracts TLVs.
-    async fn dispatch_cmdu(&self, cmdu: CMDU, source_mac: MacAddr, destination_mac: MacAddr) {
+    async fn dispatch_cmdu(
+        &self,
+        cmdu: CMDU,
+        source_mac: MacAddr,
+        destination_mac: MacAddr,
+        local_interface_mac: MacAddr,
+    ) {
         trace!(
             src = %source_mac,
             dst = %destination_mac,
+            local_if = %local_interface_mac,
             ?cmdu,
             "Dispatch CMDU",
         );
@@ -138,13 +151,21 @@ impl CMDUHandler {
 
         match CMDUType::from_u16(cmdu.message_type) {
             CMDUType::TopologyDiscovery => {
-                self.handle_topology_discovery(&tlvs, message_id, source_mac)
-                    .await;
+                self.handle_topology_discovery(
+                    &tlvs,
+                    message_id,
+                    source_mac,
+                    local_interface_mac,
+                ).await;
             }
             CMDUType::TopologyNotification => {
-                let handled = self
-                    .handle_topology_notification(&tlvs, message_id, source_mac)
-                    .await;
+                let handled = self.handle_topology_notification(
+                    &tlvs,
+                    message_id,
+                    source_mac,
+                    local_interface_mac,
+                ).await;
+
                 if !handled {
                     if let Err(e) = self
                         .handle_sdu_from_cmdu_reception(
@@ -161,9 +182,13 @@ impl CMDUHandler {
                 }
             }
             CMDUType::TopologyQuery => {
-                let handled = self
-                    .handle_topology_query(&tlvs, message_id, source_mac)
-                    .await;
+                let handled = self.handle_topology_query(
+                    &tlvs,
+                    message_id,
+                    source_mac,
+                    local_interface_mac,
+                ).await;
+
                 if !handled {
                     if let Err(e) = self
                         .handle_sdu_from_cmdu_reception(
@@ -180,9 +205,13 @@ impl CMDUHandler {
                 }
             }
             CMDUType::TopologyResponse => {
-                let handled = self
-                    .handle_topology_response(&tlvs, message_id, source_mac)
-                    .await;
+                let handled = self.handle_topology_response(
+                    &tlvs,
+                    message_id,
+                    source_mac,
+                    local_interface_mac,
+                ).await;
+
                 if !handled {
                     if let Err(e) = self
                         .handle_sdu_from_cmdu_reception(
@@ -223,7 +252,13 @@ impl CMDUHandler {
 
     /// Handles and logs TLVs from the CMDU payload for Topology Discovery.
     #[instrument(skip_all, name = "discovery")]
-    async fn handle_topology_discovery(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) {
+    async fn handle_topology_discovery(
+        &self,
+        tlvs: &[TLV],
+        message_id: u16,
+        source_mac: MacAddr,
+        local_interface_mac: MacAddr,
+    ) {
         debug!(
             source = %source_mac,
             msg_id = message_id,
@@ -279,6 +314,7 @@ impl CMDUHandler {
                 al_mac: remote_al_mac_address,
                 destination_frame_mac: source_mac,
                 destination_mac: Some(neighbor_interface_mac_address),
+                local_interface_mac,
                 local_interface_list: None,
                 registry_role: None,
             };
@@ -341,6 +377,7 @@ impl CMDUHandler {
         tlvs: &[TLV],
         message_id: u16,
         source_mac: MacAddr,
+        local_interface_mac: MacAddr,
     ) -> bool {
         debug!(
             source = %source_mac,
@@ -417,6 +454,7 @@ impl CMDUHandler {
                 al_mac: remote_al_mac,
                 destination_frame_mac: source_mac,
                 destination_mac: None,
+                local_interface_mac,
                 local_interface_list: None,
                 registry_role: None,
             }
@@ -485,6 +523,7 @@ impl CMDUHandler {
         tlvs: &[TLV],
         message_id: u16,
         source_mac: MacAddr,
+        local_interface_mac: MacAddr,
     ) -> bool {
         debug!(
             source = %source_mac,
@@ -657,6 +696,7 @@ impl CMDUHandler {
             al_mac: remote_al_mac,
             destination_frame_mac: source_mac,
             destination_mac: None,
+            local_interface_mac,
             local_interface_list: Some(interfaces.clone()),
             registry_role: None,
         };
@@ -717,6 +757,7 @@ impl CMDUHandler {
         tlvs: &[TLV],
         message_id: u16,
         source_mac: MacAddr,
+        local_interface_mac: MacAddr,
     ) -> bool {
         debug!(
             source = %source_mac,
@@ -803,6 +844,7 @@ impl CMDUHandler {
             al_mac: remote_al_mac_address,
             destination_frame_mac: source_mac,
             destination_mac: None,
+            local_interface_mac,
             local_interface_list: None,
             registry_role: None,
         };
@@ -1262,7 +1304,7 @@ mod tests {
 
         // Expect panic in handle_cmdu() as the CMDU size is prepared to have 1501 bytes
         assert!(cmdu_handler
-            .handle_cmdu(&cmdu, source_mac, destination_mac)
+            .handle_cmdu(&cmdu, source_mac, destination_mac, destination_mac)
             .await
             .is_err());
     }
