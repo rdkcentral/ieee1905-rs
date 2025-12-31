@@ -1,16 +1,12 @@
 #![allow(non_camel_case_types)]
 
 use crate::cmdu_codec::MediaType;
-use crate::rbus::id::RBus_Ieee1905Id;
+use crate::rbus::al_device::RBus_Al_Device;
 use crate::rbus::interface::RBus_Interface;
-use crate::rbus::interface_len::RBus_InterfaceNumberOfEntries;
 use crate::rbus::interface_link::RBus_InterfaceLink;
-use crate::rbus::interface_link_len::RBus_InterfaceLinksLen;
 use crate::rbus::nt_device::RBus_NetworkTopology_Ieee1905Device;
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
-use crate::rbus::nt_device_bridge_len::RBus_NetworkTopology_Ieee1905Device_BridgingTupleNumberOfEntries;
 use crate::rbus::nt_device_bridge_list::RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList;
-use crate::rbus::nt_device_id::RBus_NetworkTopology_Ieee1905Device_Ieee1905Id;
 use crate::TopologyDatabase;
 use anyhow::bail;
 use pnet::datalink::MacAddr;
@@ -23,16 +19,12 @@ use rbus_provider::provider::{RBusProvider, RBusProviderError};
 use std::sync::Arc;
 use tracing::{debug, info, instrument, warn};
 
-mod id;
+mod al_device;
 mod interface;
-mod interface_len;
 mod interface_link;
-mod interface_link_len;
 mod nt_device;
 mod nt_device_bridge;
-mod nt_device_bridge_len;
 mod nt_device_bridge_list;
-mod nt_device_id;
 
 ///
 /// Connection to RBus component
@@ -78,12 +70,12 @@ impl RBusConnection {
     #[rustfmt::skip]
     fn register_nested() -> impl RBusProviderElement {
         (
-            rbus_property("IEEE1905Id", RBus_Ieee1905Id),
-            rbus_property("InterfaceNumberOfEntries", RBus_InterfaceNumberOfEntries),
+            rbus_property("IEEE1905Id", RBus_Al_Device),
+            rbus_property("InterfaceNumberOfEntries", RBus_Al_Device),
             rbus_table("Interface", RBus_Interface, (
                 rbus_property("InterfaceId", RBus_Interface),
                 rbus_property("MediaType", RBus_Interface),
-                rbus_property("LinkNumberOfEntries", RBus_InterfaceLinksLen),
+                rbus_property("LinkNumberOfEntries", RBus_Interface),
                 rbus_table("Link", RBus_InterfaceLink, (
                     rbus_property("IEEE1905Id", RBus_InterfaceLink),
                     rbus_property("InterfaceId", RBus_InterfaceLink),
@@ -92,8 +84,8 @@ impl RBusConnection {
             )),
             rbus_object("NetworkTopology", (
                 rbus_table("IEEE1905Device", RBus_NetworkTopology_Ieee1905Device, (
-                    rbus_property("IEEE1905Id", RBus_NetworkTopology_Ieee1905Device_Ieee1905Id),
-                    rbus_property("BridgingTupleNumberOfEntries", RBus_NetworkTopology_Ieee1905Device_BridgingTupleNumberOfEntries),
+                    rbus_property("IEEE1905Id", RBus_NetworkTopology_Ieee1905Device),
+                    rbus_property("BridgingTupleNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
                     rbus_table("BridgingTuple", RBus_NetworkTopology_Ieee1905Device_BridgingTuple, (
                         rbus_property("InterfaceList", RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList),
                     ))

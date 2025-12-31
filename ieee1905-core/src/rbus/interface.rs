@@ -1,3 +1,4 @@
+use crate::rbus::interface_link::RBus_InterfaceLink;
 use crate::rbus::{format_mac_address, format_media_type, peek_topology_database};
 use nom::AsBytes;
 use rbus_core::RBusError;
@@ -8,6 +9,7 @@ use rbus_provider::element::table::{RBusProviderTableSync, RBusProviderTableSync
 /// Device.IEEE1905.AL.Interface.{i}.
 /// - InterfaceId
 /// - MediaType
+/// - LinkNumberOfEntries
 ///
 pub struct RBus_Interface;
 
@@ -43,6 +45,12 @@ impl RBusProviderGetter for RBus_Interface {
             }
             b"MediaType" => {
                 args.property.set(format_media_type(interface.media_type));
+                Ok(())
+            }
+            b"LinkNumberOfEntries" => {
+                let nodes = db.nodes.blocking_read();
+                let iter = RBus_InterfaceLink::iter_links_by_interface(nodes.values(), interface);
+                args.property.set(&(iter.count() as u32));
                 Ok(())
             }
             _ => Err(RBusError::ElementDoesNotExists),

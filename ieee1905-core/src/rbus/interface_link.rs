@@ -1,5 +1,5 @@
 use crate::rbus::{format_mac_address, format_media_type, peek_topology_database};
-use crate::topology_manager::Ieee1905DeviceData;
+use crate::topology_manager::{Ieee1905DeviceData, Ieee1905InterfaceData, Ieee1905Node};
 use crate::TopologyDatabase;
 use nom::AsBytes;
 use rbus_core::RBusError;
@@ -30,12 +30,15 @@ impl RBus_InterfaceLink {
         };
 
         let nodes = db.nodes.blocking_read();
-        let nodes = nodes
-            .values()
-            .filter(|e| e.device_data.local_interface_mac == local_interface.mac)
-            .map(|e| e.device_data.clone());
+        let nodes = Self::iter_links_by_interface(nodes.values(), local_interface);
+        Ok(nodes.map(|e| e.device_data.clone()).collect())
+    }
 
-        Ok(nodes.collect())
+    pub fn iter_links_by_interface<'a>(
+        nodes: impl Iterator<Item = &'a Ieee1905Node>,
+        interface: &'a Ieee1905InterfaceData,
+    ) -> impl Iterator<Item = &'a Ieee1905Node> {
+        nodes.filter(|e| e.device_data.local_interface_mac == interface.mac)
     }
 }
 

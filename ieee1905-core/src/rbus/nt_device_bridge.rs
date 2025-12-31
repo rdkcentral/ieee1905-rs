@@ -1,4 +1,5 @@
 use crate::rbus::peek_topology_database;
+use crate::topology_manager::Ieee1905Node;
 use indexmap::IndexMap;
 use rbus_core::RBusError;
 use rbus_provider::element::table::{RBusProviderTableSync, RBusProviderTableSyncArgs};
@@ -15,7 +16,14 @@ impl RBus_NetworkTopology_Ieee1905Device_BridgingTuple {
         let Some(node) = lock.get_index(node_index) else {
             return Err(RBusError::ElementDoesNotExists);
         };
-        let Some(interfaces) = node.1.device_data.local_interface_list.as_ref() else {
+
+        Self::get_tuples_from_node(&node.1)
+    }
+
+    pub fn get_tuples_from_node(
+        node: &Ieee1905Node,
+    ) -> Result<IndexMap<u32, Vec<usize>>, RBusError> {
+        let Some(interfaces) = node.device_data.local_interface_list.as_ref() else {
             return Ok(IndexMap::new());
         };
 
