@@ -177,7 +177,7 @@ impl CMDUHandler {
                         )
                         .await
                     {
-                        error!("Error forwarding SDU from TopologyNotification interoperability (msg_id={message_id}): {e:?}");
+                        error!(%e, "Error forwarding SDU from TopologyNotification interoperability (msg_id={message_id})");
                     }
                 }
             }
@@ -200,7 +200,7 @@ impl CMDUHandler {
                         )
                         .await
                     {
-                        error!("Error forwarding SDU from TopologyQuery interoperability (msg_id={message_id}): {e:?}");
+                        error!(%e, "Error forwarding SDU from TopologyQuery interoperability (msg_id={message_id})");
                     }
                 }
             }
@@ -223,7 +223,7 @@ impl CMDUHandler {
                         )
                         .await
                     {
-                        error!("Error forwarding SDU from TopologyResponse interoperability (msg_id={message_id}): {e:?}");
+                        error!(%e, "Error forwarding SDU from TopologyResponse interoperability (msg_id={message_id})");
                     }
                 }
             }
@@ -244,7 +244,7 @@ impl CMDUHandler {
                     )
                     .await
                 {
-                    error!("Error forwarding SDU from CMDU (msg_id={message_id}): {e:?}");
+                    error!(%e, "Error forwarding SDU from CMDU (msg_id={message_id})");
                 }
             }
         }
