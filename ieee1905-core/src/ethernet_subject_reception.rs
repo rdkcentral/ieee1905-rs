@@ -31,6 +31,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::time::Duration;
+use std::thread::sleep;
 use tokio::sync::mpsc::Sender;
 use tokio::task::{yield_now, JoinSet};
 use tracing::{debug, error, info, info_span, warn, Instrument};
@@ -156,7 +157,11 @@ impl EthernetReceiver {
         self.join_set.spawn_blocking(move || {
             let _span = info_span!(parent: None, "ethernet_receiver_reader", task = next_task_id())
                 .entered();
-
+            // If the interface is not yet up, attempting to
+            // poll for packets will return immediately
+            while !interface.is_up() {
+                sleep(Duration::from_millis(500));
+            }
             info!("Listening for Ethernet frames...");
             while !notify_tx.is_closed() {
                 let packet = match datalink_rx.next() {
