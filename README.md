@@ -468,22 +468,35 @@ By default service run with topology CLI enabled, info log level, listening on `
 By default topology CLI is disabled.
 When topology CLI is enabled. Log files are saved to a file and will not appear on standard output.
 
-```/usr/bin/ieee1905 -t```
+```shell
+/usr/bin/ieee1905 -t
+```
 
 #### Change log level
 
 To enable trace log:
-``` /usr/bin/ieee1905 -f trace ```
-Other log levels can also be used ```debug,warn,error,info```
+```shell
+/usr/bin/ieee1905 -f trace
+```
+
+Other log levels can also be used `debug,warn,error,info`
+
 Logging can be limited to certain modules for example to set trace level for topology manager and suppress all other logs:
-```/usr/bin/ieee1905 -f ieee1905::topolgy_manager=trace```
-If needed certain module can be filtered out completly:
-```/usr/bin/ieee1905 -f ieee1905=trace,ieee1905::ethernet_subject_reception=off```
+```shell
+/usr/bin/ieee1905 -f ieee1905::topolgy_manager=trace
+```
+
+If needed certain module can be filtered out completely:
+```shell
+/usr/bin/ieee1905 -f ieee1905=trace,ieee1905::ethernet_subject_reception=off
+```
 With above all ieee1905 modules will log with trace level and ethernet_subject_reception will not be visible in logs.
 
 ##### Available modules
 
-```rust
+```
+ieee1905_core
+ieee1905::rbus
 ieee1905::al_sap
 ieee1905::cmdu_codec
 ieee1905::cmdu_handler
@@ -495,11 +508,9 @@ ieee1905::device_edge_manager
 ieee1905::ethernet_subject_reception
 ieee1905::ethernet_subcjet_transmission
 ieee1905::interface_manager
-ieee1905::lib
 ieee1905::lldpdu_codec
 ieee1905::lldpdu_observer
 ieee1905::lldpdu_proxy
-ieee1905::main
 ieee1905::registration_codec
 ieee1905::sdu_codec
 ieee1905::tlv_cmdu_codec
@@ -511,44 +522,54 @@ ieee1905::topology_manager
 
 In order to analyze service with tokio-console use:
 
-``` /usr/bin/ieee1905 -q -c -f trace,tokio=trace ```
-
-This will disable topology CLI, enable console subscriber and set both regular and tokio logs to trace level.
+```shell
+/usr/bin/ieee1905 -c
+```
 
 #### Change unix socket
 
 Change unix sockets to ```ctrl.sock``` and ```data.sock```
 
-``` /usr/bin/ieee1905 --sap-control-path /tmp/ctrl.sock --sap-data-path /tmp/data.sock ```
+```shell
+/usr/bin/ieee1905 --sap-control-path /tmp/ctrl.sock --sap-data-path /tmp/data.sock
+```
 
 #### Change listening interface
 
 Change interface to ```eth1```
 
-``` /usr/bin/ieee1905 -i eth1 ```
+```shell
+/usr/bin/ieee1905 -i eth1
+```
 
 #### Enable file output
 
-```/usr/bin/ieee1905 -i eth1 --file-appender```
+```shell
+/usr/bin/ieee1905 -i eth1 --file-appender
+```
 
 ### Build options
 
-IEEE1905 service can be build with few compile time switches.
-By default tokio-console is not included in binary.
+IEEE1905 service can be build with few compile time features:
+- `rbus` - enable RBUS provider `[default]`
+- `enable_tokio_console` - enable tokio-console
+
+By default, tokio-console is not included in the binary.
 In order to enable it one has to build with following command:
+```shell
+cargo build --package ieee1905-core --release --features=enable_tokio_console
+```
 
-```cargo build --release --features "enable_tokio_console"```
-
-Additionally default build supports size based fragmentation of TLVs.
-To enable TLV based fragmentation default feature parameters has to be dropped:
-
-``` cargo build --release --no-default-features ```
-
-Then resulting binary will have tokio-console disabled and TLV based fragmentation enabled.
+Additionally, RBUS provider will be enabled by default.
+Default features can be switched off in case they are not needed:
+```shell
+cargo build --package ieee1905-core --release --no-default-features
+```
 
 On other hand:
-
-``` cargo build --release --all-features ```
+```shell
+cargo build --package ieee1905-core --release --all-features
+```
 
 Will enable all supported features.
 
