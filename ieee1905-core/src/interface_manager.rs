@@ -30,10 +30,10 @@ use crate::linux::nl80211::{
     Nl80211Attribute, Nl80211ChannelWidth, Nl80211Command, Nl80211IfType, Nl80211RateInfo,
     Nl80211StaInfo, NL80211_GENL_NAME,
 };
-use crate::topology_manager::Ieee1905InterfaceData;
+use crate::topology_manager::{Ieee1905InterfaceData, Ieee1905LocalInterface};
 use indexmap::IndexMap;
 use neli::consts::nl::{GenlId, NlmF};
-use neli::consts::rtnl::{Arphrd, Ifla, IflaInfo, IflaVlan, RtAddrFamily, Rtm};
+use neli::consts::rtnl::{Arphrd, Iff, Ifla, IflaInfo, IflaVlan, RtAddrFamily, Rtm};
 use neli::consts::socket::NlFamily;
 use neli::genl::{
     AttrTypeBuilder, GenlAttrHandle, Genlmsghdr, GenlmsghdrBuilder, NlattrBuilder, NoUserHeader,
@@ -43,22 +43,10 @@ use neli::router::asynchronous::{NlRouter, NlRouterReceiverHandle};
 use neli::rtnl::{Ifinfomsg, IfinfomsgBuilder, RtAttrHandle};
 use neli::types::GenlBuffer;
 use neli::utils::Groups;
-use netdev::interface::types::InterfaceType;
 use std::fs;
 use std::ops::Div;
 use std::process::Command;
 use tracing::warn;
-
-pub struct InterfaceInfo {
-    pub name: String,
-    pub mac: MacAddr,
-}
-
-pub struct BridgeInfo {
-    pub name: String,
-    pub index: u32,
-    pub address: MacAddr,
-}
 
 pub fn get_local_al_mac(interface_name: String) -> Option<MacAddr> {
     // Fetch all network interfaces
@@ -106,23 +94,6 @@ pub fn get_forwarding_interface_name(interface_name: String) -> Option<String> {
         .map(|iface| iface.name.clone()) // Extract and return interface name
 }
 
-/// Retrieves a list of all physical ethernet interfaces.
-pub fn get_physical_ethernet_interfaces() -> Vec<InterfaceInfo> {
-    let interfaces = netdev::get_interfaces();
-    interfaces
-        .into_iter()
-        .filter_map(|interface| {
-            if interface.if_type != InterfaceType::Ethernet || !interface.is_physical() {
-                return None;
-            }
-            Some(InterfaceInfo {
-                name: interface.name,
-                mac: interface.mac_addr?.octets().into(),
-            })
-        })
-        .collect()
-}
-
 /// **Gets the MAC address of a given network interface**
 pub fn get_mac_address_by_interface(interface_name: &str) -> Option<MacAddr> {
     // Fetch all available interfaces
@@ -138,25 +109,6 @@ pub fn get_mac_address_by_interface(interface_name: &str) -> Option<MacAddr> {
 pub fn is_bridge_member(interface_name: &str) -> bool {
     let path = format!("/sys/class/net/{}/brport", interface_name);
     fs::metadata(&path).is_ok() // If this directory exists, it's part of a bridge
-}
-
-pub fn get_bridge_of(interface_name: &str) -> Option<BridgeInfo> {
-    let path = format!("/sys/class/net/{interface_name}/brport/bridge");
-    let link = fs::read_link(&path).ok()?;
-
-    Some(BridgeInfo {
-        name: link.file_name()?.to_string_lossy().into_owned(),
-        index: fs::read_to_string(format!("{path}/ifindex"))
-            .ok()?
-            .trim()
-            .parse()
-            .ok()?,
-        address: fs::read_to_string(format!("{path}/address"))
-            .ok()?
-            .trim()
-            .parse()
-            .ok()?,
-    })
 }
 
 /// Retrieves VLAN ID from `/proc/net/vlan/config`
@@ -224,10 +176,10 @@ fn parse_mac(mac_str: &str) -> Result<MacAddr, ()> {
     }
 }
 
-pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905InterfaceData>> {
+pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
     let mut interfaces = IndexMap::new();
     for ethernet in get_all_interfaces().await? {
-        let interface = Ieee1905InterfaceData {
+        let data = Ieee1905InterfaceData {
             mac: ethernet.mac,
             media_type: MediaType::ETHERNET_802_3ab,
             media_type_extra: Default::default(),
@@ -237,6 +189,12 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905InterfaceData>> {
             metric: None,
             non_ieee1905_neighbors: None,
             ieee1905_neighbors: None,
+        };
+        let interface = Ieee1905LocalInterface {
+            name: ethernet.if_name.clone(),
+            index: ethernet.if_index,
+            flags: ethernet.if_flags,
+            data,
         };
         interfaces.insert(ethernet.if_index, (interface, ethernet));
     }
@@ -261,8 +219,8 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905InterfaceData>> {
             );
             continue;
         }
-        interface.media_type = wireless.media_type;
-        interface.media_type_extra = MediaTypeSpecialInfo::Wifi(MediaTypeSpecialInfoWifi {
+        interface.data.media_type = wireless.media_type;
+        interface.data.media_type_extra = MediaTypeSpecialInfo::Wifi(MediaTypeSpecialInfoWifi {
             bssid: wireless.bssid.unwrap_or_default(),
             role: convert_if_type_to_role(wireless.if_type, wireless.frequency).unwrap_or_default(),
             reserved: 0,
@@ -280,6 +238,7 @@ struct LinkEthernetInfo {
     mac: MacAddr,
     if_index: i32,
     if_name: String,
+    if_flags: Iff,
     bridge_if_index: Option<u32>,
     vlan_id: Option<u16>,
 }
@@ -347,6 +306,7 @@ async fn get_all_interfaces() -> anyhow::Result<Vec<LinkEthernetInfo>> {
             None
         }
 
+        let if_flags = *payload.ifi_flags();
         let if_index = i32::from(*payload.ifi_index());
         let vlan_id = get_vlan_id(&attr_handle);
         let bridge_if_index = attr_handle.get_attr_payload_as(Ifla::Master).ok();
@@ -355,6 +315,7 @@ async fn get_all_interfaces() -> anyhow::Result<Vec<LinkEthernetInfo>> {
             mac: MacAddr::from(mac),
             if_index,
             if_name,
+            if_flags,
             bridge_if_index,
             vlan_id,
         });

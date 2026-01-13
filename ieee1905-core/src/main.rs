@@ -263,7 +263,7 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
 
     // Sart of the discovery process
 
-    for interface in get_physical_ethernet_interfaces() {
+    for interface in get_lldp_compatible_interfaces().await {
         tracing::info!(
             "Starting LLDP Discovery on {}/{}",
             interface.name,
@@ -312,4 +312,16 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
         _ = topology_db.start_topology_cli(), if cli.topology_ui => {}
     }
     Ok(exit_service)
+}
+
+async fn get_lldp_compatible_interfaces() -> Vec<Ieee1905LocalInterface> {
+    let mut interfaces = get_interfaces().await.unwrap_or_default();
+
+    if let Some(bridge) = interfaces.iter().find(|e| e.name.eq_ignore_ascii_case("brlan0")) {
+        let bridge_index = bridge.index.cast_unsigned();
+        interfaces.retain(|e| e.bridging_tuple == Some(bridge_index));
+    }
+
+    interfaces.retain(|e| e.media_type.is_ethernet());
+    interfaces
 }

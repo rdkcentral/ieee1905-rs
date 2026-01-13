@@ -41,7 +41,9 @@ use tokio::{
 use tracing::{debug, error, info, instrument, warn};
 // Standard library
 use indexmap::IndexMap;
+use neli::consts::rtnl::Iff;
 use std::{io, sync::Arc};
+use std::ops::Deref;
 use tokio::task::JoinSet;
 // Internal modules
 use crate::cmdu_codec::{MediaType, MediaTypeSpecialInfo};
@@ -89,6 +91,22 @@ pub enum TransmissionEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ieee1905LocalInterface {
+    pub name: String,
+    pub index: i32,
+    pub flags: Iff,
+    pub data: Ieee1905InterfaceData,
+}
+
+impl Deref for Ieee1905LocalInterface {
+    type Target = Ieee1905InterfaceData;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ieee1905InterfaceData {
     pub mac: MacAddr,
     pub media_type: MediaType,
@@ -100,6 +118,7 @@ pub struct Ieee1905InterfaceData {
     pub non_ieee1905_neighbors: Option<Vec<MacAddr>>,
     pub ieee1905_neighbors: Option<Vec<IEEE1905Neighbor>>,
 }
+
 impl Ieee1905InterfaceData {
     pub fn new(
         mac: MacAddr,
@@ -342,7 +361,7 @@ pub static TOPOLOGY_DATABASE: OnceCell<Arc<TopologyDatabase>> = OnceCell::const_
 pub struct TopologyDatabase {
     pub al_mac_address: Arc<RwLock<MacAddr>>,
     pub local_mac: Arc<RwLock<MacAddr>>,
-    pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905InterfaceData>>>>,
+    pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905LocalInterface>>>>,
     pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905Node>>>,
     pub interface_name: Arc<RwLock<Option<String>>>,
     pub local_role: Arc<RwLock<Option<Role>>>,
@@ -439,7 +458,7 @@ impl TopologyDatabase {
     }
 
     /// **Getter for `local_interface_list`**
-    pub async fn get_local_interface_list(&self) -> Option<Vec<Ieee1905InterfaceData>> {
+    pub async fn get_local_interface_list(&self) -> Option<Vec<Ieee1905LocalInterface>> {
         let local_interfaces = self.local_interface_list.read().await;
         local_interfaces.clone() // Clone the data to avoid holding the lock
     }
