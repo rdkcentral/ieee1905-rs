@@ -64,6 +64,9 @@ struct EthernetMessage {
 }
 
 impl EthernetReceiver {
+    const RETRY_TIMEOUT_MIN: Duration = Duration::from_millis(10);
+    const RETRY_TIMEOUT_MAX: Duration = Duration::from_secs(1);
+
     /// **Create a new `EthernetReceiver`**
     pub fn new() -> Self {
         Self::default()
@@ -140,9 +143,9 @@ impl EthernetReceiver {
 
         info!("Listening on interface: {interface_name} (MAC: {interface_mac})");
         // Since we spawn a blocking task, we need to have an opportunity
-        // to act on shutdown signal, that's why 1 sec. timeout is used.
+        // to act on shutdown signal, that's why timeout is used.
         let config = Config {
-            read_timeout: Some(Duration::from_secs(1)),
+            read_timeout: Some(Self::RETRY_TIMEOUT_MAX),
             ..Default::default()
         };
 
@@ -158,12 +161,18 @@ impl EthernetReceiver {
                 .entered();
 
             info!("Listening for Ethernet frames...");
+            let mut retry_timeout = Self::RETRY_TIMEOUT_MIN;
             while !notify_tx.is_closed() {
                 let packet = match datalink_rx.next() {
-                    Ok(e) => e,
+                    Ok(e) => {
+                        retry_timeout = Self::RETRY_TIMEOUT_MIN;
+                        e
+                    },
                     Err(e) => {
                         if e.kind() != ErrorKind::TimedOut {
-                            error!("Error receiving Ethernet frame: {e:?}");
+                            error!("Error receiving Ethernet frame: {e}");
+                            std::thread::sleep(retry_timeout);
+                            retry_timeout = (retry_timeout * 4).min(Self::RETRY_TIMEOUT_MAX);
                         }
                         continue;
                     }
