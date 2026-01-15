@@ -492,6 +492,14 @@ If needed certain module can be filtered out completely:
 ```
 With above all ieee1905 modules will log with trace level and ethernet_subject_reception will not be visible in logs.
 
+If needed to fully disable the logging:
+```shell
+/usr/bin/ieee1905 -f off
+```
+OR
+```shell
+RUST_LOG=off /usr/bin/ieee1905
+```
 ##### Available modules
 
 ```
