@@ -396,10 +396,8 @@ mod tests {
     // Verify TTL serialization and parsing
     #[test]
     fn test_time_to_live_serialization_and_parsing() {
-        let time_to_live_original = TimeToLiveTLV {
-            ttl: 10,
-        };
-        let time_to_live_bytes: Vec<u8> = vec![0x00,0x0a];
+        let time_to_live_original = TimeToLiveTLV { ttl: 10 };
+        let time_to_live_bytes: Vec<u8> = vec![0x00, 0x0a];
         let time_to_live = TimeToLiveTLV::parse(&time_to_live_bytes, 2);
         let parsed_time_to_live = time_to_live.unwrap().1;
         assert_eq!(parsed_time_to_live, time_to_live_original);

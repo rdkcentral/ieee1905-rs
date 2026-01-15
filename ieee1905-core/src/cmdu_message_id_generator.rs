@@ -18,8 +18,8 @@
 */
 
 #![deny(warnings)]
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::Arc;
 use tokio::sync::OnceCell;
 use tracing::{debug, info}; // Import tracing
 
@@ -93,7 +93,7 @@ pub mod tests {
         }
 
         assert_eq!(gen.next_id(), 0xFFFE);
-        assert_eq!(gen.next_id(), 0xFFFF);  // last value of u16 type
+        assert_eq!(gen.next_id(), 0xFFFF); // last value of u16 type
 
         // Expect counter overflow and correcting action of the value after overflow
         // The next value after 0xFFFF should be 1 (the value of message id == 0 should be skipped)

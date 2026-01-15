@@ -26,7 +26,7 @@ use tracing::{debug, error, info, warn};
 
 // Internal modules
 use crate::ethernet_subject_reception::EthernetFrameObserver;
-use crate::lldpdu::{LLDPDU, LLDPTLVType, ChassisId, PortId};
+use crate::lldpdu::{ChassisId, LLDPTLVType, PortId, LLDPDU};
 use crate::topology_manager::{TopologyDatabase, UpdateType};
 
 #[derive(Clone)]
@@ -38,13 +38,22 @@ pub struct LLDPObserver {
 impl LLDPObserver {
     /// Creates a new `LLDPObserver` with a given chassis ID.
     pub fn new(local_chassis_id: MacAddr, interface_name: String) -> Self {
-        Self { local_chassis_id, interface_name }
+        Self {
+            local_chassis_id,
+            interface_name,
+        }
     }
 }
 
 #[async_trait]
 impl EthernetFrameObserver for LLDPObserver {
-    async fn on_frame(&self, interface_mac: MacAddr, frame: &[u8], source_mac: MacAddr, destination_mac: MacAddr) {
+    async fn on_frame(
+        &self,
+        interface_mac: MacAddr,
+        frame: &[u8],
+        source_mac: MacAddr,
+        destination_mac: MacAddr,
+    ) {
         debug!(
             interface_mac = ?interface_mac,
             source_mac = ?source_mac,
@@ -63,7 +72,6 @@ impl EthernetFrameObserver for LLDPObserver {
 
                 let mut chassis_id: Option<MacAddr> = None;
                 let mut port_id: Option<PortId> = None;
-
 
                 // Iterate through TLVs in the LLDPDU payload
                 for (index, tlv) in lldpdu.payload.iter().enumerate() {
@@ -162,20 +170,26 @@ impl EthernetFrameObserver for LLDPObserver {
                     neighbor_chassis_id
                 );
 
-                let topology_db = TopologyDatabase::get_instance(self.local_chassis_id, self.interface_name.clone()).await;
+                let topology_db = TopologyDatabase::get_instance(
+                    self.local_chassis_id,
+                    self.interface_name.clone(),
+                )
+                .await;
 
                 // If a valid port_id is found, update the topology
                 if let Some(node) = topology_db.get_device(neighbor_chassis_id).await {
                     tracing::info!("Device found: {:?}", node);
 
-                    topology_db.update_ieee1905_topology(
-                        node.device_data.clone(),
-                        UpdateType::LldpUpdate,
-                        None,
-                        None,
-                        Some(port_id),
-                        None,
-                    ).await;
+                    topology_db
+                        .update_ieee1905_topology(
+                            node.device_data.clone(),
+                            UpdateType::LldpUpdate,
+                            None,
+                            None,
+                            Some(port_id),
+                            None,
+                        )
+                        .await;
                 } else {
                     tracing::warn!("Device with AL-MAC {} not found!", neighbor_chassis_id);
                 }

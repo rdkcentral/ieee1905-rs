@@ -18,6 +18,7 @@
 */
 
 #![deny(warnings)]
+
 use clap::Parser;
 use ieee1905::al_sap::AlServiceAccessPoint;
 use ieee1905::cmdu_handler::*;
@@ -30,17 +31,18 @@ use ieee1905::lldpdu_observer::LLDPObserver;
 use ieee1905::lldpdu_proxy::lldp_discovery_worker;
 use ieee1905::topology_manager::*;
 use ieee1905::{next_task_id, CMDUObserver};
+use std::ops::Not;
 //use ieee1905::crypto_engine::CRYPTO_CONTEXT;
+use anyhow::anyhow;
 use std::sync::Arc;
 use std::time::Duration;
-use anyhow::anyhow;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::instrument;
-use tracing_subscriber::{prelude::*, EnvFilter};
 use tracing_appender::rolling;
 use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -78,88 +80,10 @@ fn main() -> anyhow::Result<()> {
     // Start the Tokio console subscriber
     std::env::set_var("RUST_CONSOLE_BIND", "0.0.0.0:6669");
 
-    // Modify this filter for your tracing during run time
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(cli.filter.clone())); //add 'tokio=trace' to debug the runtime
-
-    // To show logs in stdout
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_target(true)
-        .with_level(true)
-        .with_span_events(FmtSpan::CLOSE);
-
-    let file_appender = rolling::daily("logs", "app.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(non_blocking)
-        .with_target(true)
-        .with_level(true)
-        .with_span_events(FmtSpan::CLOSE);
-
-    #[cfg(feature = "enable_tokio_console")]
-    {
-        // To register your tracing
-        if cli.console_subscriber {
-            if cli.topology_ui {
-                tracing_subscriber::registry()
-                    .with(file_layer)
-                    .with(filter)
-                    .with(console_subscriber::spawn())
-                    .init();
-            } else {
-                tracing_subscriber::registry()
-                    .with(file_layer)
-                    .with(filter)
-                    .with(fmt_layer)
-                    .with(console_subscriber::spawn())
-                    .init();
-            }
-        } else {
-            if cli.topology_ui {
-                tracing_subscriber::registry()
-                    .with(file_layer)
-                    .with(filter)
-                    .init();
-            } else {
-                tracing_subscriber::registry()
-                    .with(file_layer)
-                    .with(filter)
-                    .with(fmt_layer)
-                    .init();
-            }
-        }
-    }
-
-    #[cfg(not(feature = "enable_tokio_console"))]
-    {
-        tracing::info!("Tokio console: Disabled");
-        if cli.topology_ui {
-            tracing_subscriber::registry()
-                .with(file_layer)
-                .with(filter)
-                //.with(fmt_layer)
-                .init();
-        } else {
-            tracing_subscriber::registry()
-                .with(file_layer)
-                .with(filter)
-                .with(fmt_layer)
-                .init();
-        }
-    }
-
-    tracing::debug!("Logger initialized with RUST_LOG."); // Start your application tracing
-
+    let _guard = init_logger(&cli);
     tracing::info!("Tracing initialized!");
 
     tracing::info!("Fragmentation type: SIZE BASED");
-
-    #[cfg(feature = "enable_tokio_console")]
-    tracing::info!("Tokio console: Enabled");
-
-    #[cfg(not(feature = "enable_tokio_console"))]
-    tracing::info!("Tokio console: Disabled");
 
     tracing::info!("TOPOLOGY_UI {:?}", cli.topology_ui);
 
@@ -168,6 +92,11 @@ fn main() -> anyhow::Result<()> {
     //let ctx = context.lock().await;
     //the keys are stored in  ctx.gtk_key and ctx.pmk_key
     //We need to insert the PIN value to access softHSM2 as env variable or hardcoded
+
+    #[cfg(feature = "rbus")]
+    let _rbus_handle = ieee1905::rbus::RBusConnection::open().inspect_err(|e| {
+        tracing::error!("failed to open RBus connection: {e}");
+    });
 
     loop {
         tracing::info!("Starting runtime");
@@ -184,9 +113,50 @@ fn main() -> anyhow::Result<()> {
         runtime.shutdown_timeout(Duration::from_secs(2));
         tracing::info!("Runtime released");
     }
-    
+
     tracing::info!("Closing app.");
     Ok(())
+}
+
+fn init_logger(cli: &CliArgs) -> impl Drop {
+    // modify this filter for your tracing during run time
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&cli.filter));
+
+    // logging to stdout
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_level(true)
+        .with_span_events(FmtSpan::CLOSE);
+
+    // logging to fs
+    let file_appender = rolling::daily("logs", "app.log");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_target(true)
+        .with_level(true)
+        .with_span_events(FmtSpan::CLOSE);
+
+    // combined logger
+    let logging_layer = file_layer.and_then(cli.topology_ui.not().then_some(fmt_layer));
+
+    #[cfg(feature = "enable_tokio_console")]
+    if cli.console_subscriber {
+        tracing::info!("Tokio console: Enabled");
+        tracing_subscriber::registry()
+            .with(logging_layer.with_filter(filter))
+            .with(console_subscriber::spawn())
+            .init();
+        return guard;
+    }
+
+    tracing::info!("Tokio console: Disabled");
+    tracing_subscriber::registry()
+        .with(logging_layer)
+        .with(filter)
+        .init();
+    guard
 }
 
 #[instrument(skip_all, name = "main", fields(task = next_task_id()))]
@@ -203,11 +173,9 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
             "eth_default".to_string() // Default interface name if none found
         };
 
-
     // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
-    let al_mac = get_local_al_mac(cli.interface.clone()).ok_or_else(|| {
-        anyhow!("failed to get local al mac")
-    })?;
+    let al_mac = get_local_al_mac(cli.interface.clone())
+        .ok_or_else(|| anyhow!("failed to get local al mac"))?;
     tracing::info!("AL MAC address: {}", al_mac);
 
     // // Initialize Database
@@ -238,7 +206,10 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     // Initialize Ethernet Sender
 
     let forwarding_interface_tx = forwarding_interface.clone();
-    let sender = Arc::new(EthernetSender::new(&forwarding_interface_tx, Arc::clone(&mutex_tx)));
+    let sender = Arc::new(EthernetSender::new(
+        &forwarding_interface_tx,
+        Arc::clone(&mutex_tx),
+    ));
 
     // Initialization for adaptation layer SAP
 
@@ -269,7 +240,7 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
             al_mac,
             forwarding_interface.clone(),
         )
-            .await,
+        .await,
     );
 
     // Initialize CMDU Observer
@@ -292,15 +263,24 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
 
     // Sart of the discovery process
 
-    for interface in get_physical_ethernet_interfaces() {
-        tracing::info!("Starting LLDP Discovery on {}/{}", interface.name, interface.mac);
+    for interface in get_lldp_compatible_interfaces().await {
+        tracing::info!(
+            "Starting LLDP Discovery on {}/{}",
+            interface.name,
+            interface.mac
+        );
 
         let mut lldp_receiver = EthernetReceiver::new();
         lldp_receiver.subscribe(lldp_observer.clone());
         join_sets.push(lldp_receiver.run(&interface.name)?);
 
         let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx));
-        tokio::task::spawn(lldp_discovery_worker(lldp_sender, chassis_id, interface.mac, interface.name));
+        tokio::task::spawn(lldp_discovery_worker(
+            lldp_sender,
+            chassis_id,
+            interface.mac,
+            interface.name,
+        ));
     }
 
     let discovery_interface_ieee1905 = forwarding_interface.clone();
@@ -332,4 +312,16 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
         _ = topology_db.start_topology_cli(), if cli.topology_ui => {}
     }
     Ok(exit_service)
+}
+
+async fn get_lldp_compatible_interfaces() -> Vec<Ieee1905LocalInterface> {
+    let mut interfaces = get_interfaces().await.unwrap_or_default();
+
+    if let Some(bridge) = interfaces.iter().find(|e| e.name.eq_ignore_ascii_case("brlan0")) {
+        let bridge_index = bridge.index.cast_unsigned();
+        interfaces.retain(|e| e.bridging_tuple == Some(bridge_index));
+    }
+
+    interfaces.retain(|e| e.media_type.is_ethernet());
+    interfaces
 }

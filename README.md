@@ -27,6 +27,40 @@ A short, high-level plan:
 - [ ] Path Performance Monitoring.
 - [ ] IEEE1905 security. 
  
+## Architecture Decisions (ADRs)
+
+This project documents its key architectural decisions using
+Architecture Decision Records (ADRs). These decisions define the
+protocol design, topology handling, and integration model with
+EasyMesh on Linux-based platforms.
+
+### Core Architecture
+- [ADR-0001: Use Rust for IEEE 1905 Protocol Core](docs/architecture/adr/0001-use-rust-ieee1905.md)
+- [ADR-0002: Use Tokio and Asynchronous Programming](docs/architecture/adr/0002-use-tokio-async.md)
+- [ADR-0003: Observer Pattern for CMDU Reception and Processing](docs/architecture/adr/0003-observer-cmdu-reception.md)
+- [ADR-0004: Proxy Pattern for CMDU Transmission](docs/architecture/adr/0004-proxy-cmdu-transmission.md)
+- [ADR-0005: Facade Pattern for AL-SAP Integration](docs/architecture/adr/0005-facade-al-sap.md)
+- [ADR-0006: Use `nom` for TLV/CMDU Parsing and Serialization](docs/architecture/adr/0006-nom-parsing-serialization.md)
+
+### Platform & Networking Model
+- [ADR-0007: Virtual Interface and Linux Bridge for CMDU Transmission](docs/architecture/adr/0007-virtual-interface-linux-bridge.md)
+- [ADR-0008: IEEE 1905 Does Not Own Per-Media Forwarding State](docs/architecture/adr/0008-no-per-media-forwarding.md)
+- [ADR-0009: IEEE 1905 Topology Is Informational, Not Authoritative](docs/architecture/adr/0009-topology-informational.md)
+
+### EasyMesh Integration Model
+- [ADR-0010: How IEEE 1905 Topology Is Consumed by EasyMesh](docs/architecture/adr/0010-topology-consumed-by-easymesh.md)
+- [ADR-0011: Eventual Consistency Model for Topology](docs/architecture/adr/0011-topology-consistency.md)
+
+### Topology State Management
+- [ADR-0012: Topology Map as a Singleton](docs/architecture/adr/0012-topology-singleton.md)
+- [ADR-0013: Controlled Mutation and Locking Strategy](docs/architecture/adr/0013-topology-locking.md)
+- [ADR-0014: Topology Aging and Garbage Collection](docs/architecture/adr/0014-topology-aging.md)
+- [ADR-0015: Snapshot vs Live-View Semantics](docs/architecture/adr/0015-topology-snapshot-vs-live.md)
+
+### Operational & Resilience Concerns
+- [ADR-0016: Observability and Debugging of Convergence](docs/architecture/adr/0016-observability-convergence.md)
+- [ADR-0017: Failure Isolation Between IEEE 1905 and EasyMesh](docs/architecture/adr/0017-failure-isolation.md)
+- [ADR-0018: Backpressure and Rate-Limiting of Topology Events](docs/architecture/adr/0018-backpressure-rate-limiting.md)
 
 ## IEEE1905 Service functional requirements
 
@@ -50,17 +84,7 @@ In current implementations of EasyMesh, the IEEE1905 stack is deeply integrated 
 However, in our implementation, we found it necessary to clearly separate the EasyMesh functionalities from the IEEE1905 stack. This separation allows for more modular design and flexibility, enabling independent development, testing, and maintenance of each protocol. By decoupling EasyMesh from IEEE1905, we ensure that each layer can evolve independently while maintaining interoperability, which is particularly important in complex mesh networking environments. This also allows for clearer distinction between mesh network management (EasyMesh) and control transport services and topology management (IEEE1905), improving the overall system architecture.
 The IEEE1905 SAP will be used as C++ library compiled as part of application binaries that will be required to use IEEE1905 transport service, and the implementation will follow OOP principles of reusability and modularity.  
 
-```mermaid
-graph TD;
-    EasyMesh_Agent/Controller --->  |RegistrationRequest| EasyMeshSap;
-    EasyMeshSap ---> |RegistrationResponse|EasyMesh_Agent/Controller ;
-    EasyMesh_Agent/Controller <--->  |ServiceDataUnit| EasyMeshSap;
-    EasyMeshSap <---> |IPC| Ieee1905Sap
-    Ieee1905Sap <---> PacketHandler
-    PacketHandler <---> PacketForwarder
-    PacketHandler <---> TopologyManager
-    PacketForwarder <---> Kernel
-```
+
 ## 🔌 IEEE1905 Adaptation Layer MAC Service Access Point
 
 IEEE1905 Adaptation Layer MAC Service Access Point will provide IEEE1905 transport service to applications in the RDK-B stack through a set of service primitives. These primitives have been creted with two goals in mind, registration of consumers that will make use of the IEEE1905 stack, using service-registration-request and service-registration-response APIs and exchange of service data units via service-data-request and service-data-indication, through the AL MAC service access point, refered as SAP in the rest of the document.  
@@ -77,38 +101,6 @@ The IEEE1905_AL_SAP will provide the following API abstraction to use the servic
     2. **AlServiceRegistrationResponse()**:  This primitive is used by the IEEE1905 service to inform about the result of the registration and to provide the local AlMacAddress in case the application cannot select one and the MSGidRange to be used in the CMDU's generated by the application on top of IEEE1905 service.
 
     3. **AlServiceTopologyNotification()**:  This primitive is used by the IEEE1905 service to keep the cache of the al_mac addresses availabe in the topology map so if the HLE tries to send an SDU to a node which al_mac is not in the cache, IEEE1905 service will generate a primitive error, in a shape of a C++ exception according to C++ standard library.
-
-2. Control plane transport service APIs
-
-    1. **AlServiceDataRequest()**: This API is used  to request the transmission of a SDU (service data unit) to the IEEE1905 service through the SAP, and the SDU will contain, the IEEE1905 CMDU and the AlMacAddress of the source and destination.
-    In case of SDU processing errors during SAP transfer for transmission, IEEE1905 service will generate a primitive error, in a shape of a C++ exception according to C++ standard library.
-    2. **AlServiceDataIndication()**: This API is used by applications to listen and receive a SDUs (service data unit) from the IEEE1905 service through the SAP, as before for the request,the SDU will contain the IEEE1905 CMDU created by the remote application, plus AlMacAddress source and destination.
-   In case of SDU processing errors during SAP transfer for reception, IEEE1905 service will generate a primitive error, in a shape of a C++ exception according to C++ standard library.
-
-## 🔁 AL Finite State Machine
-
-### Finite State machine Diagram
-
-![ARCH](docs/architecture/fsm_diagram/ieee1905_fsm.jpg)
-
-Input Event                     | Precondition                               | New Local             | New Remote                 | Output event                               |
-|----------------------------|--------------------------------------------|-----------------------|----------------------------|---------------------------------------------|
-| **DiscoveryReceived (node_new)** | —                                          | Idle                  | Idle                       | `SendTopologyQuery(al_mac)`                 |
-| **DiscoveryReceived (Idle)** | Local == Idle                             | (unchanged)           | (unchanged)                | `SendTopologyQuery(al_mac)`                 |
-| **DiscoveryReceived (conv)** | Local == ConvergedLocal                   | (unchanged)           | (unchanged)                | None                                        |
-| **NotificationReceived (conv)**| Local == ConvergedLocal                 | Idle                  | (unchanged)                | `SendTopologyQuery(al_mac)`                 |
-| **NotificationReceived**    | !Local == ConvergedLocal                    | (unchanged)           | (unchanged)                | None               |
-| **QueryReceived (node_new)**     | —                                          | Idle                  | ConvergingRemote(now)      | `SendTopologyResponse(al_mac)`              |
-| **QueryReceived (node_present)** |!Remote == ConvergedLocal             | (unchanged)           | ConvergingRemote(now)\*    | `SendTopologyResponse(al_mac)`              |
-| **QuerySent**               | !Local == ConvergedLocal                    | ConvergingLocal(now)  | (unchanged)                | None                                        |
-| **ResponseReceived**        | Local == ConvergingLocal                | ConvergedLocal        | (unchanged)                | _Maybe_ `SendTopologyNotification(multic)`  |
-| **ResponseSent**            | Remote= ConvergingRemote                  | (unchanged)           | ConvergedRemote            | None                                        |
-
-\* Only if remote wasn’t already `ConvergedRemote`.
-
-## AL Primitives Call Flow
-
-### Registration service
 
 ```mermaid
 sequenceDiagram
@@ -130,9 +122,14 @@ sequenceDiagram
     deactivate Agent
 ```
 
----
 
-### Transport service
+2. Control plane transport service APIs
+
+    1. **AlServiceDataRequest()**: This API is used  to request the transmission of a SDU (service data unit) to the IEEE1905 service through the SAP, and the SDU will contain, the IEEE1905 CMDU and the AlMacAddress of the source and destination.
+    In case of SDU processing errors during SAP transfer for transmission, IEEE1905 service will generate a primitive error, in a shape of a C++ exception according to C++ standard library.
+    2. **AlServiceDataIndication()**: This API is used by applications to listen and receive a SDUs (service data unit) from the IEEE1905 service through the SAP, as before for the request,the SDU will contain the IEEE1905 CMDU created by the remote application, plus AlMacAddress source and destination.
+   In case of SDU processing errors during SAP transfer for reception, IEEE1905 service will generate a primitive error, in a shape of a C++ exception according to C++ standard library.
+
 
 ```mermaid
 sequenceDiagram
@@ -165,7 +162,28 @@ sequenceDiagram
     deactivate Agent
 ```
 
----
+
+
+## 🔁 AL Finite State Machine
+
+### Finite State machine Diagram
+
+![ARCH](docs/architecture/fsm_diagram/ieee1905_fsm.jpg)
+
+Input Event                     | Precondition                               | New Local             | New Remote                 | Output event                               |
+|----------------------------|--------------------------------------------|-----------------------|----------------------------|---------------------------------------------|
+| **DiscoveryReceived (node_new)** | —                                          | Idle                  | Idle                       | `SendTopologyQuery(al_mac)`                 |
+| **DiscoveryReceived (Idle)** | Local == Idle                             | (unchanged)           | (unchanged)                | `SendTopologyQuery(al_mac)`                 |
+| **DiscoveryReceived (conv)** | Local == ConvergedLocal                   | (unchanged)           | (unchanged)                | None                                        |
+| **NotificationReceived (conv)**| Local == ConvergedLocal                 | Idle                  | (unchanged)                | `SendTopologyQuery(al_mac)`                 |
+| **NotificationReceived**    | !Local == ConvergedLocal                    | (unchanged)           | (unchanged)                | None               |
+| **QueryReceived (node_new)**     | —                                          | Idle                  | ConvergingRemote(now)      | `SendTopologyResponse(al_mac)`              |
+| **QueryReceived (node_present)** |!Remote == ConvergedLocal             | (unchanged)           | ConvergingRemote(now)\*    | `SendTopologyResponse(al_mac)`              |
+| **QuerySent**               | !Local == ConvergedLocal                    | ConvergingLocal(now)  | (unchanged)                | None                                        |
+| **ResponseReceived**        | Local == ConvergingLocal                | ConvergedLocal        | (unchanged)                | _Maybe_ `SendTopologyNotification(multic)`  |
+| **ResponseSent**            | Remote= ConvergingRemote                  | (unchanged)           | ConvergedRemote            | None                                        |
+
+\* Only if remote wasn’t already `ConvergedRemote`.
 
 ## 🧱 Architecture
 
@@ -173,23 +191,20 @@ sequenceDiagram
 
 ---
 
-### Network Topology service IEEE1905
+## 🧠 Network Topology Services
 
 Network topology refers to the arrangement of various elements (IEEE1905 nodes) in a home network and it defines how nodes are connected and how data flows between them.
 IEEE1905 has been specified to work in multiple topologies but it is specially used in daisy chain topologies as the one in EasyMesh, where typically each device is connected to two other devices, forming a linear sequence, much like the links in a chain.
 
----
+Based on the capability of devices to process IEEE1905 CMDU packets we can distinguish two different kind of nodes:
 
-1. **Graph Structure**
-    Based on the capability of devices to process IEEE1905 CMDU packets we can distinguish two different kind of nodes:
-    1. **IEEE1905 devices: This kind of devices understand CMDU packets and keep a copy of the topology map that they can exchange with other IEEE1905 devices**
+   1. **IEEE1905 devices: This kind of devices understand CMDU packets and keep a copy of the topology map that they can exchange with other IEEE1905 devices**
         1. Endpoint nodes: The first and last devices in the chain have only one connection each, to their immediate neighbor and they don't require to have bridging capabilities.
         2. Intermediate nodes: Devices with more than one link connected to a IEEE1905 device with bridging capabilities, to relay CMDU packets through interfaces.
-    2. **NON-IEEE1905 devices: This kind of devices don't understand and process IEEE1905 packets**
+   2. **NON-IEEE1905 devices: This kind of devices don't understand and process IEEE1905 packets**
+       In addition to the previous roles in IEEE1905 will build the topology map, adding information related to NON IEEE1905 devices, these devices will not participate in the exchange of CMDU packets, but based on their bridging capabilities they will be able to rely CMDU packets through their bridges.
 
-    In addition to the previous roles in IEEE1905 will build the topology map, adding information related to NON IEEE1905 devices, these devices will not participate in the exchange of CMDU packets, but based on their bridging capabilities they will be able to rely CMDU packets through their bridges.
 
-2. **Topology construction**
 
 ### Topology build Call Flow
 
@@ -360,7 +375,7 @@ The topology map provides all the information collected through Topology CMDUs e
 
 1. Ensure that you have `systemd` installed on your system.
 
-2. Ensure you include in your system Rust and cargo version 1.83.0 (MSRV).
+2. Ensure you include in your system Rust and cargo version 1.92.0 (MSRV).
 
 3. Ensure git is installed in your system.
 
@@ -453,22 +468,43 @@ By default service run with topology CLI enabled, info log level, listening on `
 By default topology CLI is disabled.
 When topology CLI is enabled. Log files are saved to a file and will not appear on standard output.
 
-```/usr/bin/ieee1905 -t```
+```shell
+/usr/bin/ieee1905 -t
+```
 
 #### Change log level
 
 To enable trace log:
-``` /usr/bin/ieee1905 -f trace ```
-Other log levels can also be used ```debug,warn,error,info```
+```shell
+/usr/bin/ieee1905 -f trace
+```
+
+Other log levels can also be used `debug,warn,error,info`
+
 Logging can be limited to certain modules for example to set trace level for topology manager and suppress all other logs:
-```/usr/bin/ieee1905 -f ieee1905::topolgy_manager=trace```
-If needed certain module can be filtered out completly:
-```/usr/bin/ieee1905 -f ieee1905=trace,ieee1905::ethernet_subject_reception=off```
+```shell
+/usr/bin/ieee1905 -f ieee1905::topolgy_manager=trace
+```
+
+If needed certain module can be filtered out completely:
+```shell
+/usr/bin/ieee1905 -f ieee1905=trace,ieee1905::ethernet_subject_reception=off
+```
 With above all ieee1905 modules will log with trace level and ethernet_subject_reception will not be visible in logs.
 
+If needed to fully disable the logging:
+```shell
+/usr/bin/ieee1905 -f off
+```
+OR
+```shell
+RUST_LOG=off /usr/bin/ieee1905
+```
 ##### Available modules
 
-```rust
+```
+ieee1905_core
+ieee1905::rbus
 ieee1905::al_sap
 ieee1905::cmdu_codec
 ieee1905::cmdu_handler
@@ -480,11 +516,9 @@ ieee1905::device_edge_manager
 ieee1905::ethernet_subject_reception
 ieee1905::ethernet_subcjet_transmission
 ieee1905::interface_manager
-ieee1905::lib
 ieee1905::lldpdu_codec
 ieee1905::lldpdu_observer
 ieee1905::lldpdu_proxy
-ieee1905::main
 ieee1905::registration_codec
 ieee1905::sdu_codec
 ieee1905::tlv_cmdu_codec
@@ -496,53 +530,56 @@ ieee1905::topology_manager
 
 In order to analyze service with tokio-console use:
 
-``` /usr/bin/ieee1905 -q -c -f trace,tokio=trace ```
-
-This will disable topology CLI, enable console subscriber and set both regular and tokio logs to trace level.
+```shell
+/usr/bin/ieee1905 -c
+```
 
 #### Change unix socket
 
 Change unix sockets to ```ctrl.sock``` and ```data.sock```
 
-``` /usr/bin/ieee1905 --sap-control-path /tmp/ctrl.sock --sap-data-path /tmp/data.sock ```
+```shell
+/usr/bin/ieee1905 --sap-control-path /tmp/ctrl.sock --sap-data-path /tmp/data.sock
+```
 
 #### Change listening interface
 
 Change interface to ```eth1```
 
-``` /usr/bin/ieee1905 -i eth1 ```
+```shell
+/usr/bin/ieee1905 -i eth1
+```
 
 #### Enable file output
 
-```/usr/bin/ieee1905 -i eth1 --file-appender```
+```shell
+/usr/bin/ieee1905 -i eth1 --file-appender
+```
 
 ### Build options
 
-IEEE1905 service can be build with few compile time switches.
-By default tokio-console is not included in binary.
+IEEE1905 service can be build with few compile time features:
+- `rbus` - enable RBUS provider `[default]`
+- `enable_tokio_console` - enable tokio-console
+
+By default, tokio-console is not included in the binary.
 In order to enable it one has to build with following command:
+```shell
+cargo build --package ieee1905-core --release --features=enable_tokio_console
+```
 
-```cargo build --release --features "enable_tokio_console"```
-
-Additionally default build supports size based fragmentation of TLVs.
-To enable TLV based fragmentation default feature parameters has to be dropped:
-
-``` cargo build --release --no-default-features ```
-
-Then resulting binary will have tokio-console disabled and TLV based fragmentation enabled.
+Additionally, RBUS provider will be enabled by default.
+Default features can be switched off in case they are not needed:
+```shell
+cargo build --package ieee1905-core --release --no-default-features
+```
 
 On other hand:
-
-``` cargo build --release --all-features ```
+```shell
+cargo build --package ieee1905-core --release --all-features
+```
 
 Will enable all supported features.
-
-#### Supported features
-
-| Feature                  | Default       |
-| ------------------------ |:-------------:|
-| size_based_fragmentation | ENABLED       |
-| enable_tokio_console     | DISABLED      |
 
 ### Yocto integration
 
@@ -821,7 +858,6 @@ PKCS#11 defines **key objects** that can be stored either:
 
 We will use **SoftHSM2** to provide a **reference implementation** of PKCS#11 for generating and storing keys. In the future, we may integrate with a **TPM 2.0 module** for hardware-backed protection, reusing the current implementation based on PKCS#11.
 
----
  Flow of generation and storage for DPP process
 
 ```sh
@@ -830,38 +866,35 @@ We will use **SoftHSM2** to provide a **reference implementation** of PKCS#11 fo
     Stores it in the token, setting a unique identifier for each key:
         CKA_LABEL= 1905GTK, CKA_ID=0x01, CKA_CLASS = CKO_SECRET_KEY.
         CKA_LABEL= 1905PTK, CKA_ID=0x02, CKA_CLASS = CKO_SECRET_KEY.
-
-    ```
+```
 Flow to retrieve keys from IEEE1905 for encryption/decryption and message integrity verfication.
 
 ```sh
-Connects to SoftHSM.
-Consumes the known CKA_ID or CKA_LABEL to find the key.
-    KA_LABEL= 1905GTK, CKA_ID=0x01, CKA_CLASS = CKO_SECRET_KEY.
-    CKA_LABEL= 1905PTK, CKA_ID=0x02, CKA_CLASS = CKO_SECRET_KEY.
-Uses 1905GTK for MIC computation
-Uses 1905PTK for TLV encryption.
+    Connects to SoftHSM.
+    Consumes the known CKA_ID or CKA_LABEL to find the key.
+        KA_LABEL= 1905GTK, CKA_ID=0x01, CKA_CLASS = CKO_SECRET_KEY.
+        CKA_LABEL= 1905PTK, CKA_ID=0x02, CKA_CLASS = CKO_SECRET_KEY.
+    Uses 1905GTK for MIC computation
+    Uses 1905PTK for TLV encryption.
 ```
 
 #### Building blocks to use PKCS#11 in Rust
 
 1. PKCS#11 Rust Binding using cryptoki, acting as wrapper of C APIs.
-
 ```sh
 # Cargo.toml
 cryptoki = "0.10"
+```
+2. PKCS#11 Rust Binding:
 ```sh
-2. PKCS#11 Rust Binding:"/usr/lib/softhsm/libsofthsm2.so"
-```sh
+"/usr/lib/softhsm/libsofthsm2.so"
 let pkcs11 = Pkcs11::new("/usr/lib/softhsm/libsofthsm2.so")?;
-
-```sh
-4. Initialization.
+```
+3. Initialization.
 ```sh
 pkcs11.initialize(CInitializeArgs::OsThreads)?;
-
-```sh
-5. Discover token and start session.
+```
+4. Discover token and start session.
 ```sh
 let slot = pkcs11.get_slots_with_token()?[0];
 let mut session = pkcs11.open_session(
@@ -869,14 +902,15 @@ let mut session = pkcs11.open_session(
     SessionFlags::RW_SESSION | SessionFlags::SERIAL_SESSION,
     None
 )?;
+```
 
-```sh
 6. For softHSM we need to use a PIN to authenticate the access to keys.
+
 ```sh
 let pin = std::env::var("SOFTHSM_USER_PIN")?;
 session.login(UserType::User, Some(&pin))?;
+```
 
-```sh
 7. Generate and/or find keys.
 ```sh
 // Generate AES-256 key
@@ -893,14 +927,14 @@ let key_template = vec![
 ];
 
 let key_handle = session.generate_key(&Mechanism::AesKeyGen, &key_template)?;
+```
 
-```sh
-8. Use the keys for encryption decryption and hashing.
+7. Use the keys for encryption decryption and hashing.
 ```sh
 let padded = b"VendorTLV"; // 16 bytes
 let ciphertext = session.encrypt(key_handle, &Mechanism::AesEcb, padded)?;
+```
 
-```sh
 9. Clean up session
 ```sh
 session.logout()?;

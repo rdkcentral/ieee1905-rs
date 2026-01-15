@@ -1,0 +1,9 @@
+[package]
+name = "rbus-sys"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[build-dependencies]
+bindgen = "0.72.1"
+anyhow = "1.0.100"

@@ -1,0 +1,15 @@
+[package]
+name = "rbus-core"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+rbus-sys = { path = "../rbus-sys" }
+bstr = { version = "1.12.1", default-features = false }
+libc = "0.2.177"
+thiserror = "2.0.17"
+scopeguard = "1.2.0"
+
+[dev-dependencies]
+anyhow = "1.0.100"

@@ -108,7 +108,8 @@ impl AlServiceAccessPoint {
             data_socket_path,
             sender,
             interface_name,
-        ).await;
+        )
+        .await;
 
         let sap = match sap {
             Ok(e) => set_instance(e).await,
@@ -116,7 +117,11 @@ impl AlServiceAccessPoint {
         };
         tracing::info!("SAP server initialized and stored.");
 
-        let result = sap.lock().await.service_access_point_registration_request().await;
+        let result = sap
+            .lock()
+            .await
+            .service_access_point_registration_request()
+            .await;
         tracing::debug!("SAP_INSTANCE locking result: {:?}", result);
 
         match result {
@@ -434,7 +439,9 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
         let mut data_unix_read = LAZY_READER.lock().await;
         tracing::debug!("Got lock on LAZY_RX");
         let Some(ref mut reader) = *data_unix_read else {
-            return Err(AlSapError::Other("Error while dereferencing LAZY_READER".into()));
+            return Err(AlSapError::Other(
+                "Error while dereferencing LAZY_READER".into(),
+            ));
         };
         let result_option = reader.next().await;
         tracing::debug!(
@@ -503,7 +510,9 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
                                         match CMDU::parse(&assembled_payload) {
                                             Ok((_, parsed_cmd)) => {
                                                 let Ok(tlvs) = parsed_cmd.get_tlvs() else {
-                                                    tracing::error!("ReassembleSDU: Cannot parse CMDU TLVs");
+                                                    tracing::error!(
+                                                        "ReassembleSDU: Cannot parse CMDU TLVs"
+                                                    );
                                                     return Err(AlSapError::Other(
                                                         "Error: Cannot parse CMDU TLVs".to_string(),
                                                     ));

@@ -26,10 +26,9 @@ use tokio::time::{interval, Duration};
 use crate::interface_manager::{get_neighbor_macs, get_vlan_id, is_bridge_member};
 use crate::topology_manager::{Ieee1905DeviceData, Ieee1905InterfaceData, TopologyDatabase};
 
-
-
+use crate::cmdu_codec::MediaType;
 /// Scans all interfaces and updates their list of neighbor MAC addresses.
-use tracing::{info, debug, trace};
+use tracing::{debug, info, trace};
 
 /// Scans all interfaces and updates their list of neighbor MAC addresses.
 pub fn scan_edge_devices() -> Vec<Ieee1905InterfaceData> {
@@ -46,24 +45,26 @@ pub fn scan_edge_devices() -> Vec<Ieee1905InterfaceData> {
 
             // Find the corresponding netdev interface
             if let Some(_net_iface) = netdev_interfaces.iter().find(|n| n.name == interface_name) {
-
                 // Determine the media type
-                let media_type = if interface_name.starts_with("eth") {
-                    0x01 // Ethernet
+                let media_type;
+                let metric;
+                if interface_name.starts_with("eth") {
+                    media_type = MediaType::ETHERNET_802_3u; // Ethernet
+                    metric = Some(10);
                 } else if interface_name.starts_with("wl") || interface_name.starts_with("wlan") {
-                    0x02 // Wi-Fi
+                    media_type = MediaType::WIRELESS_802_11b_2_4; // Wi-Fi
+                    metric = Some(100);
                 } else {
                     continue; // Skip non-Ethernet/Wi-Fi interfaces
                 };
-
-                let metric = if media_type == 0x01 { Some(10) } else { Some(100) };
 
                 let bridging_flag = is_bridge_member(&interface_name);
                 let bridging_tuple = if bridging_flag { Some(0) } else { None };
                 let vlan = get_vlan_id(&interface_name);
 
                 // Scan for neighbors on this interface
-                let non_ieee1905_neighbors: Option<Vec<MacAddr>> = Some(get_neighbor_macs(&interface_name));
+                let non_ieee1905_neighbors: Option<Vec<MacAddr>> =
+                    Some(get_neighbor_macs(&interface_name));
 
                 // Log found neighbors
                 if let Some(ref neighbors) = non_ieee1905_neighbors {
@@ -96,11 +97,12 @@ pub fn scan_edge_devices() -> Vec<Ieee1905InterfaceData> {
         }
     }
 
-    info!("Scanning complete. Total interfaces processed: {}", interfaces.len());
+    info!(
+        "Scanning complete. Total interfaces processed: {}",
+        interfaces.len()
+    );
     interfaces
 }
-
-
 
 /// Periodically updates all IEEE1905 devices with the latest neighbor MAC addresses.
 pub async fn update_edge_devices(al_mac: MacAddr, interface_name: String) {
@@ -130,6 +132,7 @@ pub async fn update_edge_devices(al_mac: MacAddr, interface_name: String) {
                 al_mac,
                 destination_frame_mac: al_mac,
                 destination_mac: node.device_data.destination_mac,
+                local_interface_mac: MacAddr::default(),
                 local_interface_list: Some(updated_interfaces),
                 registry_role: None,
             };
@@ -137,11 +140,12 @@ pub async fn update_edge_devices(al_mac: MacAddr, interface_name: String) {
             // Save updated device in the topology
             // topology_db.update_ieee1905_topology(updated_device_data, UpdateType::LocalScan, None).await;
 
-            tracing::info!("Updated device {} with new interface list and neighbors", al_mac);
+            tracing::info!(
+                "Updated device {} with new interface list and neighbors",
+                al_mac
+            );
         } else {
             tracing::warn!("Device {} not found in topology", al_mac);
         }
     }
 }
-
-
