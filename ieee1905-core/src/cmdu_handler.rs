@@ -587,6 +587,7 @@ impl CMDUHandler {
                                     bridging_tuple: None,
                                     vlan: None,
                                     metric: None,
+                                    link_availability: None,
                                     non_ieee1905_neighbors: None,
                                     ieee1905_neighbors: None,
                                 },

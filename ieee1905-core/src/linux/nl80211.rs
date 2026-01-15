@@ -22,6 +22,8 @@ pub enum Nl80211Command {
     /// Get station attributes for station identified by
     /// %NL80211_ATTR_MAC on the interface identified by %NL80211_ATTR_IFINDEX.
     GetStation = 17,
+    /// get survey results, e.g. channel occupation or noise level
+    GetSurvey = 50,
 }
 impl Cmd for Nl80211Command {}
 
@@ -75,6 +77,9 @@ pub enum Nl80211Attribute {
     Ssid = 52,
     /// Use 4-address frames on a virtual interface
     Addr4 = 83,
+    /// survey information about a channel, part of the survey response for
+    /// %NL80211_CMD_GET_SURVEY, nested attribute containing info as possible, see &enum survey_info.
+    SurveyInfo = 84,
     /// Transmit power level in signed mBm units.
     /// This is used in association with @NL80211_ATTR_WIPHY_TX_POWER_SETTING
     /// for non-automatic settings.
@@ -486,3 +491,40 @@ pub enum Nl80211ChannelWidth {
     /// 320 MHz channel, the %NL80211_ATTR_CENTER_FREQ1 attribute must be provided as well
     Width320 = 13,
 }
+
+///
+/// enum nl80211_survey_info - survey information
+///
+/// These attribute types are used with %NL80211_ATTR_SURVEY_INFO when getting information about a survey.
+///
+#[neli_enum(serialized_type = "u16")]
+#[non_exhaustive]
+pub enum Nl80211SurveyInfoAttr {
+    /// attribute number 0 is reserved
+    Invalid = 0,
+    /// center frequency of channel
+    Frequency = 1,
+    /// noise level of channel (u8, dBm)
+    Noise = 2,
+    /// channel is currently being used
+    InUse = 3,
+    /// amount of time (in ms) that the radio was turned on (on channel or globally)
+    Time = 4,
+    /// amount of the time the primary channel was sensed busy (either due to activity or energy detect)
+    TimeBusy = 5,
+    /// amount of time the extension channel was sensed busy
+    TimeExtBusy = 6,
+    /// amount of time the radio spent receiving data (on channel or globally)
+    TimeRx = 7,
+    /// amount of time the radio spent transmitting data (on channel or globally)
+    TimeTx = 8,
+    /// time the radio spent for scan (on this channel or globally)
+    TimeScan = 9,
+    /// attribute used for padding for 64-bit alignment
+    Pad = 10,
+    /// amount of time the radio spent receiving frames destined to the local BSS
+    TimeBssRx = 11,
+    /// center frequency offset in KHz
+    FrequencyOffset = 12,
+}
+impl NlAttrType for Nl80211SurveyInfoAttr {}
