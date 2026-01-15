@@ -1315,6 +1315,10 @@ impl MediaType {
     // MoCA
     pub const MoCA_1_1: Self = Self(0x0300);
 
+    pub fn is_ethernet(&self) -> bool {
+        (self.0 & 0xff00) == 0x0000
+    }
+
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, value) = be_u16(input)?;
         Ok((input, Self(value)))
