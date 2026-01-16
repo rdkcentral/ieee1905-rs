@@ -31,7 +31,7 @@ use ieee1905::lldpdu_observer::LLDPObserver;
 use ieee1905::lldpdu_proxy::lldp_discovery_worker;
 use ieee1905::topology_manager::*;
 use ieee1905::{next_task_id, CMDUObserver};
-use std::ops::Not;
+use std::path::PathBuf;
 //use ieee1905::crypto_engine::CRYPTO_CONTEXT;
 use anyhow::anyhow;
 use std::sync::Arc;
@@ -40,7 +40,7 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::instrument;
-use tracing_appender::rolling;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
@@ -66,12 +66,12 @@ struct CliArgs {
     #[cfg(feature = "enable_tokio_console")]
     #[arg(short, long, default_value_t = false)]
     console_subscriber: bool,
-    /// Enable file appender
-    #[arg(long, default_value_t = false)]
-    file_appender: bool,
-    /// Disable stdout log
-    #[arg(short, long, default_value_t = false)]
-    stdout_apender: bool,
+    /// Enable file appender for logs
+    #[arg(long, value_name = "FOLDER")]
+    file_appender: Option<PathBuf>,
+    /// Disable stdout appender for logs
+    #[arg(long)]
+    no_stdout_appender: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -118,28 +118,35 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn init_logger(cli: &CliArgs) -> impl Drop {
+fn init_logger(cli: &CliArgs) -> Option<WorkerGuard> {
     // modify this filter for your tracing during run time
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&cli.filter));
 
     // logging to stdout
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_target(true)
-        .with_level(true)
-        .with_span_events(FmtSpan::CLOSE);
+    let fmt_layer = (!cli.no_stdout_appender && !cli.topology_ui).then(|| {
+        tracing_subscriber::fmt::layer()
+            .with_target(true)
+            .with_level(true)
+            .with_span_events(FmtSpan::CLOSE)
+    });
 
     // logging to fs
-    let file_appender = rolling::daily("logs", "app.log");
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let mut file_layer_guard = None;
+    let file_layer = cli.file_appender.as_ref().map(|folder| {
+        let file_appender = tracing_appender::rolling::daily(folder, "app.log");
+        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(non_blocking)
-        .with_target(true)
-        .with_level(true)
-        .with_span_events(FmtSpan::CLOSE);
+        file_layer_guard = Some(guard);
+
+        tracing_subscriber::fmt::layer()
+            .with_writer(non_blocking)
+            .with_target(true)
+            .with_level(true)
+            .with_span_events(FmtSpan::CLOSE)
+    });
 
     // combined logger
-    let logging_layer = file_layer.and_then(cli.topology_ui.not().then_some(fmt_layer));
+    let logging_layer = tracing_subscriber::Layer::and_then(fmt_layer, file_layer);
 
     #[cfg(feature = "enable_tokio_console")]
     if cli.console_subscriber {
@@ -148,7 +155,7 @@ fn init_logger(cli: &CliArgs) -> impl Drop {
             .with(logging_layer.with_filter(filter))
             .with(console_subscriber::spawn())
             .init();
-        return guard;
+        return file_layer_guard;
     }
 
     tracing::info!("Tokio console: Disabled");
@@ -156,7 +163,8 @@ fn init_logger(cli: &CliArgs) -> impl Drop {
         .with(logging_layer)
         .with(filter)
         .init();
-    guard
+
+    file_layer_guard
 }
 
 #[instrument(skip_all, name = "main", fields(task = next_task_id()))]
@@ -317,7 +325,10 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
 async fn get_lldp_compatible_interfaces() -> Vec<Ieee1905LocalInterface> {
     let mut interfaces = get_interfaces().await.unwrap_or_default();
 
-    if let Some(bridge) = interfaces.iter().find(|e| e.name.eq_ignore_ascii_case("brlan0")) {
+    if let Some(bridge) = interfaces
+        .iter()
+        .find(|e| e.name.eq_ignore_ascii_case("brlan0"))
+    {
         let bridge_index = bridge.index.cast_unsigned();
         interfaces.retain(|e| e.bridging_tuple == Some(bridge_index));
     }
