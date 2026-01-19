@@ -588,6 +588,7 @@ impl CMDUHandler {
                                     vlan: None,
                                     metric: None,
                                     link_availability: None,
+                                    signal_strength_dbm: None,
                                     non_ieee1905_neighbors: None,
                                     ieee1905_neighbors: None,
                                 },
