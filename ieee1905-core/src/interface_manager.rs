@@ -28,7 +28,7 @@ use crate::cmdu_codec::{MediaType, MediaTypeSpecialInfo, MediaTypeSpecialInfoWif
 use crate::linux::if_link::{RtnlLinkStats, RtnlLinkStats64};
 use crate::linux::nl80211::{
     Nl80211Attribute, Nl80211ChannelWidth, Nl80211Command, Nl80211IfType, Nl80211RateInfo,
-    Nl80211StaInfo, NL80211_GENL_NAME,
+    Nl80211StaInfo, Nl80211SurveyInfoAttr, NL80211_GENL_NAME,
 };
 use crate::topology_manager::{Ieee1905InterfaceData, Ieee1905LocalInterface};
 use indexmap::IndexMap;
@@ -187,6 +187,7 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
             bridging_tuple: ethernet.bridge_if_index,
             vlan: ethernet.vlan_id,
             metric: None,
+            link_availability: None,
             signal_strength_dbm: None,
             non_ieee1905_neighbors: None,
             ieee1905_neighbors: None,
@@ -220,6 +221,7 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
             );
             continue;
         }
+        interface.data.link_availability = wireless.link_availability;
         interface.data.signal_strength_dbm = wireless.signal_strength_dbm;
         interface.data.media_type = wireless.media_type;
         interface.data.media_type_extra = MediaTypeSpecialInfo::Wifi(MediaTypeSpecialInfoWifi {
@@ -337,6 +339,7 @@ struct WirelessInterfaceInfo {
     channel_width: Option<Nl80211ChannelWidth>,
     center_freq_index1: Option<u8>,
     center_freq_index2: Option<u8>,
+    link_availability: Option<u8>,
     signal_strength_dbm: Option<i8>,
     media_type: MediaType,
 }
@@ -413,6 +416,7 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
             channel_width,
             center_freq_index1: center_freq1.and_then(get_wifi_center_frequency_index),
             center_freq_index2: center_freq2.and_then(get_wifi_center_frequency_index),
+            link_availability: None,
             signal_strength_dbm: None,
             media_type: MediaType::WIRELESS_802_11b_2_4,
         });
@@ -468,9 +472,63 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
                 }
             }
         }
+
+        if let Err(e) = get_wireless_survey_info(&socket, family_id, interface).await {
+            warn!(
+                if_name = interface.if_name,
+                if_index = interface.if_index,
+                %e,
+                "failed to get wireless survey info",
+            );
+        }
     }
 
     Ok(interfaces)
+}
+
+async fn get_wireless_survey_info(
+    router: &NlRouter,
+    family_id: u16,
+    interface: &mut WirelessInterfaceInfo,
+) -> anyhow::Result<()> {
+    let nl_attrs = NlattrBuilder::default()
+        .nla_type(
+            AttrTypeBuilder::default()
+                .nla_type(Nl80211Attribute::IfIndex)
+                .build()?,
+        )
+        .nla_payload(interface.if_index)
+        .build()?;
+
+    let nl_message = GenlmsghdrBuilder::default()
+        .cmd(Nl80211Command::GetSurvey)
+        .attrs(GenlBuffer::from_iter([nl_attrs]))
+        .version(1)
+        .build()?;
+
+    let mut recv = router
+        .send::<_, _, GenlId, Genlmsghdr<Nl80211Command, Nl80211Attribute>>(
+            family_id,
+            NlmF::DUMP | NlmF::ACK,
+            NlPayload::Payload(nl_message),
+        )
+        .await?;
+
+    while let Some(message) = recv.next().await {
+        let message: Nlmsghdr<GenlId, Genlmsghdr<Nl80211Command, Nl80211Attribute>> = message?;
+        let Some(payload) = message.get_payload() else {
+            continue;
+        };
+
+        let handle = payload.attrs().get_attr_handle();
+        let Ok(info) = handle.get_nested_attributes(Nl80211Attribute::SurveyInfo) else {
+            continue;
+        };
+        if let Some(link_availability) = get_link_availability(&info) {
+            interface.link_availability = Some(link_availability);
+        }
+    }
+    Ok(())
 }
 
 fn get_wireless_media_type(
@@ -525,6 +583,14 @@ fn get_wireless_media_type(
     }
 }
 
+fn get_link_availability(handle: &GenlAttrHandle<Nl80211SurveyInfoAttr>) -> Option<u8> {
+    let Ok(total) = handle.get_attr_payload_as::<u64>(Nl80211SurveyInfoAttr::Time) else {
+        return None;
+    };
+    let Ok(busy) = handle.get_attr_payload_as::<u64>(Nl80211SurveyInfoAttr::TimeBusy) else {
+        return None;
+    };
+    Some(((busy * 100) / total).clamp(0, 100) as u8)
 fn get_signal_strength(handle: &GenlAttrHandle<Nl80211StaInfo>) -> Option<i8> {
     if let Ok(signal) = handle.get_attr_payload_as::<i8>(Nl80211StaInfo::Signal) {
         return Some(signal);
