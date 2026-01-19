@@ -463,7 +463,7 @@ journalctl -u ieee1905.service
 
 By default service run with topology CLI enabled, info log level, listening on ```eth0``` interface and unix sockets named ```/tmp/al_control_socket``` and ```/tmp/al_data_socket```.
 
-#### Enable topolgy CLI
+#### Enable topology CLI
 
 By default topology CLI is disabled.
 When topology CLI is enabled. Log files are saved to a file and will not appear on standard output.
@@ -471,6 +471,22 @@ When topology CLI is enabled. Log files are saved to a file and will not appear 
 ```shell
 /usr/bin/ieee1905 -t
 ```
+
+#### Console logger
+
+By default, logs will be printed to stdout. Use following command to disable stdout logging:
+```shell
+/usr/bin/ieee1905 --no-stdout-appender
+```
+
+#### File logger
+
+By default, file logger is disabled. To enable file logging use following arguments:
+```shell
+/usr/bin/ieee1905 --file-appender ./logs
+```
+
+This will write logs to the folder `./logs`. Those logs will be automatically rotated on a daily basis.
 
 #### Change log level
 
