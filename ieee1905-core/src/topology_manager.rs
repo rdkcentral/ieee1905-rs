@@ -42,12 +42,13 @@ use tracing::{debug, error, info, instrument, warn};
 // Standard library
 use indexmap::IndexMap;
 use neli::consts::rtnl::Iff;
-use std::{io, sync::Arc};
 use std::ops::Deref;
+use std::{io, sync::Arc};
 use tokio::task::JoinSet;
 // Internal modules
-use crate::cmdu_codec::{MediaType, MediaTypeSpecialInfo};
+use crate::cmdu_codec::{LinkMetricQuery, MediaType, MediaTypeSpecialInfo};
 use crate::interface_manager::get_interfaces;
+use crate::linux::if_link::RtnlLinkStats64;
 use crate::lldpdu::PortId;
 use crate::{
     cmdu::IEEE1905Neighbor, interface_manager::get_forwarding_interface_mac, next_task_id,
@@ -95,6 +96,7 @@ pub struct Ieee1905LocalInterface {
     pub name: String,
     pub index: i32,
     pub flags: Iff,
+    pub link_stats: Option<RtnlLinkStats64>,
     pub data: Ieee1905InterfaceData,
 }
 
@@ -115,6 +117,7 @@ pub struct Ieee1905InterfaceData {
     pub bridging_tuple: Option<u32>,
     pub vlan: Option<u16>,
     pub metric: Option<u16>,
+    pub phy_rate: Option<u64>,
     pub link_availability: Option<u8>,
     pub signal_strength_dbm: Option<i8>,
     pub non_ieee1905_neighbors: Option<Vec<MacAddr>>,
@@ -140,6 +143,7 @@ impl Ieee1905InterfaceData {
             bridging_tuple,
             vlan,
             metric,
+            phy_rate: None,
             link_availability: None,
             signal_strength_dbm: None,
             non_ieee1905_neighbors,
@@ -324,6 +328,7 @@ impl Ieee1905DeviceData {
             self.local_interface_list = Some(interfaces);
         }
     }
+
     pub fn has_changed(&self, other: &Self) -> bool {
         self.local_interface_list != other.local_interface_list
     }
@@ -441,24 +446,28 @@ impl TopologyDatabase {
     /// **Retrieves a device node from the database**
     pub async fn find_device_by_port(&self, mac: MacAddr) -> Option<Ieee1905Node> {
         let nodes = self.nodes.read().await;
-        nodes
-            .values()
-            .find(|node| {
-                if node.device_data.al_mac == mac {
-                    return true;
-                }
-                if node.device_data.destination_frame_mac == mac {
-                    return true;
-                }
-                if node.device_data.destination_mac == Some(mac) {
-                    return true;
-                }
-                node.device_data
-                    .local_interface_list
-                    .as_ref()
-                    .is_some_and(|interfaces| interfaces.iter().any(|e| e.mac == mac))
-            })
-            .cloned()
+        Self::find_node_by_port(nodes.values(), mac).cloned()
+    }
+
+    fn find_node_by_port<'a>(
+        mut iter: impl Iterator<Item = &'a Ieee1905Node>,
+        mac: MacAddr,
+    ) -> Option<&'a Ieee1905Node> {
+        iter.find(|node| {
+            if node.device_data.al_mac == mac {
+                return true;
+            }
+            if node.device_data.destination_frame_mac == mac {
+                return true;
+            }
+            if node.device_data.destination_mac == Some(mac) {
+                return true;
+            }
+            node.device_data
+                .local_interface_list
+                .as_ref()
+                .is_some_and(|e| e.iter().any(|e| e.mac == mac))
+        })
     }
 
     /// **Getter for `local_interface_list`**
@@ -814,6 +823,36 @@ impl TopologyDatabase {
         }
     }
 
+    pub async fn handle_link_metric_query(
+        &self,
+        source: MacAddr,
+        query: &LinkMetricQuery,
+    ) -> Option<(MacAddr, Vec<Ieee1905Node>)> {
+        let nodes = self.nodes.write().await;
+        let Some(node) = Self::find_node_by_port(nodes.values(), source) else {
+            debug!(%source, "link_metric_query — node not found");
+            return None;
+        };
+
+        let node_al_mac = node.device_data.al_mac;
+        let neighbors = match query.neighbor_mac {
+            Some(e) => {
+                let Some(neighbor) = Self::find_node_by_port(nodes.values(), e) else {
+                    debug!(%source, "link_metric_query — neighbor {e} not found");
+                    return None;
+                };
+                vec![neighbor.clone()]
+            }
+            None => nodes
+                .iter()
+                .filter(|e| *e.0 != node_al_mac)
+                .map(|e| e.1.clone())
+                .collect(),
+        };
+
+        Some((node_al_mac, neighbors))
+    }
+
     pub async fn start_topology_cli(self: Arc<Self>) -> io::Result<()> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
@@ -990,6 +1029,7 @@ mod tests {
             bridging_tuple: None,
             vlan: None,
             metric: None,
+            phy_rate: None,
             link_availability: None,
             signal_strength_dbm: None,
             non_ieee1905_neighbors: None,

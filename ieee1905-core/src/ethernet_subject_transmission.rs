@@ -39,6 +39,8 @@ pub struct EthernetSender {
 }
 
 impl EthernetSender {
+    pub const ETHER_TYPE: u16 = 0x893A;
+
     /// **Creates a new `EthernetSender`**
     pub fn new(interface_name: &str, interface_mutex: Arc<Mutex<()>>) -> Self {
         let (tx, mut rx) = mpsc::channel::<Frame>(100);
