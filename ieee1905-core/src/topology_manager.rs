@@ -115,6 +115,7 @@ pub struct Ieee1905InterfaceData {
     pub bridging_tuple: Option<u32>,
     pub vlan: Option<u16>,
     pub metric: Option<u16>,
+    pub signal_strength_dbm: Option<i8>,
     pub non_ieee1905_neighbors: Option<Vec<MacAddr>>,
     pub ieee1905_neighbors: Option<Vec<IEEE1905Neighbor>>,
 }
@@ -138,6 +139,7 @@ impl Ieee1905InterfaceData {
             bridging_tuple,
             vlan,
             metric,
+            signal_strength_dbm: None,
             non_ieee1905_neighbors,
             ieee1905_neighbors,
         }
@@ -986,6 +988,7 @@ mod tests {
             bridging_tuple: None,
             vlan: None,
             metric: None,
+            signal_strength_dbm: None,
             non_ieee1905_neighbors: None,
             ieee1905_neighbors: None,
         };

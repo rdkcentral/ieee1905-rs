@@ -187,6 +187,7 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
             bridging_tuple: ethernet.bridge_if_index,
             vlan: ethernet.vlan_id,
             metric: None,
+            signal_strength_dbm: None,
             non_ieee1905_neighbors: None,
             ieee1905_neighbors: None,
         };
@@ -219,6 +220,7 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
             );
             continue;
         }
+        interface.data.signal_strength_dbm = wireless.signal_strength_dbm;
         interface.data.media_type = wireless.media_type;
         interface.data.media_type_extra = MediaTypeSpecialInfo::Wifi(MediaTypeSpecialInfoWifi {
             bssid: wireless.bssid.unwrap_or_default(),
@@ -335,6 +337,7 @@ struct WirelessInterfaceInfo {
     channel_width: Option<Nl80211ChannelWidth>,
     center_freq_index1: Option<u8>,
     center_freq_index2: Option<u8>,
+    signal_strength_dbm: Option<i8>,
     media_type: MediaType,
 }
 
@@ -410,6 +413,7 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
             channel_width,
             center_freq_index1: center_freq1.and_then(get_wifi_center_frequency_index),
             center_freq_index2: center_freq2.and_then(get_wifi_center_frequency_index),
+            signal_strength_dbm: None,
             media_type: MediaType::WIRELESS_802_11b_2_4,
         });
     }
@@ -458,6 +462,9 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
                     sta_info.get_nested_attributes::<Nl80211RateInfo>(Nl80211StaInfo::TxBitrate)
                 {
                     interface.media_type = get_wireless_media_type(interface.frequency, &rate_info);
+                }
+                if let Some(signal) = get_signal_strength(&sta_info) {
+                    interface.signal_strength_dbm = Some(signal);
                 }
             }
         }
@@ -516,6 +523,16 @@ fn get_wireless_media_type(
         // 802.11g
         MediaType::WIRELESS_802_11g_2_4
     }
+}
+
+fn get_signal_strength(handle: &GenlAttrHandle<Nl80211StaInfo>) -> Option<i8> {
+    if let Ok(signal) = handle.get_attr_payload_as::<i8>(Nl80211StaInfo::Signal) {
+        return Some(signal);
+    }
+    if let Ok(signal) = handle.get_attr_payload_as::<i8>(Nl80211StaInfo::SignalAvg) {
+        return Some(signal);
+    }
+    None
 }
 
 ///
