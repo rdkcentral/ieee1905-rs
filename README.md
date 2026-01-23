@@ -486,7 +486,19 @@ By default, file logger is disabled. To enable file logging use following argume
 /usr/bin/ieee1905 --file-appender ./logs
 ```
 
-This will write logs to the folder `./logs`. Those logs will be automatically rotated on a daily basis.
+This will write logs to the folder `./logs`.
+
+##### File logs rotation
+
+File logs will rotate on a daily basis and also have files count and file size limits.
+
+Those limits can be changes with the following arguments:
+```shell
+/usr/bin/ieee1905 \
+    --file-appender ./logs \
+    --file-appender-files-count 3 \
+    --file-appender-max-file-size 10
+```
 
 #### Change log level
 
