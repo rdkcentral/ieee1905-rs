@@ -1,14 +1,11 @@
 [package]
-name = "ieee1905-core"
+name = "ieee1905"
 version = "0.3.0"
 edition = "2021"
 repository = "git@github.com:rdkcentral/ieee1905-rs.git"
 license = "Apache-2.0"
 #license-file = "LICENSE"
 publish = false
-
-[lib]
-name = "ieee1905"
 
 [features]
 default = ["rbus"]

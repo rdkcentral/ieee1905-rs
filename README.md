@@ -502,12 +502,23 @@ Those limits can be changes with the following arguments:
 
 #### Change log level
 
-To enable trace log:
+Possible log levels are:
+- `tracing` - should be used only for deep debugging, enables all logs and dumps all packets
+- `debug` - provides a general debugging information
+- `info` - entry points and important events
+- `warn` - unexpected states that don't affect the logic
+- `error` - errors can unexpected states
+- `off` - disables all logging
+
+To enable `error` logs for all app modules except crates:
+```shell
+/usr/bin/ieee1905 -f ieee1905=error
+```
+
+To enable `trace` logs for every module and crates:
 ```shell
 /usr/bin/ieee1905 -f trace
 ```
-
-Other log levels can also be used `debug,warn,error,info`
 
 Logging can be limited to certain modules for example to set trace level for topology manager and suppress all other logs:
 ```shell
@@ -531,7 +542,6 @@ RUST_LOG=off /usr/bin/ieee1905
 ##### Available modules
 
 ```
-ieee1905_core
 ieee1905::rbus
 ieee1905::al_sap
 ieee1905::cmdu_codec
@@ -593,18 +603,18 @@ IEEE1905 service can be build with few compile time features:
 By default, tokio-console is not included in the binary.
 In order to enable it one has to build with following command:
 ```shell
-cargo build --package ieee1905-core --release --features=enable_tokio_console
+cargo build --package ieee1905 --release --features=enable_tokio_console
 ```
 
 Additionally, RBUS provider will be enabled by default.
 Default features can be switched off in case they are not needed:
 ```shell
-cargo build --package ieee1905-core --release --no-default-features
+cargo build --package ieee1905 --release --no-default-features
 ```
 
 On other hand:
 ```shell
-cargo build --package ieee1905-core --release --all-features
+cargo build --package ieee1905 --release --all-features
 ```
 
 Will enable all supported features.
