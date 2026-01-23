@@ -43,6 +43,7 @@ use tracing::instrument;
 use tracing_appender::rolling;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{prelude::*, EnvFilter};
+use std::process;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -121,6 +122,7 @@ fn main() -> anyhow::Result<()> {
 fn init_logger(cli: &CliArgs) -> impl Drop {
     // modify this filter for your tracing during run time
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&cli.filter));
+    let pid: u32 = process::id();
 
     // logging to stdout
     let fmt_layer = tracing_subscriber::fmt::layer()
@@ -130,6 +132,8 @@ fn init_logger(cli: &CliArgs) -> impl Drop {
 
     // logging to fs
     let file_appender = rolling::daily("logs", "app.log");
+    let log_filename = format!("app.{}.log", pid);
+    let file_appender = rolling::daily("/tmp/", log_filename);
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
     let file_layer = tracing_subscriber::fmt::layer()
