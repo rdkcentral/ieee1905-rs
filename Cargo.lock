@@ -975,7 +975,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
 name = "ieee1905"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1005,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "ieee1905-tests"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1641,7 +1641,7 @@ dependencies = [
 
 [[package]]
 name = "rbus-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "bstr",
@@ -1653,7 +1653,7 @@ dependencies = [
 
 [[package]]
 name = "rbus-provider"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "bstr",
@@ -1665,7 +1665,7 @@ dependencies = [
 
 [[package]]
 name = "rbus-sys"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "bindgen",
