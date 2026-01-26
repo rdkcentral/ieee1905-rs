@@ -1,14 +1,11 @@
 [package]
-name = "ieee1905-core"
+name = "ieee1905"
 version = "0.3.0"
 edition = "2021"
 repository = "git@github.com:rdkcentral/ieee1905-rs.git"
 license = "Apache-2.0"
 #license-file = "LICENSE"
 publish = false
-
-[lib]
-name = "ieee1905"
 
 [features]
 default = ["rbus"]
@@ -40,3 +37,4 @@ tracing-appender = "0.2.3"
 thiserror = "2.0.16"
 indexmap = "2.12.1"
 neli = { version = "0.7.3", features = ["async"] }
+chrono = "0.4.43"

@@ -463,7 +463,7 @@ journalctl -u ieee1905.service
 
 By default service run with topology CLI enabled, info log level, listening on ```eth0``` interface and unix sockets named ```/tmp/al_control_socket``` and ```/tmp/al_data_socket```.
 
-#### Enable topolgy CLI
+#### Enable topology CLI
 
 By default topology CLI is disabled.
 When topology CLI is enabled. Log files are saved to a file and will not appear on standard output.
@@ -472,14 +472,53 @@ When topology CLI is enabled. Log files are saved to a file and will not appear 
 /usr/bin/ieee1905 -t
 ```
 
+#### Console logger
+
+By default, logs will be printed to stdout. Use following command to disable stdout logging:
+```shell
+/usr/bin/ieee1905 --no-stdout-appender
+```
+
+#### File logger
+
+By default, file logger is disabled. To enable file logging use following arguments:
+```shell
+/usr/bin/ieee1905 --file-appender ./logs
+```
+
+This will write logs to the folder `./logs`.
+
+##### File logs rotation
+
+File logs will rotate on a daily basis and also have files count and file size limits.
+
+Those limits can be changes with the following arguments:
+```shell
+/usr/bin/ieee1905 \
+    --file-appender ./logs \
+    --file-appender-files-count 3 \
+    --file-appender-max-file-size 10
+```
+
 #### Change log level
 
-To enable trace log:
+Possible log levels are:
+- `tracing` - should be used only for deep debugging, enables all logs and dumps all packets
+- `debug` - provides a general debugging information
+- `info` - entry points and important events
+- `warn` - unexpected states that don't affect the logic
+- `error` - errors can unexpected states
+- `off` - disables all logging
+
+To enable `error` logs for all app modules except crates:
+```shell
+/usr/bin/ieee1905 -f ieee1905=error
+```
+
+To enable `trace` logs for every module and crates:
 ```shell
 /usr/bin/ieee1905 -f trace
 ```
-
-Other log levels can also be used `debug,warn,error,info`
 
 Logging can be limited to certain modules for example to set trace level for topology manager and suppress all other logs:
 ```shell
@@ -503,7 +542,6 @@ RUST_LOG=off /usr/bin/ieee1905
 ##### Available modules
 
 ```
-ieee1905_core
 ieee1905::rbus
 ieee1905::al_sap
 ieee1905::cmdu_codec
@@ -565,18 +603,18 @@ IEEE1905 service can be build with few compile time features:
 By default, tokio-console is not included in the binary.
 In order to enable it one has to build with following command:
 ```shell
-cargo build --package ieee1905-core --release --features=enable_tokio_console
+cargo build --package ieee1905 --release --features=enable_tokio_console
 ```
 
 Additionally, RBUS provider will be enabled by default.
 Default features can be switched off in case they are not needed:
 ```shell
-cargo build --package ieee1905-core --release --no-default-features
+cargo build --package ieee1905 --release --no-default-features
 ```
 
 On other hand:
 ```shell
-cargo build --package ieee1905-core --release --all-features
+cargo build --package ieee1905 --release --all-features
 ```
 
 Will enable all supported features.

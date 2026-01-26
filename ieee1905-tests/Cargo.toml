@@ -7,7 +7,7 @@ license = "Apache-2.0"
 
 [dependencies]
 # core library
-ieee1905-core = { path = "../ieee1905-core" }
+ieee1905 = { path = "../ieee1905-core" }
 
 tokio  = { version = "1.48.0", features = ["rt-multi-thread", "macros", "net", "time", "fs"] }
 tokio-util = "0.7.17"
@@ -20,7 +20,7 @@ clap = { version = "4.5.53", features = ["derive"] }
 pnet = "0.35.0"
 
 [features]
-enable_tokio_console = ["ieee1905-core/enable_tokio_console"]
+enable_tokio_console = ["ieee1905/enable_tokio_console"]
 
 [[bin]]
 name="functional_tests_transmitter"
