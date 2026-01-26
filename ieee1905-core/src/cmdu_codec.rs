@@ -1459,7 +1459,11 @@ pub struct CMDU {
     pub flags: u8,
     pub payload: Vec<u8>,
 }
+
 impl CMDU {
+    pub const HEADER_SIZE: usize = 8;
+    pub const FLAG_LAST_FRAGMENT: u8 = 0x80;
+
     pub fn get_tlvs(&self) -> anyhow::Result<Vec<TLV>> {
         let mut tlvs: Vec<TLV> = vec![];
         let mut remaining_input = self.payload.as_slice();
@@ -1566,50 +1570,80 @@ impl CMDU {
         bytes
     }
 
-    pub fn fragment(mut self, max_size: usize) -> Vec<CMDU> {
-        let tlvs_size = self.payload.len(); // tlv_size is just payload size
-        let total_size = 8 + tlvs_size;
-
-        if total_size <= max_size {
-            self.fragment = 0;
-            self.flags |= 0x80; // EndOfMessage
-            return vec![self];
+    pub fn fragment_tlv_boundary(mut self, max_size: usize) -> anyhow::Result<Vec<CMDU>> {
+        let max_content_size = max_size - Self::HEADER_SIZE;
+        if self.payload.len() <= max_content_size {
+            self.flags |= Self::FLAG_LAST_FRAGMENT;
+            return Ok(vec![self]);
         }
 
-        let mut fragments = Vec::new();
+        let mut fragments = Vec::<Self>::new();
+        for tlv in self.get_tlvs()? {
+            let tlv_size = tlv.total_size();
+            if tlv_size > max_content_size {
+                bail!("TLV is too large, size = {tlv_size}/{max_content_size}");
+            }
 
-        let mut fragment_no = 0;
-        while !self.payload.is_empty() {
-            let end = 1492.min(self.payload.len());
-            let max_bytes = self.payload.drain(0..end).collect();
+            if let Some(fragment) = fragments.last_mut() {
+                if fragment.payload.len() + tlv_size <= max_content_size {
+                    fragment.payload.extend(tlv.serialize());
+                    continue;
+                }
+            }
 
-            let current_fragment = CMDU {
+            fragments.push(Self {
                 message_version: self.message_version,
                 reserved: self.reserved,
                 message_type: self.message_type,
                 message_id: self.message_id,
-                fragment: fragment_no,
-                flags: self.flags & !0x80,
-                payload: max_bytes,
-            };
-            fragments.push(current_fragment);
-            fragment_no += 1;
+                fragment: fragments.len() as u8,
+                flags: self.flags & (!Self::FLAG_LAST_FRAGMENT),
+                payload: tlv.serialize(),
+            });
         }
-        if let Some(last_elem) = fragments.last_mut() {
-            last_elem.flags |= 0x80;
+
+        if let Some(fragment) = fragments.last_mut() {
+            fragment.flags |= Self::FLAG_LAST_FRAGMENT;
+        }
+        Ok(fragments)
+    }
+
+    pub fn fragment_byte_boundary(mut self, max_size: usize) -> Vec<CMDU> {
+        let max_content_size = max_size - Self::HEADER_SIZE;
+        if self.payload.len() <= max_content_size {
+            self.flags |= Self::FLAG_LAST_FRAGMENT;
+            return vec![self];
+        }
+
+        let chunks = self.payload.chunks(max_content_size);
+        let mut fragments = chunks
+            .enumerate()
+            .map(|(index, e)| Self {
+                message_version: self.message_version,
+                reserved: self.reserved,
+                message_type: self.message_type,
+                message_id: self.message_id,
+                fragment: index as u8,
+                flags: self.flags & (!Self::FLAG_LAST_FRAGMENT),
+                payload: e.to_vec(),
+            })
+            .collect::<Vec<_>>();
+
+        if let Some(fragment) = fragments.last_mut() {
+            fragment.flags |= Self::FLAG_LAST_FRAGMENT;
         }
         fragments
     }
 
-    pub fn reassemble(fragments: Vec<CMDU>) -> Result<CMDU, CmduReassemblyError> {
-        if fragments.is_empty() {
+    pub fn reassemble(mut fragments: Vec<CMDU>) -> Result<CMDU, CmduReassemblyError> {
+        let Some(fragment0) = fragments.first() else {
             return Err(CmduReassemblyError::EmptyFragments);
-        }
+        };
 
         // Check metadata consistency
-        let message_version = fragments[0].message_version;
-        let message_type = fragments[0].message_type;
-        let message_id = fragments[0].message_id;
+        let message_version = fragment0.message_version;
+        let message_type = fragment0.message_type;
+        let message_id = fragment0.message_id;
 
         if !fragments.iter().all(|f| {
             f.message_version == message_version
@@ -1620,7 +1654,6 @@ impl CMDU {
         }
 
         // Sort by fragment number
-        let mut fragments = fragments;
         fragments.sort_by_key(|f| f.fragment);
 
         // Check that fragment indices are continuous
@@ -1660,11 +1693,10 @@ impl CMDU {
     pub fn is_fragmented(&self) -> bool {
         self.fragment > 0 || !self.is_last_fragment()
     }
+
     /// Calculates the total size of the CMDU (header + all TLVs)
     pub fn total_size(&self) -> usize {
-        let header_size = 8; // message_version (1) + reserved (1) + message_type (2) + message_id (2) + fragment (1) + flags (1)
-        let payload_size = self.payload.len();
-        header_size + payload_size
+        self.payload.len() + Self::HEADER_SIZE
     }
 }
 
@@ -1917,7 +1949,7 @@ pub mod tests {
         let cmdu = make_dummy_cmdu(vec![600, 600, 400]); // ~1600 bytes total
 
         // Fragment CMDU
-        let fragments = cmdu.clone().fragment(1500);
+        let fragments = cmdu.clone().fragment_tlv_boundary(1500).unwrap();
         assert!(fragments.len() >= 2, "Should create at least 2 fragments");
 
         // Check fragments continuity and flags
@@ -1949,7 +1981,7 @@ pub mod tests {
         // Small CMDU with 3 TLVSs that fits in one fragment
         let cmdu = make_dummy_cmdu(vec![100, 200, 300]); // 600 bytes
 
-        let fragments = cmdu.clone().fragment(1500);
+        let fragments = cmdu.clone().fragment_tlv_boundary(1500).unwrap();
         assert_eq!(fragments.len(), 1, "Only one fragment should be created");
         let frag = &fragments[0];
 
@@ -1975,7 +2007,7 @@ pub mod tests {
         let cmdu = make_dummy_cmdu(vec![1500 - 8 - 3, 500, 900, 1500 - 8 - 3]);
 
         // Fragment CMDU
-        let fragments = cmdu.clone().fragment(1500);
+        let fragments = cmdu.clone().fragment_tlv_boundary(1500).unwrap();
         assert!(fragments.len() >= 3, "Should create at least 3 fragments");
 
         // Check size of every fragment. Every CMDU fragment (including CMDU header) should have length in range of 11..1500 bytes
@@ -2033,17 +2065,9 @@ pub mod tests {
         let cmdu = make_dummy_cmdu(vec![400, 500, 1500]); // 2400 bytes of TLVs payload
 
         // Try to do the fragmentation of CMDU
-        // It should not panic in fragment() as size based fragmentation allows TLV payload bigger than MTU
-        let fragments = cmdu.clone().fragment(1500);
-
-        // Reassembly
-        let reassembled = CMDU::reassemble(fragments).expect("Reassembly should succeed");
-
-        // Compare payloads of original CMDU and reassembled one
-        assert_eq!(
-            reassembled.payload, cmdu.payload,
-            "Original and reassembled payload should match"
-        );
+        // It should panic as TLV based fragmentation doesn't allow TLV payload bigger than MTU
+        let result = cmdu.clone().fragment_tlv_boundary(1500);
+        assert!(result.is_err(), "Serializaed TLV bigger than MTU");
     }
 
     // Verify the correctness of fragmentation and reassembly of CMDU fitting exactly CMDU size
@@ -2053,7 +2077,7 @@ pub mod tests {
         let cmdu = make_dummy_cmdu(vec![1500 - 8 - 3]); // Whole CMDU (with CMDU header) has 1500 bytes
 
         // Do the fragmentation on CMDU
-        let fragments = cmdu.clone().fragment(1500);
+        let fragments = cmdu.clone().fragment_tlv_boundary(1500).unwrap();
         assert_eq!(fragments.len(), 1, "Should create exactly 1 fragment");
 
         // Check if total size of single CMDU (first and at the same time last) meets requirement of minimal size of the fragment
@@ -2089,7 +2113,7 @@ pub mod tests {
         huge_cmdu.flags = 0x80;
 
         // Do the fragmentation
-        let fragmented_cmdus = huge_cmdu.fragment(1500);
+        let fragmented_cmdus = huge_cmdu.fragment_tlv_boundary(1500).unwrap();
 
         // Count number of CMDU fragments
         let no_of_fragments = fragmented_cmdus.len();
@@ -3303,7 +3327,7 @@ pub mod tests {
         let cmdu = make_dummy_cmdu(vec![1500 - 8 - 3 + 1]); // Whole CMDU (with CMDU header) has 1501 bytes
 
         // Do the fragmentation on CMDU
-        let fragments = cmdu.clone().fragment(1500);
+        let fragments = cmdu.clone().fragment_byte_boundary(1500);
 
         for (i, frag) in fragments.iter().enumerate() {
             if frag.is_last_fragment() {

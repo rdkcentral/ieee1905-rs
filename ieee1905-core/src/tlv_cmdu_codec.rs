@@ -49,6 +49,12 @@ pub struct TLV {
 }
 
 impl TLV {
+    pub const HEADER: usize = 3;
+
+    pub fn total_size(&self) -> usize {
+        self.tlv_value.as_deref().unwrap_or_default().len() + Self::HEADER
+    }
+
     /// Parses a byte slice into a `TLV` instance.
     pub fn parse(input: &[u8]) -> IResult<&[u8], TLV> {
         // Parse the TLV type (1 byte).
