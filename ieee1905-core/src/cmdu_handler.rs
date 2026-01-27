@@ -1084,7 +1084,7 @@ mod tests {
         let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
 
         // Do the CMDU fragmentation
-        let fragments = cmdu.clone().fragment(1500);
+        let fragments = cmdu.clone().fragment_tlv_boundary(1500).unwrap();
 
         // Prepare a CmduReassembler instance
         let cmdu_reasm = CmduReassembler::new();

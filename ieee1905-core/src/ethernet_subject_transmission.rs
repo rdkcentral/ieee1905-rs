@@ -40,6 +40,7 @@ pub struct EthernetSender {
 
 impl EthernetSender {
     pub const ETHER_TYPE: u16 = 0x893A;
+    pub const ETHER_MTU_SIZE: usize = 1500;
 
     /// **Creates a new `EthernetSender`**
     pub fn new(interface_name: &str, interface_mutex: Arc<Mutex<()>>) -> Self {
