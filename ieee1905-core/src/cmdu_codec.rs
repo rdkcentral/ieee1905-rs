@@ -52,6 +52,7 @@ pub enum CMDUType {
     LinkMetricResponse,
     ApAutoConfigSearch,
     ApAutoConfigResponse,
+    ApAutoConfigWCS,
     Unknown(u16), // To handle unknown or unsupported CMDU types
 }
 
@@ -67,7 +68,7 @@ impl CMDUType {
             0x0006 => CMDUType::LinkMetricResponse,
             0x0007 => CMDUType::ApAutoConfigSearch,
             0x0008 => CMDUType::ApAutoConfigResponse,
-
+            0x0009 => CMDUType::ApAutoConfigWCS,
             _ => CMDUType::Unknown(value), // For unrecognized CMDU types
         }
     }
@@ -84,6 +85,7 @@ impl CMDUType {
             //TODO remove this linkMetric
             CMDUType::ApAutoConfigSearch => 0x0007,
             CMDUType::ApAutoConfigResponse => 0x0008,
+            CMDUType::ApAutoConfigWCS => 0x0009,
             CMDUType::Unknown(value) => value, // Return the unknown value as-is
         }
     }
@@ -171,6 +173,7 @@ pub enum IEEE1905TLVType {
     SupportedRole,
     ClientAssociation,
     MultiApProfile,
+    Profile2ApCapability,
     Unknown(u8), // To handle unknown or unsupported TLV types
 }
 
@@ -194,6 +197,7 @@ impl IEEE1905TLVType {
             0x0f => IEEE1905TLVType::SupportedRole,
             0x92 => IEEE1905TLVType::ClientAssociation,
             0xb3 => IEEE1905TLVType::MultiApProfile,
+            0xb4 => IEEE1905TLVType::Profile2ApCapability,
             _ => IEEE1905TLVType::Unknown(value), // For unrecognized types
         }
     }
@@ -217,6 +221,7 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::SupportedRole => 0x0f,
             IEEE1905TLVType::ClientAssociation => 0x92,
             IEEE1905TLVType::MultiApProfile => 0xb3,
+            IEEE1905TLVType::Profile2ApCapability => 0xb4,
             IEEE1905TLVType::Unknown(value) => value, // Return the unknown value as-is
         }
     }
@@ -1037,6 +1042,84 @@ impl MultiApProfileValue {
 
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq)]
+pub struct Profile2ApCapability {
+    pub max_prioritization_rules: u8,
+    pub reserved: u8,
+    pub byte_counter_units: ByteCounterUnits,
+    pub prioritization: bool,
+    pub dpp_onboarding: bool,
+    pub traffic_separation: bool,
+    pub flags_reserved: u8,
+    pub max_vids: u8,
+}
+
+impl Profile2ApCapability {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, max_prioritization_rules) = be_u8(input)?;
+        let (input, reserved) = be_u8(input)?;
+        let (input, flags) = be_u8(input)?;
+        let (input, max_vids) = be_u8(input)?;
+
+        let this = Self {
+            max_prioritization_rules,
+            reserved,
+            byte_counter_units: ByteCounterUnits::from_u8(flags >> 6),
+            prioritization: ((flags >> 5) & 1) == 1,
+            dpp_onboarding: ((flags >> 4) & 1) == 1,
+            traffic_separation: ((flags >> 3) & 1) == 1,
+            flags_reserved: flags & 0b111,
+            max_vids,
+        };
+        Ok((input, this))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let flags = (self.byte_counter_units.to_u8() << 6)
+            | ((self.prioritization as u8) << 5)
+            | ((self.dpp_onboarding as u8) << 4)
+            | ((self.traffic_separation as u8) << 3)
+            | (self.flags_reserved & 0b111);
+
+        let mut vec = Vec::new();
+        vec.extend(self.max_prioritization_rules.to_be_bytes());
+        vec.extend(self.reserved.to_be_bytes());
+        vec.extend(flags.to_be_bytes());
+        vec.extend(self.max_vids.to_be_bytes());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub enum ByteCounterUnits {
+    Bytes,
+    KiB,
+    MiB,
+    Reserved,
+}
+
+impl ByteCounterUnits {
+    pub fn from_u8(input: u8) -> Self {
+        match input {
+            0 => Self::Bytes,
+            1 => Self::KiB,
+            2 => Self::MiB,
+            _ => Self::Reserved,
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            ByteCounterUnits::Bytes => 0,
+            ByteCounterUnits::KiB => 1,
+            ByteCounterUnits::MiB => 2,
+            ByteCounterUnits::Reserved => 3,
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
 pub struct LinkMetricQuery {
     pub neighbor_type: u8,
     pub neighbor_mac: Option<MacAddr>,
@@ -1787,6 +1870,7 @@ pub mod tests {
         assert_eq!(CMDUType::from_u16(6), CMDUType::LinkMetricResponse);
         assert_eq!(CMDUType::from_u16(7), CMDUType::ApAutoConfigSearch);
         assert_eq!(CMDUType::from_u16(8), CMDUType::ApAutoConfigResponse);
+        assert_eq!(CMDUType::from_u16(9), CMDUType::ApAutoConfigWCS);
     }
 
     // Verify function for getting message version of CMDU
@@ -1815,6 +1899,7 @@ pub mod tests {
         assert_eq!(CMDUType::LinkMetricResponse.to_u16(), 6);
         assert_eq!(CMDUType::ApAutoConfigSearch.to_u16(), 7);
         assert_eq!(CMDUType::ApAutoConfigResponse.to_u16(), 8);
+        assert_eq!(CMDUType::ApAutoConfigWCS.to_u16(), 9);
     }
 
     // Verify the correctness of conversion from u8 to IEEE1905TLVType
@@ -1886,6 +1971,10 @@ pub mod tests {
             IEEE1905TLVType::from_u8(0xb3),
             IEEE1905TLVType::MultiApProfile,
         );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0xb4),
+            IEEE1905TLVType::Profile2ApCapability,
+        );
     }
 
     // Verify the correctness of conversion from IEEE1905TLVType enum to u8
@@ -1909,6 +1998,7 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::SupportedRole.to_u8(), 0x0f);
         assert_eq!(IEEE1905TLVType::ClientAssociation.to_u8(), 0x92);
         assert_eq!(IEEE1905TLVType::MultiApProfile.to_u8(), 0xb3);
+        assert_eq!(IEEE1905TLVType::Profile2ApCapability.to_u8(), 0xb4);
     }
 
     // Verify changing version by using set_message_version function
@@ -2913,10 +3003,39 @@ pub mod tests {
         let bytes = original.serialize();
         assert_eq!(bytes, [0x01]);
 
-        let parsed = MultiApProfileValue::parse(&bytes, bytes.len() as u16)
-            .unwrap()
-            .1;
-        assert_eq!(parsed, original);
+        let parsed = MultiApProfileValue::parse(&bytes, bytes.len() as u16).unwrap();
+        assert_eq!(parsed.1, original);
+    }
+
+    #[test]
+    fn test_profile2ap_capability_serialization() {
+        let original = [0x05, 0x00, 0b01100111, 0x10];
+
+        let parsed = Profile2ApCapability::parse(&original).unwrap().1;
+        assert_eq!(parsed.max_prioritization_rules, 0x05);
+        assert_eq!(parsed.reserved, 0x00);
+        assert_eq!(parsed.byte_counter_units, ByteCounterUnits::KiB);
+        assert!(parsed.prioritization);
+        assert!(!parsed.dpp_onboarding);
+        assert!(!parsed.traffic_separation);
+        assert_eq!(parsed.flags_reserved, 0b111);
+
+        let serialized = parsed.serialize();
+        assert_eq!(original.as_slice(), serialized);
+    }
+
+    #[test]
+    fn test_byte_counter_units_serialization() {
+        assert_eq!(ByteCounterUnits::from_u8(0x00), ByteCounterUnits::Bytes);
+        assert_eq!(ByteCounterUnits::from_u8(0x01), ByteCounterUnits::KiB);
+        assert_eq!(ByteCounterUnits::from_u8(0x02), ByteCounterUnits::MiB);
+        assert_eq!(ByteCounterUnits::from_u8(0x03), ByteCounterUnits::Reserved);
+        assert_eq!(ByteCounterUnits::from_u8(0x04), ByteCounterUnits::Reserved);
+
+        assert_eq!(ByteCounterUnits::Bytes.to_u8(), 0x00);
+        assert_eq!(ByteCounterUnits::KiB.to_u8(), 0x01);
+        assert_eq!(ByteCounterUnits::MiB.to_u8(), 0x02);
+        assert_eq!(ByteCounterUnits::Reserved.to_u8(), 0x03);
     }
 
     #[test]

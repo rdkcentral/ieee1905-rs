@@ -46,7 +46,7 @@ use std::ops::Deref;
 use std::{io, sync::Arc};
 use tokio::task::JoinSet;
 // Internal modules
-use crate::cmdu_codec::{LinkMetricQuery, MediaType, MediaTypeSpecialInfo};
+use crate::cmdu_codec::{LinkMetricQuery, MediaType, MediaTypeSpecialInfo, Profile2ApCapability};
 use crate::interface_manager::get_interfaces;
 use crate::linux::if_link::RtnlLinkStats64;
 use crate::lldpdu::PortId;
@@ -293,6 +293,7 @@ pub struct Ieee1905DeviceData {
     pub local_interface_mac: MacAddr,
     pub local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
     pub registry_role: Option<Role>,
+    pub dpp_onboarding: Option<bool>,
 }
 
 impl Ieee1905DeviceData {
@@ -312,6 +313,7 @@ impl Ieee1905DeviceData {
             local_interface_mac,
             local_interface_list,
             registry_role,
+            dpp_onboarding: None,
         }
     }
 
@@ -331,6 +333,21 @@ impl Ieee1905DeviceData {
 
     pub fn has_changed(&self, other: &Self) -> bool {
         self.local_interface_list != other.local_interface_list
+    }
+
+    pub fn has_port(&self, mac: MacAddr) -> bool {
+        if self.al_mac == mac {
+            return true;
+        }
+        if self.destination_frame_mac == mac {
+            return true;
+        }
+        if self.destination_mac == Some(mac) {
+            return true;
+        }
+        self.local_interface_list
+            .as_ref()
+            .is_some_and(|e| e.iter().any(|e| e.mac == mac))
     }
 }
 
@@ -449,25 +466,18 @@ impl TopologyDatabase {
         Self::find_node_by_port(nodes.values(), mac).cloned()
     }
 
-    fn find_node_by_port<'a>(
-        mut iter: impl Iterator<Item = &'a Ieee1905Node>,
-        mac: MacAddr,
-    ) -> Option<&'a Ieee1905Node> {
-        iter.find(|node| {
-            if node.device_data.al_mac == mac {
-                return true;
-            }
-            if node.device_data.destination_frame_mac == mac {
-                return true;
-            }
-            if node.device_data.destination_mac == Some(mac) {
-                return true;
-            }
-            node.device_data
-                .local_interface_list
-                .as_ref()
-                .is_some_and(|e| e.iter().any(|e| e.mac == mac))
-        })
+    fn find_node_by_port<'a, I>(mut iter: I, mac: MacAddr) -> Option<&'a Ieee1905Node>
+    where
+        I: Iterator<Item = &'a Ieee1905Node>,
+    {
+        iter.find(|node| node.device_data.has_port(mac))
+    }
+
+    fn find_node_by_port_mut<'a, I>(mut iter: I, mac: MacAddr) -> Option<&'a mut Ieee1905Node>
+    where
+        I: Iterator<Item = &'a mut Ieee1905Node>,
+    {
+        iter.find(|node| node.device_data.has_port(mac))
     }
 
     /// **Getter for `local_interface_list`**
@@ -851,6 +861,19 @@ impl TopologyDatabase {
         };
 
         Some((node_al_mac, neighbors))
+    }
+
+    pub async fn handle_ap_auto_config_wcs(
+        &self,
+        source: MacAddr,
+        capability: &Profile2ApCapability,
+    ) {
+        let mut nodes = self.nodes.write().await;
+        let Some(node) = Self::find_node_by_port_mut(nodes.values_mut(), source) else {
+            return debug!(%source, "ap_auto_config_wcs — node not found");
+        };
+
+        node.device_data.dpp_onboarding = Some(capability.dpp_onboarding);
     }
 
     pub async fn start_topology_cli(self: Arc<Self>) -> io::Result<()> {
