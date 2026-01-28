@@ -270,6 +270,7 @@ pub fn cmdu_topology_response_transmission(
 
             // Retrieve Forwarding MAC Address from Database
             let destination_mac = node.device_data.destination_frame_mac;
+            let fragmentation = node.device_data.choose_cmdu_fragmentation();
 
             // Construct DeviceInformation TLV
             let ieee1905_local_interfaces: Vec<LocalInterface> = {
@@ -448,14 +449,15 @@ pub fn cmdu_topology_response_transmission(
                 payload: serialized_payload,
             };
 
-            match enqueue_fragmented_cmdu(
+            let send_future = enqueue_fragmented_cmdu(
                 &sender,
                 destination_mac,
                 interface_mac_address,
                 cmdu_topology_response,
-            )
-            .await
-            {
+                fragmentation,
+            );
+
+            match send_future.await {
                 Ok(_) => {
                     info!(
                         interface = %interface,
@@ -619,6 +621,7 @@ pub async fn cmdu_link_metric_response_transmission(
 
     let source_mac = topology_db.get_forwarding_interface_mac().await;
     let target_mac = node.device_data.destination_frame_mac;
+    let fragmentation = node.device_data.choose_cmdu_fragmentation();
 
     let mut tlvs = Vec::new();
     for neighbor in neighbors {
@@ -713,7 +716,7 @@ pub async fn cmdu_link_metric_response_transmission(
         payload: tlvs.iter().map(TLV::serialize).flatten().collect(),
     };
 
-    match enqueue_fragmented_cmdu(&sender, target_mac, source_mac, cmdu).await {
+    match enqueue_fragmented_cmdu(&sender, target_mac, source_mac, cmdu, fragmentation).await {
         Ok(_) => debug!(
             interface,
             message_id,
@@ -733,11 +736,13 @@ pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>
     tokio::spawn(async move {
         trace!(?sdu, "Parsing CMDU from SDU payload");
         let destination_al_mac = sdu.destination_al_mac_address;
+        let fragmentation;
         match CMDU::parse(&sdu.payload) {
             Ok((_, cmdu)) => {
                 let destination_mac = if sdu.destination_al_mac_address == IEEE1905_CONTROL_ADDRESS
                 {
                     trace!("Parsing CMDU from SDU payload destination mac address is IEEE1905_CONTROL_ADDRESS");
+                    fragmentation = CMDUFragmentation::default();
                     IEEE1905_CONTROL_ADDRESS
                 } else {
                     trace!(
@@ -763,6 +768,7 @@ pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>
                         return warn!("node has not remotely converged, AL-MAC={destination_al_mac}");
                     }
 
+                    fragmentation = node.device_data.choose_cmdu_fragmentation();
                     node.device_data.destination_frame_mac
                 };
                 let source_mac = match get_mac_address_by_interface(&interface) {
@@ -772,7 +778,7 @@ pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>
                     }
                 };
 
-                if let Err(e) = enqueue_fragmented_cmdu(&sender, destination_mac, source_mac, cmdu).await {
+                if let Err(e) = enqueue_fragmented_cmdu(&sender, destination_mac, source_mac, cmdu, fragmentation).await {
                     error!("Failed to send CMDU: {e}");
                 }
             }
@@ -788,14 +794,16 @@ async fn enqueue_fragmented_cmdu(
     target_mac: MacAddr,
     source_mac: MacAddr,
     cmdu: CMDU,
+    fragmentation: CMDUFragmentation,
 ) -> anyhow::Result<()> {
-    let fragments = cmdu.fragment_tlv_boundary(EthernetSender::ETHER_MTU_SIZE)?;
+    let fragments = cmdu.fragment(fragmentation, EthernetSender::ETHER_MTU_SIZE)?;
     for fragment in fragments {
         let serialized = fragment.serialize();
         trace!(
-            %target_mac,
-            %source_mac,
-            ?serialized,
+            target = %target_mac,
+            source = %source_mac,
+            frag = ?fragmentation,
+            bytes = ?serialized,
             "Sending CMDU fragment"
         );
 

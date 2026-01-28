@@ -119,7 +119,8 @@ impl CMDUHandler {
             source_mac,
             destination_mac,
             local_interface_mac,
-        ).await;
+        )
+        .await;
         Ok(())
     }
 
@@ -140,111 +141,71 @@ impl CMDUHandler {
         );
 
         let message_id = cmdu.message_id;
+        let cmdu_type = CMDUType::from_u16(cmdu.message_type);
         let tlvs = match cmdu.get_tlvs() {
             Ok(t) => t,
             Err(e) => return error!(message_id, %e, "Failed to parse TLVs"),
         };
 
-        match CMDUType::from_u16(cmdu.message_type) {
+        let handled;
+        match cmdu_type {
             CMDUType::TopologyDiscovery => {
-                self.handle_topology_discovery(
-                    &tlvs,
-                    message_id,
-                    source_mac,
-                    local_interface_mac,
-                ).await;
+                self.handle_topology_discovery(&tlvs, message_id, source_mac, local_interface_mac)
+                    .await;
+                handled = true;
             }
             CMDUType::TopologyNotification => {
-                let handled = self.handle_topology_notification(
-                    &tlvs,
-                    message_id,
-                    source_mac,
-                    local_interface_mac,
-                ).await;
-
-                if !handled {
-                    if let Err(e) = self
-                        .handle_sdu_from_cmdu_reception(
-                            &tlvs,
-                            message_id,
-                            cmdu.message_type,
-                            source_mac,
-                            destination_mac,
-                        )
-                        .await
-                    {
-                        error!(message_id, %e, "Error forwarding SDU from TopologyNotification interoperability");
-                    }
-                }
+                handled = self
+                    .handle_topology_notification(
+                        &tlvs,
+                        message_id,
+                        source_mac,
+                        local_interface_mac,
+                    )
+                    .await
             }
             CMDUType::TopologyQuery => {
-                let handled = self.handle_topology_query(
-                    &tlvs,
-                    message_id,
-                    source_mac,
-                    local_interface_mac,
-                ).await;
-
-                if !handled {
-                    if let Err(e) = self
-                        .handle_sdu_from_cmdu_reception(
-                            &tlvs,
-                            message_id,
-                            cmdu.message_type,
-                            source_mac,
-                            destination_mac,
-                        )
-                        .await
-                    {
-                        error!(message_id, %e, "Error forwarding SDU from TopologyQuery interoperability");
-                    }
-                }
+                handled = self
+                    .handle_topology_query(&tlvs, message_id, source_mac, local_interface_mac)
+                    .await
             }
             CMDUType::TopologyResponse => {
-                let handled = self.handle_topology_response(
-                    &tlvs,
-                    message_id,
-                    source_mac,
-                    local_interface_mac,
-                ).await;
-
-                if !handled {
-                    if let Err(e) = self
-                        .handle_sdu_from_cmdu_reception(
-                            &tlvs,
-                            message_id,
-                            cmdu.message_type,
-                            source_mac,
-                            destination_mac,
-                        )
-                        .await
-                    {
-                        error!(message_id, %e, "Error forwarding SDU from TopologyResponse interoperability");
-                    }
-                }
+                handled = self
+                    .handle_topology_response(&tlvs, message_id, source_mac, local_interface_mac)
+                    .await
             }
             CMDUType::LinkMetricQuery => {
                 self.handle_link_metric_query(&tlvs, message_id, source_mac)
                     .await;
+                handled = true;
             }
             CMDUType::LinkMetricResponse => {
                 info!("Handling Link Metric Response CMDU");
+                handled = true;
             }
-            _ => {
-                if let Err(e) = self
-                    .handle_sdu_from_cmdu_reception(
-                        &tlvs,
-                        message_id,
-                        cmdu.message_type,
-                        source_mac,
-                        destination_mac,
-                    )
-                    .await
-                {
-                    error!(message_id, %e, "Error forwarding SDU from CMDU");
-                }
+            CMDUType::ApAutoConfigWCS => {
+                self.handle_ap_auto_config_wcs(&tlvs, message_id, source_mac)
+                    .await;
+                handled = false;
             }
+            _ => handled = false,
         };
+
+        if !handled {
+            let result = self
+                .handle_sdu_from_cmdu_reception(
+                    &tlvs,
+                    message_id,
+                    cmdu.message_type,
+                    source_mac,
+                    destination_mac,
+                )
+                .await;
+
+            if let Err(e) = result {
+                error!(message_id, ?cmdu_type, %e, "Error forwarding SDU");
+            }
+        }
     }
 
     /// Handles and logs TLVs from the CMDU payload for Topology Discovery.
@@ -314,6 +275,7 @@ impl CMDUHandler {
                 local_interface_mac,
                 local_interface_list: None,
                 registry_role: None,
+                dpp_onboarding: None,
             };
 
             let result = topology_db
@@ -454,6 +416,7 @@ impl CMDUHandler {
                 local_interface_mac,
                 local_interface_list: None,
                 registry_role: None,
+                dpp_onboarding: None,
             }
         } else {
             let Some(mut node) = topology_db.find_device_by_port(source_mac).await else {
@@ -699,6 +662,7 @@ impl CMDUHandler {
             local_interface_mac,
             local_interface_list: Some(interfaces.clone()),
             registry_role: None,
+            dpp_onboarding: None,
         };
 
         let result = topology_db
@@ -847,6 +811,7 @@ impl CMDUHandler {
             local_interface_mac,
             local_interface_list: None,
             registry_role: None,
+            dpp_onboarding: None,
         };
 
         let result = topology_db
@@ -945,6 +910,45 @@ impl CMDUHandler {
         } else {
             debug!("No transmission event triggered by Link Metric Query");
         }
+    }
+
+    /// Handles and logs TLVs for AP AutoConfig WCS.
+    #[instrument(skip_all, name = "ap_auto_config_wcs")]
+    async fn handle_ap_auto_config_wcs(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) {
+        debug!(
+            source = %source_mac,
+            msg_id = message_id,
+            interface = self.interface_name,
+            "Handling ApAutoConfigWCS CMDU",
+        );
+
+        let mut ap_capability = None;
+
+        for (index, tlv) in tlvs.iter().enumerate() {
+            let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
+            debug!(index, ?tlv_type, length = tlv.tlv_length, "Processing TLV");
+
+            if let IEEE1905TLVType::Profile2ApCapability = tlv_type {
+                if let Some(ref value) = tlv.tlv_value {
+                    if let Ok((_, parsed)) = Profile2ApCapability::parse(value) {
+                        ap_capability = Some(parsed);
+                        debug!("Extracted Profile2ApCapability: {ap_capability:?}");
+                    }
+                }
+            }
+        }
+
+        let Some(ap_capability) = ap_capability else {
+            error!("ApAutoConfigWCS CMDU missing Profile2ApCapability TLV");
+            return;
+        };
+
+        TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
+            .await
+            .handle_ap_auto_config_wcs(source_mac, &ap_capability)
+            .await;
+
+        info!(source = %source_mac, "ApAutoConfigWCS Processed");
     }
 
     #[instrument(skip_all, name = "sdu_from_cmdu")]
