@@ -1532,6 +1532,14 @@ impl MediaTypeSpecialInfoWifi {
 }
 
 ///////////////////////////////////////////////////////////////////////////
+#[derive(Default, Debug, Copy, Clone)]
+pub enum CMDUFragmentation {
+    #[default]
+    TLVBoundary,
+    ByteBoundary,
+}
+
+///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CMDU {
     pub message_version: u8,
@@ -1651,6 +1659,13 @@ impl CMDU {
         bytes.extend_from_slice(self.payload.as_slice());
 
         bytes
+    }
+
+    pub fn fragment(self, kind: CMDUFragmentation, max_size: usize) -> anyhow::Result<Vec<CMDU>> {
+        Ok(match kind {
+            CMDUFragmentation::TLVBoundary => self.fragment_tlv_boundary(max_size)?,
+            CMDUFragmentation::ByteBoundary => self.fragment_byte_boundary(max_size),
+        })
     }
 
     pub fn fragment_tlv_boundary(mut self, max_size: usize) -> anyhow::Result<Vec<CMDU>> {

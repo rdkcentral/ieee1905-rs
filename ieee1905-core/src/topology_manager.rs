@@ -46,7 +46,9 @@ use std::ops::Deref;
 use std::{io, sync::Arc};
 use tokio::task::JoinSet;
 // Internal modules
-use crate::cmdu_codec::{LinkMetricQuery, MediaType, MediaTypeSpecialInfo, Profile2ApCapability};
+use crate::cmdu_codec::{
+    CMDUFragmentation, LinkMetricQuery, MediaType, MediaTypeSpecialInfo, Profile2ApCapability,
+};
 use crate::interface_manager::get_interfaces;
 use crate::linux::if_link::RtnlLinkStats64;
 use crate::lldpdu::PortId;
@@ -348,6 +350,14 @@ impl Ieee1905DeviceData {
         self.local_interface_list
             .as_ref()
             .is_some_and(|e| e.iter().any(|e| e.mac == mac))
+    }
+
+    pub fn choose_cmdu_fragmentation(&self) -> CMDUFragmentation {
+        if self.dpp_onboarding == Some(true) {
+            CMDUFragmentation::ByteBoundary
+        } else {
+            CMDUFragmentation::TLVBoundary
+        }
     }
 }
 
