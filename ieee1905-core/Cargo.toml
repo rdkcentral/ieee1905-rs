@@ -41,3 +41,4 @@ thiserror = "2.0.16"
 indexmap = "2.12.1"
 neli = { version = "0.7.3", features = ["async"] }
 chrono = "0.4.43"
+sd-notify = "0.4.5"
