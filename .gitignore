@@ -107,3 +107,6 @@ docker-*
 
 # Ignore lgs folder
 logs/
+
+# Ignore librbus.so copy used for rust binding generation
+rbus-sys/c_src/lib/*/librbus.so
