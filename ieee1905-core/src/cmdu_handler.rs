@@ -183,6 +183,11 @@ impl CMDUHandler {
                 info!("Handling Link Metric Response CMDU");
                 handled = true;
             }
+            CMDUType::ApAutoConfigResponse => {
+                self.handle_ap_auto_config_response(&tlvs, message_id, source_mac)
+                    .await;
+                handled = false;
+            }
             CMDUType::ApAutoConfigWCS => {
                 self.handle_ap_auto_config_wcs(&tlvs, message_id, source_mac)
                     .await;
@@ -276,6 +281,9 @@ impl CMDUHandler {
                 local_interface_list: None,
                 registry_role: None,
                 supported_fragmentation: Default::default(),
+                supported_freq_band: None,
+                ieee1905profile_version: None,
+                device_identification_type: None,
             };
 
             let result = topology_db
@@ -392,6 +400,9 @@ impl CMDUHandler {
                 local_interface_list: None,
                 registry_role: None,
                 supported_fragmentation: Default::default(),
+                supported_freq_band: None,
+                ieee1905profile_version: None,
+                device_identification_type: None,
             }
         } else {
             let Some(mut node) = topology_db.find_device_by_port(source_mac).await else {
@@ -613,6 +624,9 @@ impl CMDUHandler {
             local_interface_list: Some(interfaces.clone()),
             registry_role: None,
             supported_fragmentation: Default::default(),
+            supported_freq_band: None,
+            ieee1905profile_version: None,
+            device_identification_type: None,
         };
 
         let result = topology_db
@@ -737,6 +751,9 @@ impl CMDUHandler {
             local_interface_list: None,
             registry_role: None,
             supported_fragmentation: Default::default(),
+            supported_freq_band: None,
+            ieee1905profile_version: None,
+            device_identification_type: None,
         };
 
         let result = topology_db
@@ -834,6 +851,49 @@ impl CMDUHandler {
         } else {
             debug!("No transmission event triggered by Link Metric Query");
         }
+    }
+
+    /// Handles and logs TLVs for AP AutoConfig Response.
+    #[instrument(skip_all, name = "auto_config_response")]
+    async fn handle_ap_auto_config_response(
+        &self,
+        tlvs: &[TLV],
+        message_id: u16,
+        source_mac: MacAddr,
+    ) {
+        debug!(
+            source = %source_mac,
+            msg_id = message_id,
+            interface = self.interface_name,
+            "Handling ApAutoConfigResponse CMDU",
+        );
+
+        let mut supported_freq_band = None;
+
+        for (index, tlv) in tlvs.iter().enumerate() {
+            let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
+            debug!(index, ?tlv_type, length = tlv.tlv_length, "Processing TLV");
+
+            if let IEEE1905TLVType::SupportedFreqBand = tlv_type {
+                if let Some(value) = tlv.tlv_value.as_ref() {
+                    if let Ok((_, parsed)) = SupportedFreqBand::parse(value) {
+                        supported_freq_band = Some(parsed);
+                    }
+                }
+            }
+        }
+
+        let Some(supported_freq_band) = supported_freq_band else {
+            error!("ApAutoConfigResponse CMDU missing SupportedFreqBand TLV");
+            return;
+        };
+
+        TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
+            .await
+            .handle_ap_auto_config_response(source_mac, supported_freq_band)
+            .await;
+
+        info!(source = %source_mac, "ApAutoConfigResponse Processed");
     }
 
     /// Handles and logs TLVs for AP AutoConfig WCS.
