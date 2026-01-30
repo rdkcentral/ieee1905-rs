@@ -803,3 +803,46 @@ fn convert_if_type_to_role(if_type: Option<Nl80211IfType>, frequency: u32) -> Op
         _ => return None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_link_availability() -> anyhow::Result<()> {
+        let test_values: &[(u64, u64, Option<u8>)] = &[
+            (0, 0, None),
+            (0, 1, None),
+            (1, 0, Some(0)),
+            (100, 50, Some(50)),
+            (1000, 300, Some(30)),
+        ];
+
+        for (total, busy, expected) in test_values {
+            let attr_time = NlattrBuilder::default()
+                .nla_type(
+                    AttrTypeBuilder::default()
+                        .nla_type(Nl80211SurveyInfoAttr::Time)
+                        .build()?,
+                )
+                .nla_payload(*total)
+                .build()?;
+
+            let attr_busy = NlattrBuilder::default()
+                .nla_type(
+                    AttrTypeBuilder::default()
+                        .nla_type(Nl80211SurveyInfoAttr::TimeBusy)
+                        .build()?,
+                )
+                .nla_payload(*busy)
+                .build()?;
+
+            let buffer = GenlBuffer::from_iter([attr_time, attr_busy]);
+            let handle = GenlAttrHandle::new(buffer);
+
+            let actual = get_link_availability(&handle);
+            assert_eq!(actual, *expected, "input: total = {total}, busy = {busy}");
+        }
+        Ok(())
+    }
+}
