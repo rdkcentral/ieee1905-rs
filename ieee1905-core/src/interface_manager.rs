@@ -729,7 +729,7 @@ fn get_link_availability(handle: &GenlAttrHandle<Nl80211SurveyInfoAttr>) -> Opti
     let Ok(busy) = handle.get_attr_payload_as::<u64>(Nl80211SurveyInfoAttr::TimeBusy) else {
         return None;
     };
-    Some(((busy * 100) / total).clamp(0, 100) as u8)
+    Some((busy * 100).checked_div(total)?.clamp(0, 100) as u8)
 }
 
 fn get_signal_strength(handle: &GenlAttrHandle<Nl80211StaInfo>) -> Option<i8> {
