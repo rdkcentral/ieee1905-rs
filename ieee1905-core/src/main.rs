@@ -44,6 +44,9 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::instrument;
 
+use sd_notify;
+use sd_notify::NotifyState;
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct CliArgs {
@@ -268,8 +271,8 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     let mut exit_service = true;
 
     tokio::select! {
-        _ = signal_terminate.recv() => {},
-        _ = signal_interrupt.recv() => {},
+        _ = signal_terminate.recv() => {let _ = sd_notify::notify(true, &[NotifyState::Stopping]);},
+        _ = signal_interrupt.recv() => {let _ = sd_notify::notify(true, &[NotifyState::Stopping]);},
         _ = shutdown_rx => {
             tracing::info!("Socket closed. Trying to restart.");
             exit_service = false;
