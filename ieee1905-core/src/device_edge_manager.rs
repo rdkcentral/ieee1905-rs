@@ -136,6 +136,9 @@ pub async fn update_edge_devices(al_mac: MacAddr, interface_name: String) {
                 local_interface_list: Some(updated_interfaces),
                 registry_role: None,
                 dpp_onboarding: None,
+                supported_freq_band: None,
+                ieee1905profile_version: None,
+                device_identification_type: None,
             };
 
             // Save updated device in the topology
