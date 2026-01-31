@@ -187,7 +187,6 @@ impl EthernetFrameObserver for LLDPObserver {
                             None,
                             None,
                             Some(port_id),
-                            None,
                         )
                         .await;
                 } else {

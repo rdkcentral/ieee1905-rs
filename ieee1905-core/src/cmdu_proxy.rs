@@ -227,7 +227,6 @@ pub async fn cmdu_topology_query_transmission(
                             Some(message_id),
                             None,
                             None,
-                            None,
                         )
                         .await;
                     debug!(
@@ -471,7 +470,6 @@ pub fn cmdu_topology_response_transmission(
                         .update_ieee1905_topology(
                             node.device_data.clone(),
                             UpdateType::ResponseSent,
-                            None,
                             None,
                             None,
                             None,

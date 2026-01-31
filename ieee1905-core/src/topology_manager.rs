@@ -183,13 +183,6 @@ impl Ieee1905InterfaceData {
     }
 }
 
-#[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
-pub enum Ieee1905DeviceVendor {
-    Rdk,
-    #[default]
-    Unknown,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ieee1905NodeInfo {
     pub al_mac: MacAddr,
@@ -204,7 +197,6 @@ pub struct Ieee1905NodeInfo {
     pub lldp_neighbor: Option<PortId>,
     pub node_state_local: StateLocal,
     pub node_state_remote: StateRemote,
-    pub device_vendor: Ieee1905DeviceVendor,
 }
 
 impl Ieee1905NodeInfo {
@@ -225,7 +217,6 @@ impl Ieee1905NodeInfo {
             lldp_neighbor,
             node_state_local,
             node_state_remote,
-            device_vendor: Ieee1905DeviceVendor::Unknown,
         }
     }
 
@@ -619,7 +610,6 @@ impl TopologyDatabase {
         local_msg_id: Option<u16>,
         remote_msg_id: Option<u16>,
         lldp_neighbor: Option<PortId>,
-        device_vendor: Option<Ieee1905DeviceVendor>,
     ) -> UpdateTopologyResult {
         let al_mac = device_data.al_mac;
         let converged;
@@ -635,9 +625,6 @@ impl TopologyDatabase {
                 Some(node) => {
                     tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Updating existing node");
 
-                    if let Some(device_vendor) = device_vendor {
-                        node.metadata.device_vendor = device_vendor;
-                    }
                     node.device_data.local_interface_mac = device_data.local_interface_mac;
 
                     transmission_event = match operation {
@@ -798,7 +785,6 @@ impl TopologyDatabase {
                             lldp_neighbor,
                             node_state_local: StateLocal::Idle,
                             node_state_remote: StateRemote::Idle,
-                            device_vendor: device_vendor.unwrap_or_default(),
                         },
                         device_data,
                     };
@@ -1079,7 +1065,6 @@ mod tests {
         db.update_ieee1905_topology(
             device.clone(),
             UpdateType::DiscoveryReceived,
-            None,
             None,
             None,
             None,
