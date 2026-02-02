@@ -648,13 +648,27 @@ async fn call_eth_tool_get_link_modes(
 
 fn get_link_stats(handle: &RtAttrHandle<Ifla>) -> Option<RtnlLinkStats64> {
     if let Ok(stats) = handle.get_attr_payload_as_with_len_borrowed::<&[u8]>(Ifla::Stats64) {
-        debug_assert_eq!(stats.len(), size_of::<RtnlLinkStats64>());
+        if stats.len() != size_of::<RtnlLinkStats64>() {
+            warn!(
+                expected = size_of::<RtnlLinkStats64>(),
+                actual = stats.len(),
+                "unusual {} size",
+                std::any::type_name::<RtnlLinkStats64>(),
+            );
+        }
         unsafe {
             return Some(std::ptr::read_unaligned(stats.as_ptr().cast()));
         }
     }
     if let Ok(stats) = handle.get_attr_payload_as_with_len_borrowed::<&[u8]>(Ifla::Stats) {
-        debug_assert_eq!(stats.len(), size_of::<RtnlLinkStats>());
+        if stats.len() != size_of::<RtnlLinkStats>() {
+            warn!(
+                expected = size_of::<RtnlLinkStats>(),
+                actual = stats.len(),
+                "unusual {} size",
+                std::any::type_name::<RtnlLinkStats>(),
+            );
+        }
         unsafe {
             return Some(std::ptr::read_unaligned(stats.as_ptr().cast::<RtnlLinkStats>()).into());
         }
