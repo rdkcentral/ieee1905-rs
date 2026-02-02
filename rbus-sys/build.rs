@@ -24,10 +24,10 @@ fn main() -> anyhow::Result<()> {
     let include_dir = PathBuf::from(format!("{}/include", base_dir.display()));
     let include_dir = include_dir.to_string_lossy();
 
+    println!("cargo:rustc-link-lib=dylib=rbus");
     if bundled {
         println!("cargo:rustc-link-search=native={lib_dir}");
     }
-    println!("cargo:rustc-link-lib=dylib=rbus");
 
     let bindings = bindgen::Builder::default()
         .clang_arg(format!("--target={host_triple}"))
