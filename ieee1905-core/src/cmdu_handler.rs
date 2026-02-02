@@ -285,7 +285,6 @@ impl CMDUHandler {
                     None,
                     Some(message_id),
                     None,
-                    None,
                 )
                 .await;
 
@@ -347,7 +346,6 @@ impl CMDUHandler {
 
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut end_of_message_found = false;
-        let mut device_vendor = Ieee1905DeviceVendor::Unknown;
 
         for (index, tlv) in tlvs.iter().enumerate() {
             let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
@@ -364,29 +362,6 @@ impl CMDUHandler {
                         if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                             tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
-                        }
-                    }
-                }
-                IEEE1905TLVType::VendorSpecificInfo => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed_vs)) = VendorSpecificInfo::parse(value, tlv.tlv_length)
-                        {
-                            tracing::trace!(
-                                "VendorSpecific TLV found: OUI={:02x}:{:02x}:{:02x}, len={}",
-                                parsed_vs.oui[0],
-                                parsed_vs.oui[1],
-                                parsed_vs.oui[2],
-                                parsed_vs.vendor_data.len()
-                            );
-
-                            if parsed_vs.oui == COMCAST_OUI
-                                && parsed_vs.vendor_data.starts_with(COMCAST_QUERY_TAG)
-                            {
-                                device_vendor = Ieee1905DeviceVendor::Rdk;
-                                tracing::debug!(
-                                    "Matched Comcast VendorSpecific TLV (00:90:96 / 00 01 00)."
-                                );
-                            }
                         }
                     }
                 }
@@ -435,7 +410,6 @@ impl CMDUHandler {
                 None,
                 Some(message_id),
                 None,
-                Some(device_vendor),
             )
             .await;
 
@@ -498,7 +472,6 @@ impl CMDUHandler {
         let mut non_ieee_neighbors_map: HashMap<MacAddr, Vec<MacAddr>> = HashMap::new();
         let mut device_bridging_capability = None;
         let mut end_of_message_found = false;
-        let mut device_vendor = Ieee1905DeviceVendor::Unknown;
 
         for tlv in tlvs {
             let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
@@ -508,29 +481,6 @@ impl CMDUHandler {
                         if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                             tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
-                        }
-                    }
-                }
-                IEEE1905TLVType::VendorSpecificInfo => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed_vs)) = VendorSpecificInfo::parse(value, tlv.tlv_length)
-                        {
-                            tracing::trace!(
-                                "VendorSpecific TLV found: OUI={:02x}:{:02x}:{:02x}, len={}",
-                                parsed_vs.oui[0],
-                                parsed_vs.oui[1],
-                                parsed_vs.oui[2],
-                                parsed_vs.vendor_data.len()
-                            );
-
-                            if parsed_vs.oui == COMCAST_OUI
-                                && parsed_vs.vendor_data.starts_with(COMCAST_QUERY_TAG)
-                            {
-                                device_vendor = Ieee1905DeviceVendor::Rdk;
-                                tracing::debug!(
-                                    "Matched Comcast VendorSpecific TLV (00:90:96 / 00 01 00)."
-                                );
-                            }
                         }
                     }
                 }
@@ -672,7 +622,6 @@ impl CMDUHandler {
                 None,
                 None,
                 None,
-                Some(device_vendor),
             )
             .await;
 
@@ -732,7 +681,6 @@ impl CMDUHandler {
 
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut end_of_message_found = false;
-        let mut device_vendor = Ieee1905DeviceVendor::Unknown;
         let mut client_association = None;
 
         for (index, tlv) in tlvs.iter().enumerate() {
@@ -745,29 +693,6 @@ impl CMDUHandler {
                         if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                             tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
-                        }
-                    }
-                }
-                IEEE1905TLVType::VendorSpecificInfo => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed_vs)) = VendorSpecificInfo::parse(value, tlv.tlv_length)
-                        {
-                            tracing::trace!(
-                                "VendorSpecific TLV found: OUI={:02x}:{:02x}:{:02x}, len={}",
-                                parsed_vs.oui[0],
-                                parsed_vs.oui[1],
-                                parsed_vs.oui[2],
-                                parsed_vs.vendor_data.len()
-                            );
-
-                            if parsed_vs.oui == COMCAST_OUI
-                                && parsed_vs.vendor_data.starts_with(COMCAST_QUERY_TAG)
-                            {
-                                device_vendor = Ieee1905DeviceVendor::Rdk;
-                                tracing::debug!(
-                                    "Matched Comcast VendorSpecific TLV (00:90:96 / 00 01 00)."
-                                );
-                            }
                         }
                     }
                 }
@@ -821,7 +746,6 @@ impl CMDUHandler {
                 None,
                 Some(message_id),
                 None,
-                Some(device_vendor),
             )
             .await;
 
