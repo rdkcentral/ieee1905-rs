@@ -8,9 +8,12 @@ license = "Apache-2.0"
 publish = false
 
 [features]
-default = ["rbus"]
-rbus = ["rbus-core", "rbus-provider"]
 enable_tokio_console = []
+rbus = ["rbus-core", "rbus-provider"]
+rbus-bundled = [
+    "rbus",
+    "rbus-core/bundled",
+]
 
 [dependencies]
 rbus-core = { path = "../rbus-core", optional = true }
