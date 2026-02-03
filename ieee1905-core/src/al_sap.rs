@@ -42,13 +42,14 @@ use tokio::sync::Mutex;
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 // Internal modules
-use crate::cmdu_codec::{IEEE1905TLVType, CMDU};
+use crate::cmdu_codec::{CMDUFragmentation, IEEE1905TLVType, Profile2ApCapability, CMDU};
 use tokio::sync::oneshot;
 
 use once_cell::sync::Lazy;
 
+use crate::cmdu::{CMDUType, TLV};
 use thiserror::Error;
-use tracing::instrument;
+use tracing::{debug, info, instrument, warn};
 
 pub static SAP_INSTANCE: Lazy<Mutex<Option<Arc<Mutex<AlServiceAccessPoint>>>>> =
     Lazy::new(|| Mutex::new(None));
@@ -380,28 +381,18 @@ pub async fn service_access_point_data_indication(sdu: &SDU) -> Result<()> {
     Ok(())
 }
 
-pub async fn intercept_roles_and_compare_with_local(sdu_payload: Vec<u8>) {
+pub async fn intercept_roles_and_compare_with_local(tlvs: &[TLV]) {
     tracing::trace!("Intercepting role to check against topology database local role");
     let mut expected_role: Option<Role> = None;
-    match CMDU::parse(&sdu_payload) {
-        Ok((_, parsed_cmd)) => {
-            let Ok(tlvs) = parsed_cmd.get_tlvs() else {
-                return tracing::error!("SDU TLVs parse ERROR. We expect valid SDU/CMDU here!");
-            };
-            for tlv in tlvs {
-                if tlv.tlv_type == IEEE1905TLVType::SearchedRole.to_u8() {
-                    //Registrar -- controller
-                    expected_role = Some(Role::Registrar);
-                    break;
-                } else if tlv.tlv_type == IEEE1905TLVType::SupportedRole.to_u8() {
-                    //registry -- agent
-                    expected_role = Some(Role::Enrollee);
-                    break;
-                }
-            }
-        }
-        Err(_) => {
-            tracing::error!("SDU payload parse ERROR. We expect valid SDU/CMDU here!");
+    for tlv in tlvs {
+        if tlv.tlv_type == IEEE1905TLVType::SearchedRole.to_u8() {
+            //Registrar -- controller
+            expected_role = Some(Role::Registrar);
+            break;
+        } else if tlv.tlv_type == IEEE1905TLVType::SupportedRole.to_u8() {
+            //registry -- agent
+            expected_role = Some(Role::Enrollee);
+            break;
         }
     }
     if let Some(role) = expected_role {
@@ -426,6 +417,46 @@ pub async fn intercept_roles_and_compare_with_local(sdu_payload: Vec<u8>) {
         }
     } else {
         tracing::warn!("No role to intercept!");
+    }
+}
+
+pub async fn intercept_wcs_profile2_dpp_compatibility(
+    cmdu: &CMDU,
+    tlvs: &[TLV],
+    destination: MacAddr,
+) {
+    if cmdu.message_type != CMDUType::ApAutoConfigWCS.to_u16() {
+        return;
+    }
+
+    debug!(mac = %destination, "intercept_wcs_profile2_dpp_compatibility");
+    let ap_capability = tlvs.iter().find_map(|e| {
+        if e.tlv_type != IEEE1905TLVType::Profile2ApCapability.to_u8() {
+            return None;
+        }
+        Some(Profile2ApCapability::parse(&e.tlv_value.as_ref()?).ok()?.1)
+    });
+
+    let Some(ap_capability) = ap_capability else {
+        return debug!("Profile2ApCapability was not found");
+    };
+
+    let Some(db) = TopologyDatabase::peek_instance_sync() else {
+        return warn!("failed to get TopologyDatabase");
+    };
+
+    let Some(mut node) = db.lock_node_by_port_mut(destination).await else {
+        return warn!("node not found in database");
+    };
+
+    let fragmentation = match ap_capability.dpp_onboarding {
+        true => CMDUFragmentation::ByteBoundary,
+        false => CMDUFragmentation::TLVBoundary,
+    };
+
+    if node.device_data.supported_fragmentation != fragmentation {
+        node.device_data.supported_fragmentation = fragmentation;
+        info!("node {destination} fragmentation changed to {fragmentation:?}");
     }
 }
 
@@ -571,7 +602,21 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
         message.ok_or_else(|| AlSapError::Other("No fragments received".to_string()))?;
     final_message.payload = assembled_payload;
 
-    intercept_roles_and_compare_with_local(final_message.payload.clone()).await;
+    if let Ok((_, cmdu)) = CMDU::parse(&final_message.payload) {
+        if let Ok(tlvs) = cmdu.get_tlvs() {
+            intercept_roles_and_compare_with_local(&tlvs).await;
+            intercept_wcs_profile2_dpp_compatibility(
+                &cmdu,
+                &tlvs,
+                final_message.destination_al_mac_address,
+            )
+            .await;
+        } else {
+            tracing::error!("SDU TLVs parse ERROR. We expect valid SDU/CMDU here!");
+        }
+    } else {
+        tracing::error!("SDU payload parse ERROR. We expect valid SDU/CMDU here!");
+    }
 
     let _result = send_cmdu_from_sdu(final_message.clone()).await;
 

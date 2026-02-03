@@ -269,7 +269,7 @@ pub fn cmdu_topology_response_transmission(
 
             // Retrieve Forwarding MAC Address from Database
             let destination_mac = node.device_data.destination_frame_mac;
-            let fragmentation = node.device_data.choose_cmdu_fragmentation();
+            let fragmentation = node.device_data.supported_fragmentation;
 
             // Construct DeviceInformation TLV
             let ieee1905_local_interfaces: Vec<LocalInterface> = {
@@ -619,7 +619,7 @@ pub async fn cmdu_link_metric_response_transmission(
 
     let source_mac = topology_db.get_forwarding_interface_mac().await;
     let target_mac = node.device_data.destination_frame_mac;
-    let fragmentation = node.device_data.choose_cmdu_fragmentation();
+    let fragmentation = node.device_data.supported_fragmentation;
 
     let mut tlvs = Vec::new();
     for neighbor in neighbors {
@@ -766,7 +766,7 @@ pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>
                         return warn!("node has not remotely converged, AL-MAC={destination_al_mac}");
                     }
 
-                    fragmentation = node.device_data.choose_cmdu_fragmentation();
+                    fragmentation = node.device_data.supported_fragmentation;
                     node.device_data.destination_frame_mac
                 };
                 let source_mac = match get_mac_address_by_interface(&interface) {

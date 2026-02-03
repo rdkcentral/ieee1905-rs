@@ -44,6 +44,7 @@ use indexmap::IndexMap;
 use neli::consts::rtnl::Iff;
 use std::ops::Deref;
 use std::{io, sync::Arc};
+use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
 use tokio::task::JoinSet;
 // Internal modules
 use crate::cmdu_codec::{
@@ -286,7 +287,7 @@ pub struct Ieee1905DeviceData {
     pub local_interface_mac: MacAddr,
     pub local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
     pub registry_role: Option<Role>,
-    pub dpp_onboarding: Option<bool>,
+    pub supported_fragmentation: CMDUFragmentation,
 }
 
 impl Ieee1905DeviceData {
@@ -306,7 +307,7 @@ impl Ieee1905DeviceData {
             local_interface_mac,
             local_interface_list,
             registry_role,
-            dpp_onboarding: None,
+            supported_fragmentation: Default::default(),
         }
     }
 
@@ -341,14 +342,6 @@ impl Ieee1905DeviceData {
         self.local_interface_list
             .as_ref()
             .is_some_and(|e| e.iter().any(|e| e.mac == mac))
-    }
-
-    pub fn choose_cmdu_fragmentation(&self) -> CMDUFragmentation {
-        if self.dpp_onboarding == Some(true) {
-            CMDUFragmentation::ByteBoundary
-        } else {
-            CMDUFragmentation::TLVBoundary
-        }
     }
 }
 
@@ -465,6 +458,14 @@ impl TopologyDatabase {
     pub async fn find_device_by_port(&self, mac: MacAddr) -> Option<Ieee1905Node> {
         let nodes = self.nodes.read().await;
         Self::find_node_by_port(nodes.values(), mac).cloned()
+    }
+
+    pub async fn lock_node_by_port_mut(
+        &self,
+        mac: MacAddr,
+    ) -> Option<RwLockMappedWriteGuard<'_, Ieee1905Node>> {
+        let nodes = self.nodes.write().await;
+        RwLockWriteGuard::try_map(nodes, |e| Self::find_node_by_port_mut(e.values_mut(), mac)).ok()
     }
 
     fn find_node_by_port<'a, I>(mut iter: I, mac: MacAddr) -> Option<&'a Ieee1905Node>
@@ -869,7 +870,18 @@ impl TopologyDatabase {
             return debug!(%source, "ap_auto_config_wcs — node not found");
         };
 
-        node.device_data.dpp_onboarding = Some(capability.dpp_onboarding);
+        let fragmentation = match capability.dpp_onboarding {
+            true => CMDUFragmentation::ByteBoundary,
+            false => CMDUFragmentation::TLVBoundary,
+        };
+
+        if node.device_data.supported_fragmentation != fragmentation {
+            node.device_data.supported_fragmentation = fragmentation;
+            info!(
+                "node {} fragmentation changed to {fragmentation:?}",
+                node.device_data.al_mac
+            );
+        }
     }
 
     pub async fn start_topology_cli(self: Arc<Self>) -> io::Result<()> {

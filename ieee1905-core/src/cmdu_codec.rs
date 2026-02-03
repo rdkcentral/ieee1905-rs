@@ -1532,7 +1532,7 @@ impl MediaTypeSpecialInfoWifi {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Default, Debug, Copy, Clone)]
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
 pub enum CMDUFragmentation {
     #[default]
     TLVBoundary,
