@@ -20,3 +20,6 @@ jobs:
 
     - name: Run cargo test
       run: cargo test --all
+
+    - name: Run cargo deny
+      run: cargo deny check
