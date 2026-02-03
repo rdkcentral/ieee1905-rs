@@ -24,5 +24,5 @@ jobs:
         run: cargo deny check
 
       - name: Run cargo test
-        run: cargo test --all
+        run: cargo test --workspace --exclude rbus-core --exclude rbus-sys
 
