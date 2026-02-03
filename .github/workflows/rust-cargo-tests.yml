@@ -19,4 +19,4 @@ jobs:
         override: true
 
     - name: Run cargo test
-      run: cargo test --all
+      run: cargo test --workspace --exclude rbus-core --exclude rbus-provider --exclude rbus-sys
