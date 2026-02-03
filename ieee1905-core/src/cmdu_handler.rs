@@ -275,7 +275,7 @@ impl CMDUHandler {
                 local_interface_mac,
                 local_interface_list: None,
                 registry_role: None,
-                dpp_onboarding: None,
+                supported_fragmentation: Default::default(),
             };
 
             let result = topology_db
@@ -391,7 +391,7 @@ impl CMDUHandler {
                 local_interface_mac,
                 local_interface_list: None,
                 registry_role: None,
-                dpp_onboarding: None,
+                supported_fragmentation: Default::default(),
             }
         } else {
             let Some(mut node) = topology_db.find_device_by_port(source_mac).await else {
@@ -612,7 +612,7 @@ impl CMDUHandler {
             local_interface_mac,
             local_interface_list: Some(interfaces.clone()),
             registry_role: None,
-            dpp_onboarding: None,
+            supported_fragmentation: Default::default(),
         };
 
         let result = topology_db
@@ -736,7 +736,7 @@ impl CMDUHandler {
             local_interface_mac,
             local_interface_list: None,
             registry_role: None,
-            dpp_onboarding: None,
+            supported_fragmentation: Default::default(),
         };
 
         let result = topology_db
