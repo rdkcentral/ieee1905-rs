@@ -227,7 +227,6 @@ pub async fn cmdu_topology_query_transmission(
                             Some(message_id),
                             None,
                             None,
-                            None,
                         )
                         .await;
                     debug!(
@@ -270,6 +269,7 @@ pub fn cmdu_topology_response_transmission(
 
             // Retrieve Forwarding MAC Address from Database
             let destination_mac = node.device_data.destination_frame_mac;
+            let fragmentation = node.device_data.supported_fragmentation;
 
             // Construct DeviceInformation TLV
             let ieee1905_local_interfaces: Vec<LocalInterface> = {
@@ -448,23 +448,15 @@ pub fn cmdu_topology_response_transmission(
                 payload: serialized_payload,
             };
 
-            // Serialize CMDU
-            let serialized_cmdu = cmdu_topology_response.serialize();
-            debug!(
-                message_id = message_id,
-                ?serialized_cmdu,
-                "Serialized CMDU for Topology Response"
+            let send_future = enqueue_fragmented_cmdu(
+                &sender,
+                destination_mac,
+                interface_mac_address,
+                cmdu_topology_response,
+                fragmentation,
             );
 
-            // Set destination MAC
-            let source_mac = interface_mac_address;
-            let ethertype = 0x893A; // IEEE 1905 EtherType
-
-            // Send the CMDU via EthernetSender
-            match sender
-                .send_frame(destination_mac, source_mac, ethertype, serialized_cmdu)
-                .await
-            {
+            match send_future.await {
                 Ok(_) => {
                     info!(
                         interface = %interface,
@@ -481,21 +473,15 @@ pub fn cmdu_topology_response_transmission(
                             None,
                             None,
                             None,
-                            None,
                         )
                         .await;
 
-                    info!(
-                        "Topology Database updated: AL_MAC={} set to ResponseSent",
-                        al_mac_address
-                    );
+                    info!("Topology Database updated: AL_MAC={al_mac_address} set to ResponseSent");
                 }
-                Err(e) => {
-                    error!(
-                        message_id = message_id,
-                        "Failed to send CMDU Topology Response: {}", e
-                    );
-                }
+                Err(e) => error!(
+                    message_id = message_id,
+                    "Failed to send CMDU Topology Response: {e}",
+                ),
             }
         }
         .instrument(info_span!(parent: None, "cmdu_response_transmission", task = next_task_id())),
@@ -633,6 +619,7 @@ pub async fn cmdu_link_metric_response_transmission(
 
     let source_mac = topology_db.get_forwarding_interface_mac().await;
     let target_mac = node.device_data.destination_frame_mac;
+    let fragmentation = node.device_data.supported_fragmentation;
 
     let mut tlvs = Vec::new();
     for neighbor in neighbors {
@@ -727,24 +714,8 @@ pub async fn cmdu_link_metric_response_transmission(
         payload: tlvs.iter().map(TLV::serialize).flatten().collect(),
     };
 
-    let serialized_cmdu = cmdu.serialize();
-    debug!(
-        message_id,
-        ?serialized_cmdu,
-        "Serialized CMDU for Link Metric Response"
-    );
-
-    // Send the CMDU via EthernetSender
-    match sender
-        .enqueue_frame(
-            target_mac,
-            source_mac,
-            EthernetSender::ETHER_TYPE,
-            serialized_cmdu,
-        )
-        .await
-    {
-        Ok(()) => debug!(
+    match enqueue_fragmented_cmdu(&sender, target_mac, source_mac, cmdu, fragmentation).await {
+        Ok(_) => debug!(
             interface,
             message_id,
             al_mac = %local_al_mac_address,
@@ -763,11 +734,13 @@ pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>
     tokio::spawn(async move {
         trace!(?sdu, "Parsing CMDU from SDU payload");
         let destination_al_mac = sdu.destination_al_mac_address;
+        let fragmentation;
         match CMDU::parse(&sdu.payload) {
             Ok((_, cmdu)) => {
                 let destination_mac = if sdu.destination_al_mac_address == IEEE1905_CONTROL_ADDRESS
                 {
                     trace!("Parsing CMDU from SDU payload destination mac address is IEEE1905_CONTROL_ADDRESS");
+                    fragmentation = CMDUFragmentation::default();
                     IEEE1905_CONTROL_ADDRESS
                 } else {
                     trace!(
@@ -779,7 +752,7 @@ pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>
                         sdu.source_al_mac_address,
                         interface.clone(),
                     )
-                    .await;
+                        .await;
 
                     trace!("Searching for destination {destination_al_mac} in topology database");
 
@@ -793,48 +766,51 @@ pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>
                         return warn!("node has not remotely converged, AL-MAC={destination_al_mac}");
                     }
 
+                    fragmentation = node.device_data.supported_fragmentation;
                     node.device_data.destination_frame_mac
                 };
                 let source_mac = match get_mac_address_by_interface(&interface) {
-                    Some(mac) => {
-                        mac
-                    }
+                    Some(mac) => mac,
                     None => {
-                        tracing::warn!("Interface {} not found or has no MAC address", interface);
-                        return;
+                        return warn!("Interface {} not found or has no MAC address", interface);
                     }
                 };
-                let ethertype = 0x893A;
 
-                let fragments = if cmdu.total_size() > 1500 {
-                    tracing::trace!("CMDU will be fragmented. CMDU total size {} max size 1500",cmdu.total_size());
-                    cmdu.fragment(1500)
-                } else {
-                    vec![cmdu]
-                };
-                for fragment in fragments {
-                    let serialized = fragment.serialize();
-                    let fragment_id = fragment.fragment;
-                    tracing::trace!("Sending CMDU fragment <{serialized:?}> dstMacAddr {destination_mac:?}, src_mac {source_mac:?}, ethertype {ethertype:?}");
-                    match sender
-                        .enqueue_frame(destination_mac, source_mac, ethertype, serialized)
-                        .await
-                    {
-                        Ok(()) => {
-                            info!(fragment = fragment_id, "CMDU fragment sent")
-                        }
-                        Err(e) => {
-                            error!(
-                                fragment = fragment_id,
-                                "Failed to send CMDU fragment: {}", e
-                            )
-                        }
-                    }
+                if let Err(e) = enqueue_fragmented_cmdu(&sender, destination_mac, source_mac, cmdu, fragmentation).await {
+                    error!("Failed to send CMDU: {e}");
                 }
-            },
+            }
             Err(_) => {
                 error!("Failed to parse CMDU from SDU payload!");
             }
         }
     }.instrument(info_span!(parent: None, "cmdu_from_sdu_transmission", task = next_task_id())));
+}
+
+async fn enqueue_fragmented_cmdu(
+    sender: &EthernetSender,
+    target_mac: MacAddr,
+    source_mac: MacAddr,
+    cmdu: CMDU,
+    fragmentation: CMDUFragmentation,
+) -> anyhow::Result<()> {
+    let fragments = cmdu.fragment(fragmentation, EthernetSender::ETHER_MTU_SIZE)?;
+    for fragment in fragments {
+        let serialized = fragment.serialize();
+        trace!(
+            target = %target_mac,
+            source = %source_mac,
+            frag = ?fragmentation,
+            bytes = ?serialized,
+            "Sending CMDU fragment"
+        );
+
+        let ether_type = EthernetSender::ETHER_TYPE;
+        sender
+            .enqueue_frame(target_mac, source_mac, ether_type, serialized)
+            .await?;
+
+        debug!(fragment = fragment.fragment, "CMDU fragment sent")
+    }
+    Ok(())
 }

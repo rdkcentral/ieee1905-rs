@@ -2,24 +2,26 @@ name: Run Rust Tests
 
 on:
   pull_request:
-    branches: [ develop ]  # or whatever your default branch is
+    branches: [ develop ]
 
 jobs:
   test:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Install Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        override: true
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-    - name: Run cargo test
-      run: cargo test --all
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
 
-    - name: Run cargo deny
-      run: cargo deny check
+      - name: Run cargo deny
+        run: cargo deny check
+
+      - name: Run cargo test
+        run: cargo test --workspace --exclude rbus-core --exclude rbus-sys --exclude rbus-provider

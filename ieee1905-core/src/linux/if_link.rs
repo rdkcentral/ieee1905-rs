@@ -64,7 +64,6 @@ pub struct RtnlLinkStats64 {
     pub rx_compressed: u64,
     pub tx_compressed: u64,
     pub rx_no_handler: u64,
-    pub rx_other_host_dropped: u64,
 }
 
 impl From<RtnlLinkStats> for RtnlLinkStats64 {
@@ -94,7 +93,6 @@ impl From<RtnlLinkStats> for RtnlLinkStats64 {
             rx_compressed: value.rx_compressed.into(),
             tx_compressed: value.tx_compressed.into(),
             rx_no_handler: value.rx_no_handler.into(),
-            rx_other_host_dropped: 0,
         }
     }
 }

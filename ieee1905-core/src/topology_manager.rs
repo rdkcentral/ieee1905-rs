@@ -44,9 +44,12 @@ use indexmap::IndexMap;
 use neli::consts::rtnl::Iff;
 use std::ops::Deref;
 use std::{io, sync::Arc};
+use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
 use tokio::task::JoinSet;
 // Internal modules
-use crate::cmdu_codec::{LinkMetricQuery, MediaType, MediaTypeSpecialInfo};
+use crate::cmdu_codec::{
+    CMDUFragmentation, LinkMetricQuery, MediaType, MediaTypeSpecialInfo, Profile2ApCapability,
+};
 use crate::interface_manager::get_interfaces;
 use crate::linux::if_link::RtnlLinkStats64;
 use crate::lldpdu::PortId;
@@ -181,13 +184,6 @@ impl Ieee1905InterfaceData {
     }
 }
 
-#[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
-pub enum Ieee1905DeviceVendor {
-    Rdk,
-    #[default]
-    Unknown,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ieee1905NodeInfo {
     pub al_mac: MacAddr,
@@ -202,7 +198,6 @@ pub struct Ieee1905NodeInfo {
     pub lldp_neighbor: Option<PortId>,
     pub node_state_local: StateLocal,
     pub node_state_remote: StateRemote,
-    pub device_vendor: Ieee1905DeviceVendor,
 }
 
 impl Ieee1905NodeInfo {
@@ -223,7 +218,6 @@ impl Ieee1905NodeInfo {
             lldp_neighbor,
             node_state_local,
             node_state_remote,
-            device_vendor: Ieee1905DeviceVendor::Unknown,
         }
     }
 
@@ -293,6 +287,7 @@ pub struct Ieee1905DeviceData {
     pub local_interface_mac: MacAddr,
     pub local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
     pub registry_role: Option<Role>,
+    pub supported_fragmentation: CMDUFragmentation,
 }
 
 impl Ieee1905DeviceData {
@@ -312,6 +307,7 @@ impl Ieee1905DeviceData {
             local_interface_mac,
             local_interface_list,
             registry_role,
+            supported_fragmentation: Default::default(),
         }
     }
 
@@ -331,6 +327,21 @@ impl Ieee1905DeviceData {
 
     pub fn has_changed(&self, other: &Self) -> bool {
         self.local_interface_list != other.local_interface_list
+    }
+
+    pub fn has_port(&self, mac: MacAddr) -> bool {
+        if self.al_mac == mac {
+            return true;
+        }
+        if self.destination_frame_mac == mac {
+            return true;
+        }
+        if self.destination_mac == Some(mac) {
+            return true;
+        }
+        self.local_interface_list
+            .as_ref()
+            .is_some_and(|e| e.iter().any(|e| e.mac == mac))
     }
 }
 
@@ -449,25 +460,26 @@ impl TopologyDatabase {
         Self::find_node_by_port(nodes.values(), mac).cloned()
     }
 
-    fn find_node_by_port<'a>(
-        mut iter: impl Iterator<Item = &'a Ieee1905Node>,
+    pub async fn lock_node_by_port_mut(
+        &self,
         mac: MacAddr,
-    ) -> Option<&'a Ieee1905Node> {
-        iter.find(|node| {
-            if node.device_data.al_mac == mac {
-                return true;
-            }
-            if node.device_data.destination_frame_mac == mac {
-                return true;
-            }
-            if node.device_data.destination_mac == Some(mac) {
-                return true;
-            }
-            node.device_data
-                .local_interface_list
-                .as_ref()
-                .is_some_and(|e| e.iter().any(|e| e.mac == mac))
-        })
+    ) -> Option<RwLockMappedWriteGuard<'_, Ieee1905Node>> {
+        let nodes = self.nodes.write().await;
+        RwLockWriteGuard::try_map(nodes, |e| Self::find_node_by_port_mut(e.values_mut(), mac)).ok()
+    }
+
+    fn find_node_by_port<'a, I>(mut iter: I, mac: MacAddr) -> Option<&'a Ieee1905Node>
+    where
+        I: Iterator<Item = &'a Ieee1905Node>,
+    {
+        iter.find(|node| node.device_data.has_port(mac))
+    }
+
+    fn find_node_by_port_mut<'a, I>(mut iter: I, mac: MacAddr) -> Option<&'a mut Ieee1905Node>
+    where
+        I: Iterator<Item = &'a mut Ieee1905Node>,
+    {
+        iter.find(|node| node.device_data.has_port(mac))
     }
 
     /// **Getter for `local_interface_list`**
@@ -599,7 +611,6 @@ impl TopologyDatabase {
         local_msg_id: Option<u16>,
         remote_msg_id: Option<u16>,
         lldp_neighbor: Option<PortId>,
-        device_vendor: Option<Ieee1905DeviceVendor>,
     ) -> UpdateTopologyResult {
         let al_mac = device_data.al_mac;
         let converged;
@@ -615,9 +626,6 @@ impl TopologyDatabase {
                 Some(node) => {
                     tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Updating existing node");
 
-                    if let Some(device_vendor) = device_vendor {
-                        node.metadata.device_vendor = device_vendor;
-                    }
                     node.device_data.local_interface_mac = device_data.local_interface_mac;
 
                     transmission_event = match operation {
@@ -778,7 +786,6 @@ impl TopologyDatabase {
                             lldp_neighbor,
                             node_state_local: StateLocal::Idle,
                             node_state_remote: StateRemote::Idle,
-                            device_vendor: device_vendor.unwrap_or_default(),
                         },
                         device_data,
                     };
@@ -851,6 +858,30 @@ impl TopologyDatabase {
         };
 
         Some((node_al_mac, neighbors))
+    }
+
+    pub async fn handle_ap_auto_config_wcs(
+        &self,
+        source: MacAddr,
+        capability: &Profile2ApCapability,
+    ) {
+        let mut nodes = self.nodes.write().await;
+        let Some(node) = Self::find_node_by_port_mut(nodes.values_mut(), source) else {
+            return debug!(%source, "ap_auto_config_wcs — node not found");
+        };
+
+        let fragmentation = match capability.dpp_onboarding {
+            true => CMDUFragmentation::ByteBoundary,
+            false => CMDUFragmentation::TLVBoundary,
+        };
+
+        if node.device_data.supported_fragmentation != fragmentation {
+            node.device_data.supported_fragmentation = fragmentation;
+            info!(
+                "node {} fragmentation changed to {fragmentation:?}",
+                node.device_data.al_mac
+            );
+        }
     }
 
     pub async fn start_topology_cli(self: Arc<Self>) -> io::Result<()> {
@@ -1046,7 +1077,6 @@ mod tests {
         db.update_ieee1905_topology(
             device.clone(),
             UpdateType::DiscoveryReceived,
-            None,
             None,
             None,
             None,

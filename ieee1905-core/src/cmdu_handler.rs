@@ -119,7 +119,8 @@ impl CMDUHandler {
             source_mac,
             destination_mac,
             local_interface_mac,
-        ).await;
+        )
+        .await;
         Ok(())
     }
 
@@ -140,111 +141,71 @@ impl CMDUHandler {
         );
 
         let message_id = cmdu.message_id;
+        let cmdu_type = CMDUType::from_u16(cmdu.message_type);
         let tlvs = match cmdu.get_tlvs() {
             Ok(t) => t,
             Err(e) => return error!(message_id, %e, "Failed to parse TLVs"),
         };
 
-        match CMDUType::from_u16(cmdu.message_type) {
+        let handled;
+        match cmdu_type {
             CMDUType::TopologyDiscovery => {
-                self.handle_topology_discovery(
-                    &tlvs,
-                    message_id,
-                    source_mac,
-                    local_interface_mac,
-                ).await;
+                self.handle_topology_discovery(&tlvs, message_id, source_mac, local_interface_mac)
+                    .await;
+                handled = true;
             }
             CMDUType::TopologyNotification => {
-                let handled = self.handle_topology_notification(
-                    &tlvs,
-                    message_id,
-                    source_mac,
-                    local_interface_mac,
-                ).await;
-
-                if !handled {
-                    if let Err(e) = self
-                        .handle_sdu_from_cmdu_reception(
-                            &tlvs,
-                            message_id,
-                            cmdu.message_type,
-                            source_mac,
-                            destination_mac,
-                        )
-                        .await
-                    {
-                        error!(message_id, %e, "Error forwarding SDU from TopologyNotification interoperability");
-                    }
-                }
+                handled = self
+                    .handle_topology_notification(
+                        &tlvs,
+                        message_id,
+                        source_mac,
+                        local_interface_mac,
+                    )
+                    .await
             }
             CMDUType::TopologyQuery => {
-                let handled = self.handle_topology_query(
-                    &tlvs,
-                    message_id,
-                    source_mac,
-                    local_interface_mac,
-                ).await;
-
-                if !handled {
-                    if let Err(e) = self
-                        .handle_sdu_from_cmdu_reception(
-                            &tlvs,
-                            message_id,
-                            cmdu.message_type,
-                            source_mac,
-                            destination_mac,
-                        )
-                        .await
-                    {
-                        error!(message_id, %e, "Error forwarding SDU from TopologyQuery interoperability");
-                    }
-                }
+                handled = self
+                    .handle_topology_query(&tlvs, message_id, source_mac, local_interface_mac)
+                    .await
             }
             CMDUType::TopologyResponse => {
-                let handled = self.handle_topology_response(
-                    &tlvs,
-                    message_id,
-                    source_mac,
-                    local_interface_mac,
-                ).await;
-
-                if !handled {
-                    if let Err(e) = self
-                        .handle_sdu_from_cmdu_reception(
-                            &tlvs,
-                            message_id,
-                            cmdu.message_type,
-                            source_mac,
-                            destination_mac,
-                        )
-                        .await
-                    {
-                        error!(message_id, %e, "Error forwarding SDU from TopologyResponse interoperability");
-                    }
-                }
+                handled = self
+                    .handle_topology_response(&tlvs, message_id, source_mac, local_interface_mac)
+                    .await
             }
             CMDUType::LinkMetricQuery => {
                 self.handle_link_metric_query(&tlvs, message_id, source_mac)
                     .await;
+                handled = true;
             }
             CMDUType::LinkMetricResponse => {
                 info!("Handling Link Metric Response CMDU");
+                handled = true;
             }
-            _ => {
-                if let Err(e) = self
-                    .handle_sdu_from_cmdu_reception(
-                        &tlvs,
-                        message_id,
-                        cmdu.message_type,
-                        source_mac,
-                        destination_mac,
-                    )
-                    .await
-                {
-                    error!(message_id, %e, "Error forwarding SDU from CMDU");
-                }
+            CMDUType::ApAutoConfigWCS => {
+                self.handle_ap_auto_config_wcs(&tlvs, message_id, source_mac)
+                    .await;
+                handled = false;
             }
+            _ => handled = false,
         };
+
+        if !handled {
+            let result = self
+                .handle_sdu_from_cmdu_reception(
+                    &tlvs,
+                    message_id,
+                    cmdu.message_type,
+                    source_mac,
+                    destination_mac,
+                )
+                .await;
+
+            if let Err(e) = result {
+                error!(message_id, ?cmdu_type, %e, "Error forwarding SDU");
+            }
+        }
     }
 
     /// Handles and logs TLVs from the CMDU payload for Topology Discovery.
@@ -314,6 +275,7 @@ impl CMDUHandler {
                 local_interface_mac,
                 local_interface_list: None,
                 registry_role: None,
+                supported_fragmentation: Default::default(),
             };
 
             let result = topology_db
@@ -322,7 +284,6 @@ impl CMDUHandler {
                     UpdateType::DiscoveryReceived,
                     None,
                     Some(message_id),
-                    None,
                     None,
                 )
                 .await;
@@ -385,7 +346,6 @@ impl CMDUHandler {
 
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut end_of_message_found = false;
-        let mut device_vendor = Ieee1905DeviceVendor::Unknown;
 
         for (index, tlv) in tlvs.iter().enumerate() {
             let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
@@ -402,29 +362,6 @@ impl CMDUHandler {
                         if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                             tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
-                        }
-                    }
-                }
-                IEEE1905TLVType::VendorSpecificInfo => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed_vs)) = VendorSpecificInfo::parse(value, tlv.tlv_length)
-                        {
-                            tracing::trace!(
-                                "VendorSpecific TLV found: OUI={:02x}:{:02x}:{:02x}, len={}",
-                                parsed_vs.oui[0],
-                                parsed_vs.oui[1],
-                                parsed_vs.oui[2],
-                                parsed_vs.vendor_data.len()
-                            );
-
-                            if parsed_vs.oui == COMCAST_OUI
-                                && parsed_vs.vendor_data.starts_with(COMCAST_QUERY_TAG)
-                            {
-                                device_vendor = Ieee1905DeviceVendor::Rdk;
-                                tracing::debug!(
-                                    "Matched Comcast VendorSpecific TLV (00:90:96 / 00 01 00)."
-                                );
-                            }
                         }
                     }
                 }
@@ -454,6 +391,7 @@ impl CMDUHandler {
                 local_interface_mac,
                 local_interface_list: None,
                 registry_role: None,
+                supported_fragmentation: Default::default(),
             }
         } else {
             let Some(mut node) = topology_db.find_device_by_port(source_mac).await else {
@@ -472,7 +410,6 @@ impl CMDUHandler {
                 None,
                 Some(message_id),
                 None,
-                Some(device_vendor),
             )
             .await;
 
@@ -535,7 +472,6 @@ impl CMDUHandler {
         let mut non_ieee_neighbors_map: HashMap<MacAddr, Vec<MacAddr>> = HashMap::new();
         let mut device_bridging_capability = None;
         let mut end_of_message_found = false;
-        let mut device_vendor = Ieee1905DeviceVendor::Unknown;
 
         for tlv in tlvs {
             let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
@@ -545,29 +481,6 @@ impl CMDUHandler {
                         if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                             tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
-                        }
-                    }
-                }
-                IEEE1905TLVType::VendorSpecificInfo => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed_vs)) = VendorSpecificInfo::parse(value, tlv.tlv_length)
-                        {
-                            tracing::trace!(
-                                "VendorSpecific TLV found: OUI={:02x}:{:02x}:{:02x}, len={}",
-                                parsed_vs.oui[0],
-                                parsed_vs.oui[1],
-                                parsed_vs.oui[2],
-                                parsed_vs.vendor_data.len()
-                            );
-
-                            if parsed_vs.oui == COMCAST_OUI
-                                && parsed_vs.vendor_data.starts_with(COMCAST_QUERY_TAG)
-                            {
-                                device_vendor = Ieee1905DeviceVendor::Rdk;
-                                tracing::debug!(
-                                    "Matched Comcast VendorSpecific TLV (00:90:96 / 00 01 00)."
-                                );
-                            }
                         }
                     }
                 }
@@ -699,6 +612,7 @@ impl CMDUHandler {
             local_interface_mac,
             local_interface_list: Some(interfaces.clone()),
             registry_role: None,
+            supported_fragmentation: Default::default(),
         };
 
         let result = topology_db
@@ -708,7 +622,6 @@ impl CMDUHandler {
                 None,
                 None,
                 None,
-                Some(device_vendor),
             )
             .await;
 
@@ -768,7 +681,6 @@ impl CMDUHandler {
 
         let mut remote_al_mac: Option<MacAddr> = None;
         let mut end_of_message_found = false;
-        let mut device_vendor = Ieee1905DeviceVendor::Unknown;
         let mut client_association = None;
 
         for (index, tlv) in tlvs.iter().enumerate() {
@@ -781,29 +693,6 @@ impl CMDUHandler {
                         if let Ok((_, parsed)) = AlMacAddress::parse(value) {
                             remote_al_mac = Some(parsed.al_mac_address);
                             tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
-                        }
-                    }
-                }
-                IEEE1905TLVType::VendorSpecificInfo => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed_vs)) = VendorSpecificInfo::parse(value, tlv.tlv_length)
-                        {
-                            tracing::trace!(
-                                "VendorSpecific TLV found: OUI={:02x}:{:02x}:{:02x}, len={}",
-                                parsed_vs.oui[0],
-                                parsed_vs.oui[1],
-                                parsed_vs.oui[2],
-                                parsed_vs.vendor_data.len()
-                            );
-
-                            if parsed_vs.oui == COMCAST_OUI
-                                && parsed_vs.vendor_data.starts_with(COMCAST_QUERY_TAG)
-                            {
-                                device_vendor = Ieee1905DeviceVendor::Rdk;
-                                tracing::debug!(
-                                    "Matched Comcast VendorSpecific TLV (00:90:96 / 00 01 00)."
-                                );
-                            }
                         }
                     }
                 }
@@ -847,6 +736,7 @@ impl CMDUHandler {
             local_interface_mac,
             local_interface_list: None,
             registry_role: None,
+            supported_fragmentation: Default::default(),
         };
 
         let result = topology_db
@@ -856,7 +746,6 @@ impl CMDUHandler {
                 None,
                 Some(message_id),
                 None,
-                Some(device_vendor),
             )
             .await;
 
@@ -945,6 +834,45 @@ impl CMDUHandler {
         } else {
             debug!("No transmission event triggered by Link Metric Query");
         }
+    }
+
+    /// Handles and logs TLVs for AP AutoConfig WCS.
+    #[instrument(skip_all, name = "ap_auto_config_wcs")]
+    async fn handle_ap_auto_config_wcs(&self, tlvs: &[TLV], message_id: u16, source_mac: MacAddr) {
+        debug!(
+            source = %source_mac,
+            msg_id = message_id,
+            interface = self.interface_name,
+            "Handling ApAutoConfigWCS CMDU",
+        );
+
+        let mut ap_capability = None;
+
+        for (index, tlv) in tlvs.iter().enumerate() {
+            let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
+            debug!(index, ?tlv_type, length = tlv.tlv_length, "Processing TLV");
+
+            if let IEEE1905TLVType::Profile2ApCapability = tlv_type {
+                if let Some(ref value) = tlv.tlv_value {
+                    if let Ok((_, parsed)) = Profile2ApCapability::parse(value) {
+                        ap_capability = Some(parsed);
+                        debug!("Extracted Profile2ApCapability: {ap_capability:?}");
+                    }
+                }
+            }
+        }
+
+        let Some(ap_capability) = ap_capability else {
+            error!("ApAutoConfigWCS CMDU missing Profile2ApCapability TLV");
+            return;
+        };
+
+        TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
+            .await
+            .handle_ap_auto_config_wcs(source_mac, &ap_capability)
+            .await;
+
+        info!(source = %source_mac, "ApAutoConfigWCS Processed");
     }
 
     #[instrument(skip_all, name = "sdu_from_cmdu")]
@@ -1084,7 +1012,7 @@ mod tests {
         let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
 
         // Do the CMDU fragmentation
-        let fragments = cmdu.clone().fragment(1500);
+        let fragments = cmdu.clone().fragment_tlv_boundary(1500).unwrap();
 
         // Prepare a CmduReassembler instance
         let cmdu_reasm = CmduReassembler::new();

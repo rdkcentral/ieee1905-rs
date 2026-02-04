@@ -648,13 +648,27 @@ async fn call_eth_tool_get_link_modes(
 
 fn get_link_stats(handle: &RtAttrHandle<Ifla>) -> Option<RtnlLinkStats64> {
     if let Ok(stats) = handle.get_attr_payload_as_with_len_borrowed::<&[u8]>(Ifla::Stats64) {
-        debug_assert_eq!(stats.len(), size_of::<RtnlLinkStats64>());
+        if stats.len() != size_of::<RtnlLinkStats64>() {
+            warn!(
+                expected = size_of::<RtnlLinkStats64>(),
+                actual = stats.len(),
+                "unusual {} size",
+                std::any::type_name::<RtnlLinkStats64>(),
+            );
+        }
         unsafe {
             return Some(std::ptr::read_unaligned(stats.as_ptr().cast()));
         }
     }
     if let Ok(stats) = handle.get_attr_payload_as_with_len_borrowed::<&[u8]>(Ifla::Stats) {
-        debug_assert_eq!(stats.len(), size_of::<RtnlLinkStats>());
+        if stats.len() != size_of::<RtnlLinkStats>() {
+            warn!(
+                expected = size_of::<RtnlLinkStats>(),
+                actual = stats.len(),
+                "unusual {} size",
+                std::any::type_name::<RtnlLinkStats>(),
+            );
+        }
         unsafe {
             return Some(std::ptr::read_unaligned(stats.as_ptr().cast::<RtnlLinkStats>()).into());
         }
@@ -729,7 +743,7 @@ fn get_link_availability(handle: &GenlAttrHandle<Nl80211SurveyInfoAttr>) -> Opti
     let Ok(busy) = handle.get_attr_payload_as::<u64>(Nl80211SurveyInfoAttr::TimeBusy) else {
         return None;
     };
-    Some(((busy * 100) / total).clamp(0, 100) as u8)
+    Some((busy * 100).checked_div(total)?.clamp(0, 100) as u8)
 }
 
 fn get_signal_strength(handle: &GenlAttrHandle<Nl80211StaInfo>) -> Option<i8> {
@@ -802,4 +816,47 @@ fn convert_if_type_to_role(if_type: Option<Nl80211IfType>, frequency: u32) -> Op
         Nl80211IfType::P2pGo => 0b1001,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_link_availability() -> anyhow::Result<()> {
+        let test_values: &[(u64, u64, Option<u8>)] = &[
+            (0, 0, None),
+            (0, 1, None),
+            (1, 0, Some(0)),
+            (100, 50, Some(50)),
+            (1000, 300, Some(30)),
+        ];
+
+        for (total, busy, expected) in test_values {
+            let attr_time = NlattrBuilder::default()
+                .nla_type(
+                    AttrTypeBuilder::default()
+                        .nla_type(Nl80211SurveyInfoAttr::Time)
+                        .build()?,
+                )
+                .nla_payload(*total)
+                .build()?;
+
+            let attr_busy = NlattrBuilder::default()
+                .nla_type(
+                    AttrTypeBuilder::default()
+                        .nla_type(Nl80211SurveyInfoAttr::TimeBusy)
+                        .build()?,
+                )
+                .nla_payload(*busy)
+                .build()?;
+
+            let buffer = GenlBuffer::from_iter([attr_time, attr_busy]);
+            let handle = GenlAttrHandle::new(buffer);
+
+            let actual = get_link_availability(&handle);
+            assert_eq!(actual, *expected, "input: total = {total}, busy = {busy}");
+        }
+        Ok(())
+    }
 }

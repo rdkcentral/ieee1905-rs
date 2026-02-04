@@ -135,6 +135,7 @@ pub async fn update_edge_devices(al_mac: MacAddr, interface_name: String) {
                 local_interface_mac: MacAddr::default(),
                 local_interface_list: Some(updated_interfaces),
                 registry_role: None,
+                supported_fragmentation: Default::default(),
             };
 
             // Save updated device in the topology
