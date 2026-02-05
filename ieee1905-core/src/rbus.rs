@@ -7,6 +7,7 @@ use crate::rbus::interface_link::RBus_InterfaceLink;
 use crate::rbus::nt_device::RBus_NetworkTopology_Ieee1905Device;
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
 use crate::rbus::nt_device_bridge_list::RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList;
+use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
 use crate::TopologyDatabase;
 use anyhow::bail;
 use pnet::datalink::MacAddr;
@@ -25,6 +26,7 @@ mod interface_link;
 mod nt_device;
 mod nt_device_bridge;
 mod nt_device_bridge_list;
+mod nt_device_non_ieee1905_neighbor;
 
 ///
 /// Connection to RBus component
@@ -88,6 +90,11 @@ impl RBusConnection {
                     rbus_property("BridgingTupleNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
                     rbus_table("BridgingTuple", RBus_NetworkTopology_Ieee1905Device_BridgingTuple, (
                         rbus_property("InterfaceList", RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList),
+                    )),
+                    rbus_property("NonIEEE1905NeighborNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
+                    rbus_table("NonIEEE1905Neighbor", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor, (
+                        rbus_property("LocalInterface", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor),
+                        rbus_property("NeighborInterfaceId", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor),
                     ))
                 )),
             )),
