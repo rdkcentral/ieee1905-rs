@@ -18,6 +18,7 @@
 */
 
 #![deny(warnings)]
+
 // External crates
 use nom::{
     bytes::complete::take,
@@ -29,7 +30,7 @@ use nom::{Err as NomErr, Needed};
 
 use anyhow::bail;
 use nom::combinator::{all_consuming, cond};
-use nom::multi::{count, many0};
+use nom::multi::{count, length_count, many0};
 use pnet::datalink::MacAddr;
 use std::fmt::{Debug, Display, Formatter};
 // Internal modules
@@ -53,6 +54,8 @@ pub enum CMDUType {
     ApAutoConfigSearch,
     ApAutoConfigResponse,
     ApAutoConfigWCS,
+    GenericPhyQuery,
+    GenericPhyResponse,
     Unknown(u16), // To handle unknown or unsupported CMDU types
 }
 
@@ -69,6 +72,8 @@ impl CMDUType {
             0x0007 => CMDUType::ApAutoConfigSearch,
             0x0008 => CMDUType::ApAutoConfigResponse,
             0x0009 => CMDUType::ApAutoConfigWCS,
+            0x0011 => CMDUType::GenericPhyQuery,
+            0x0012 => CMDUType::GenericPhyResponse,
             _ => CMDUType::Unknown(value), // For unrecognized CMDU types
         }
     }
@@ -86,6 +91,8 @@ impl CMDUType {
             CMDUType::ApAutoConfigSearch => 0x0007,
             CMDUType::ApAutoConfigResponse => 0x0008,
             CMDUType::ApAutoConfigWCS => 0x0009,
+            CMDUType::GenericPhyQuery => 0x0011,
+            CMDUType::GenericPhyResponse => 0x0012,
             CMDUType::Unknown(value) => value, // Return the unknown value as-is
         }
     }
@@ -171,6 +178,7 @@ pub enum IEEE1905TLVType {
     LinkMetricResultCode,
     SearchedRole,
     SupportedRole,
+    GenericPhyDeviceInformation,
     ClientAssociation,
     MultiApProfile,
     Profile2ApCapability,
@@ -195,6 +203,7 @@ impl IEEE1905TLVType {
             0x0c => IEEE1905TLVType::LinkMetricResultCode,
             0x0d => IEEE1905TLVType::SearchedRole,
             0x0f => IEEE1905TLVType::SupportedRole,
+            0x14 => IEEE1905TLVType::GenericPhyDeviceInformation,
             0x92 => IEEE1905TLVType::ClientAssociation,
             0xb3 => IEEE1905TLVType::MultiApProfile,
             0xb4 => IEEE1905TLVType::Profile2ApCapability,
@@ -219,6 +228,7 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::LinkMetricResultCode => 0x0c,
             IEEE1905TLVType::SearchedRole => 0x0d,
             IEEE1905TLVType::SupportedRole => 0x0f,
+            IEEE1905TLVType::GenericPhyDeviceInformation => 0x14,
             IEEE1905TLVType::ClientAssociation => 0x92,
             IEEE1905TLVType::MultiApProfile => 0xb3,
             IEEE1905TLVType::Profile2ApCapability => 0xb4,
@@ -1531,6 +1541,90 @@ impl MediaTypeSpecialInfoWifi {
     }
 }
 
+///
+/// Generic Phy device information (Table 6-29)
+///
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenericPhyDeviceInformation {
+    pub al_mac: MacAddr,
+    pub local_interfaces: Vec<GenericPhyLocalInterface>,
+}
+
+impl GenericPhyDeviceInformation {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, al_mac) = take_mac_addr(input)?;
+        let (input, local_interfaces) =
+            all_consuming(length_count(be_u8, GenericPhyLocalInterface::parse)).parse(input)?;
+
+        let this = Self {
+            al_mac,
+            local_interfaces,
+        };
+
+        Ok((input, this))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.al_mac.octets());
+        vec.extend((self.local_interfaces.len() as u8).to_be_bytes());
+        vec.extend(self.local_interfaces.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///
+/// Generic Phy local interface (Table 6-29)
+///
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenericPhyLocalInterface {
+    pub mac: MacAddr,
+    pub oui: [u8; 3],
+    pub variant_index: u8,
+    pub variant_name: String,
+    pub xml_description_url: String,
+    pub media_specific_information: Vec<u8>,
+}
+
+impl GenericPhyLocalInterface {
+    const VARIANT_NAME_LEN: usize = 32;
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, mac) = take_mac_addr(input)?;
+        let (input, oui) = take_n_bytes(input)?;
+        let (input, variant_index) = be_u8(input)?;
+        let (input, variant_name) = take_utf8(input, Self::VARIANT_NAME_LEN)?;
+        let (input, xml_description_url_len) = be_u8(input)?;
+        let (input, media_info_len) = be_u8(input)?;
+        let (input, xml_description_url) = take_utf8(input, xml_description_url_len as usize)?;
+        let (input, media_info) = take(media_info_len as usize).parse(input)?;
+
+        let this = Self {
+            mac,
+            oui: *oui,
+            variant_index,
+            variant_name,
+            xml_description_url,
+            media_specific_information: media_info.to_vec(),
+        };
+
+        Ok((input, this))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.mac.octets());
+        vec.extend(self.oui);
+        vec.extend(self.variant_index.to_be_bytes());
+        extend_from_utf8_n(&mut vec, &self.variant_name, Self::VARIANT_NAME_LEN);
+        vec.extend((self.xml_description_url.len() as u8).to_be_bytes());
+        vec.extend((self.media_specific_information.len() as u8).to_be_bytes());
+        vec.extend(self.xml_description_url.as_bytes());
+        vec.extend(self.media_specific_information.as_slice());
+        vec
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
 pub enum CMDUFragmentation {
@@ -1798,6 +1892,19 @@ impl CMDU {
     }
 }
 
+fn take_utf8(input: &[u8], len: usize) -> IResult<&[u8], String> {
+    let (input, bytes) = take(len).parse(input)?;
+    let str = String::from_utf8_lossy(bytes);
+    let str = str.trim_matches('\0');
+    Ok((input, str.to_owned()))
+}
+
+fn extend_from_utf8_n(target: &mut Vec<u8>, str: &str, len: usize) {
+    let bytes = str.as_bytes();
+    target.extend(bytes.iter().take(len));
+    target.extend((bytes.len()..len).map(|_| 0));
+}
+
 fn take_n_bytes<const N: usize>(input: &[u8]) -> IResult<&[u8], &[u8; N]> {
     let (input, bytes) = take(N)(input)?;
     match bytes.try_into() {
@@ -1886,6 +1993,8 @@ pub mod tests {
         assert_eq!(CMDUType::from_u16(7), CMDUType::ApAutoConfigSearch);
         assert_eq!(CMDUType::from_u16(8), CMDUType::ApAutoConfigResponse);
         assert_eq!(CMDUType::from_u16(9), CMDUType::ApAutoConfigWCS);
+        assert_eq!(CMDUType::from_u16(0x11), CMDUType::GenericPhyQuery);
+        assert_eq!(CMDUType::from_u16(0x12), CMDUType::GenericPhyResponse);
     }
 
     // Verify function for getting message version of CMDU
@@ -1915,6 +2024,8 @@ pub mod tests {
         assert_eq!(CMDUType::ApAutoConfigSearch.to_u16(), 7);
         assert_eq!(CMDUType::ApAutoConfigResponse.to_u16(), 8);
         assert_eq!(CMDUType::ApAutoConfigWCS.to_u16(), 9);
+        assert_eq!(CMDUType::GenericPhyQuery.to_u16(), 0x11);
+        assert_eq!(CMDUType::GenericPhyResponse.to_u16(), 0x12);
     }
 
     // Verify the correctness of conversion from u8 to IEEE1905TLVType
@@ -1979,6 +2090,10 @@ pub mod tests {
             IEEE1905TLVType::SupportedRole
         );
         assert_eq!(
+            IEEE1905TLVType::from_u8(0x14),
+            IEEE1905TLVType::GenericPhyDeviceInformation
+        );
+        assert_eq!(
             IEEE1905TLVType::from_u8(0x92),
             IEEE1905TLVType::ClientAssociation,
         );
@@ -2011,6 +2126,7 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::LinkMetricResultCode.to_u8(), 0x0c);
         assert_eq!(IEEE1905TLVType::SearchedRole.to_u8(), 0x0d);
         assert_eq!(IEEE1905TLVType::SupportedRole.to_u8(), 0x0f);
+        assert_eq!(IEEE1905TLVType::GenericPhyDeviceInformation.to_u8(), 0x14);
         assert_eq!(IEEE1905TLVType::ClientAssociation.to_u8(), 0x92);
         assert_eq!(IEEE1905TLVType::MultiApProfile.to_u8(), 0xb3);
         assert_eq!(IEEE1905TLVType::Profile2ApCapability.to_u8(), 0xb4);
@@ -3204,6 +3320,38 @@ pub mod tests {
         assert_eq!(parsed.ap_channel_band, 0x00);
         assert_eq!(parsed.ap_channel_center_frequency_index1, 0x01);
         assert_eq!(parsed.ap_channel_center_frequency_index2, 0x00);
+
+        let serialized = parsed.serialize();
+        assert_eq!(serialized, original);
+    }
+
+    #[test]
+    fn test_generic_phy_device_information() {
+        let original = [
+            0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, // al mac
+            0x01, // number of local interfaces
+            0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, // mac
+            0x01, 0x02, 0x03, // oui
+            0x42, // variant index
+            b'a', b'b', b'c', b'd', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // variant name p1
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,    // variant name p2
+            0x08, // xml url len
+            0x03, // media info len
+            b'h', b't', b't', b'p', b's', b':', b'/', b'/', // xml url
+            0x0a, 0x0b, 0x0c, // media info
+        ];
+
+        let parsed = GenericPhyDeviceInformation::parse(&original).unwrap().1;
+        assert_eq!(parsed.al_mac.octets(), [0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6]);
+        assert_eq!(parsed.local_interfaces.len(), 1);
+
+        let interface = &parsed.local_interfaces[0];
+        assert_eq!(interface.mac.octets(), [0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6]);
+        assert_eq!(interface.oui, [0x01, 0x02, 0x03]);
+        assert_eq!(interface.variant_index, 0x42);
+        assert_eq!(interface.variant_name, "abcd");
+        assert_eq!(interface.xml_description_url, "https://");
+        assert_eq!(interface.media_specific_information, [0x0a, 0x0b, 0x0c]);
 
         let serialized = parsed.serialize();
         assert_eq!(serialized, original);
