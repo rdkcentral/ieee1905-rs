@@ -1,5 +1,6 @@
 use crate::cmdu_codec::{Ieee1905ProfileVersion, SupportedFreqBand};
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
+use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
 use crate::rbus::{format_mac_address, peek_topology_database};
 use nom::AsBytes;
 use rbus_core::RBusError;
@@ -89,6 +90,12 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device {
                 let tuples =
                     RBus_NetworkTopology_Ieee1905Device_BridgingTuple::get_tuples_from_node(&node)?;
                 args.property.set(&(tuples.len() as u32));
+                Ok(())
+            }
+            b"NonIEEE1905NeighborNumberOfEntries" => {
+                let neighbors =
+                    RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor::iter_neighbors(node);
+                args.property.set(&(neighbors.count() as u32));
                 Ok(())
             }
             _ => Err(RBusError::ElementDoesNotExists),
