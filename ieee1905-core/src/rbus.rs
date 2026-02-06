@@ -87,6 +87,11 @@ impl RBusConnection {
             rbus_object("NetworkTopology", (
                 rbus_table("IEEE1905Device", RBus_NetworkTopology_Ieee1905Device, (
                     rbus_property("IEEE1905Id", RBus_NetworkTopology_Ieee1905Device),
+                    rbus_property("Version", RBus_NetworkTopology_Ieee1905Device),
+                    rbus_property("RegistrarFreqBand", RBus_NetworkTopology_Ieee1905Device),
+                    rbus_property("FriendlyName", RBus_NetworkTopology_Ieee1905Device),
+                    rbus_property("ManufacturerName", RBus_NetworkTopology_Ieee1905Device),
+                    rbus_property("ManufacturerModel", RBus_NetworkTopology_Ieee1905Device),
                     rbus_property("BridgingTupleNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
                     rbus_table("BridgingTuple", RBus_NetworkTopology_Ieee1905Device_BridgingTuple, (
                         rbus_property("InterfaceList", RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList),

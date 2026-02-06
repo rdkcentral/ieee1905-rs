@@ -171,6 +171,9 @@ pub enum IEEE1905TLVType {
     LinkMetricResultCode,
     SearchedRole,
     SupportedRole,
+    SupportedFreqBand,
+    DeviceIdentificationType,
+    Ieee1905ProfileVersion,
     ClientAssociation,
     MultiApProfile,
     Profile2ApCapability,
@@ -195,6 +198,9 @@ impl IEEE1905TLVType {
             0x0c => IEEE1905TLVType::LinkMetricResultCode,
             0x0d => IEEE1905TLVType::SearchedRole,
             0x0f => IEEE1905TLVType::SupportedRole,
+            0x10 => IEEE1905TLVType::SupportedFreqBand,
+            0x15 => IEEE1905TLVType::DeviceIdentificationType,
+            0x1a => IEEE1905TLVType::Ieee1905ProfileVersion,
             0x92 => IEEE1905TLVType::ClientAssociation,
             0xb3 => IEEE1905TLVType::MultiApProfile,
             0xb4 => IEEE1905TLVType::Profile2ApCapability,
@@ -219,6 +225,9 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::LinkMetricResultCode => 0x0c,
             IEEE1905TLVType::SearchedRole => 0x0d,
             IEEE1905TLVType::SupportedRole => 0x0f,
+            IEEE1905TLVType::SupportedFreqBand => 0x10,
+            IEEE1905TLVType::DeviceIdentificationType => 0x15,
+            IEEE1905TLVType::Ieee1905ProfileVersion => 0x1a,
             IEEE1905TLVType::ClientAssociation => 0x92,
             IEEE1905TLVType::MultiApProfile => 0xb3,
             IEEE1905TLVType::Profile2ApCapability => 0xb4,
@@ -940,6 +949,110 @@ impl SupportedRole {
         vec![self.role]
     }
 }
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum SupportedFreqBand {
+    Band_802_11_2_4,
+    Band_802_11_5,
+    Band_802_11_60,
+    Reserved(u8),
+}
+
+impl SupportedFreqBand {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        nom::combinator::map(be_u8, Self::from_u8).parse(input)
+    }
+
+    pub fn from_u8(input: u8) -> Self {
+        match input {
+            0x00 => Self::Band_802_11_2_4,
+            0x01 => Self::Band_802_11_5,
+            0x02 => Self::Band_802_11_60,
+            x => Self::Reserved(x),
+        }
+    }
+
+    pub fn serialize(&self) -> u8 {
+        match self {
+            Self::Band_802_11_2_4 => 0x00,
+            Self::Band_802_11_5 => 0x01,
+            Self::Band_802_11_60 => 0x02,
+            Self::Reserved(e) => *e,
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceIdentificationType {
+    pub friendly_name: String,
+    pub manufacturer_name: String,
+    pub manufacturer_model: String,
+}
+
+impl DeviceIdentificationType {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, friendly_name) = take_utf8_fixed::<64>(input)?;
+        let (input, manufacturer_name) = take_utf8_fixed::<64>(input)?;
+        let (input, manufacturer_model) = take_utf8_fixed::<64>(input)?;
+
+        let this = Self {
+            friendly_name,
+            manufacturer_name,
+            manufacturer_model,
+        };
+        Ok((input, this))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        fn push_utf8(buf: &mut Vec<u8>, str: &str) {
+            let base_len = buf.len();
+            let push_len = str.floor_char_boundary(64);
+            buf.extend(&str.as_bytes()[..push_len]);
+            buf.resize(base_len + 64, 0);
+        }
+
+        let mut buf = Vec::with_capacity(64 * 3);
+        push_utf8(&mut buf, &self.friendly_name);
+        push_utf8(&mut buf, &self.manufacturer_name);
+        push_utf8(&mut buf, &self.manufacturer_model);
+        buf
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub enum Ieee1905ProfileVersion {
+    #[default]
+    Ieee1905_1,
+    Ieee1905_1a,
+    Reserved(u8),
+}
+
+impl Ieee1905ProfileVersion {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        nom::combinator::map(be_u8, Self::from_u8).parse(input)
+    }
+
+    pub fn from_u8(input: u8) -> Self {
+        match input {
+            0x00 => Self::Ieee1905_1,
+            0x01 => Self::Ieee1905_1a,
+            x => Self::Reserved(x),
+        }
+    }
+
+    pub fn serialize(&self) -> u8 {
+        match self {
+            Self::Ieee1905_1 => 0x00,
+            Self::Ieee1905_1a => 0x01,
+            Self::Reserved(e) => *e,
+        }
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssociationState {
@@ -1806,6 +1919,15 @@ fn take_n_bytes<const N: usize>(input: &[u8]) -> IResult<&[u8], &[u8; N]> {
     }
 }
 
+fn take_utf8_fixed<const N: usize>(input: &[u8]) -> IResult<&[u8], String> {
+    let (input, bytes) = take_n_bytes::<N>(input)?;
+    let string = String::from_utf8_lossy(bytes)
+        .trim_matches('\0')
+        .trim()
+        .to_string();
+    Ok((input, string))
+}
+
 fn take_mac_addr(input: &[u8]) -> IResult<&[u8], MacAddr> {
     let (input, bytes) = take_n_bytes::<6>(input)?;
     let mac = MacAddr::from(*bytes);
@@ -1979,6 +2101,18 @@ pub mod tests {
             IEEE1905TLVType::SupportedRole
         );
         assert_eq!(
+            IEEE1905TLVType::from_u8(0x10),
+            IEEE1905TLVType::SupportedFreqBand
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x15),
+            IEEE1905TLVType::DeviceIdentificationType
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x1a),
+            IEEE1905TLVType::Ieee1905ProfileVersion
+        );
+        assert_eq!(
             IEEE1905TLVType::from_u8(0x92),
             IEEE1905TLVType::ClientAssociation,
         );
@@ -2011,6 +2145,9 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::LinkMetricResultCode.to_u8(), 0x0c);
         assert_eq!(IEEE1905TLVType::SearchedRole.to_u8(), 0x0d);
         assert_eq!(IEEE1905TLVType::SupportedRole.to_u8(), 0x0f);
+        assert_eq!(IEEE1905TLVType::SupportedFreqBand.to_u8(), 0x10);
+        assert_eq!(IEEE1905TLVType::DeviceIdentificationType.to_u8(), 0x15);
+        assert_eq!(IEEE1905TLVType::Ieee1905ProfileVersion.to_u8(), 0x1a);
         assert_eq!(IEEE1905TLVType::ClientAssociation.to_u8(), 0x92);
         assert_eq!(IEEE1905TLVType::MultiApProfile.to_u8(), 0xb3);
         assert_eq!(IEEE1905TLVType::Profile2ApCapability.to_u8(), 0xb4);
@@ -2628,6 +2765,66 @@ pub mod tests {
 
         // Verification
         assert_eq!(cmdu_autoconfig_response, parsed_cmdus);
+    }
+
+    #[test]
+    fn test_supported_freq_band() {
+        let test_values = [
+            (0x00, SupportedFreqBand::Band_802_11_2_4),
+            (0x01, SupportedFreqBand::Band_802_11_5),
+            (0x02, SupportedFreqBand::Band_802_11_60),
+            (0x03, SupportedFreqBand::Reserved(0x03)),
+            (0xff, SupportedFreqBand::Reserved(0xff)),
+        ];
+
+        for (original, expected) in test_values {
+            let parsed = SupportedFreqBand::from_u8(original);
+            assert_eq!(parsed, expected);
+
+            let serialized = parsed.serialize();
+            assert_eq!(serialized, original, "{original} => {expected:?}");
+        }
+    }
+
+    #[test]
+    fn test_device_identification_type() {
+        let friendly_name = "😀friendly_name😀";
+        let manufacturer_name = "⚠️manufacturer_name⚠️";
+        let manufacturer_model = "⛔manufacturer_model⛔";
+
+        let mut original = Vec::new();
+        original.extend(friendly_name.as_bytes());
+        original.resize(64, 0);
+        original.extend(manufacturer_name.as_bytes());
+        original.resize(128, 0);
+        original.extend(manufacturer_model.as_bytes());
+        original.resize(192, 0);
+
+        let parsed = DeviceIdentificationType::parse(&original).unwrap().1;
+        assert_eq!(parsed.friendly_name, friendly_name);
+        assert_eq!(parsed.manufacturer_name, manufacturer_name);
+        assert_eq!(parsed.manufacturer_model, manufacturer_model);
+
+        let serialized = parsed.serialize();
+        assert_eq!(serialized, original);
+    }
+
+    #[test]
+    fn test_ieee1905_profile_version() {
+        let test_values = [
+            (0x00, Ieee1905ProfileVersion::Ieee1905_1),
+            (0x01, Ieee1905ProfileVersion::Ieee1905_1a),
+            (0x02, Ieee1905ProfileVersion::Reserved(0x02)),
+            (0xff, Ieee1905ProfileVersion::Reserved(0xff)),
+        ];
+
+        for (original, expected) in test_values {
+            let parsed = Ieee1905ProfileVersion::from_u8(original);
+            assert_eq!(parsed, expected);
+
+            let serialized = parsed.serialize();
+            assert_eq!(serialized, original);
+        }
     }
 
     // Verify serializing and parsing AP autoconfig search CMDU with proper role
