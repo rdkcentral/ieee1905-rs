@@ -37,12 +37,14 @@ use crate::topology_manager::{Ieee1905InterfaceData, Ieee1905LocalInterface};
 use indexmap::IndexMap;
 use neli::attr::Attribute;
 use neli::consts::nl::{GenlId, NlmF};
-use neli::consts::rtnl::{Arphrd, Iff, Ifla, IflaInfo, IflaVlan, RtAddrFamily, Rtm};
+use neli::consts::rtnl::{
+    Arphrd, Iff, Ifla, IflaInfo, IflaVlan, Nda, Ntf, Nud, RtAddrFamily, Rtm, Rtn,
+};
 use neli::consts::socket::NlFamily;
 use neli::genl::{AttrTypeBuilder, GenlAttrHandle, Genlmsghdr, GenlmsghdrBuilder, NlattrBuilder};
 use neli::nl::{NlPayload, Nlmsghdr};
 use neli::router::asynchronous::{NlRouter, NlRouterReceiverHandle};
-use neli::rtnl::{Ifinfomsg, IfinfomsgBuilder, RtAttrHandle};
+use neli::rtnl::{Ifinfomsg, IfinfomsgBuilder, Ndmsg, NdmsgBuilder, RtAttrHandle};
 use neli::types::GenlBuffer;
 use neli::utils::Groups;
 use std::fs;
@@ -192,7 +194,7 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
             phy_rate: Some(1_000_000),
             link_availability: None,
             signal_strength_dbm: None,
-            non_ieee1905_neighbors: None,
+            non_ieee1905_neighbors: Some(ethernet.neighbours.clone()),
             ieee1905_neighbors: None,
         };
         let interface = Ieee1905LocalInterface {
@@ -261,6 +263,7 @@ struct LinkEthernetInfo {
     bridge_if_index: Option<u32>,
     vlan_id: Option<u16>,
     link_stats: Option<RtnlLinkStats64>,
+    neighbours: Vec<MacAddr>,
 }
 
 async fn get_all_interfaces() -> anyhow::Result<Vec<LinkEthernetInfo>> {
@@ -317,6 +320,10 @@ async fn get_all_interfaces() -> anyhow::Result<Vec<LinkEthernetInfo>> {
         let bridge_if_index = attr_handle.get_attr_payload_as(Ifla::Master).ok();
         let link_stats = get_link_stats(&attr_handle);
 
+        let neighbours = call_ether_get_neighbors(&router, if_index)
+            .await
+            .inspect_err(|e| warn!(%e, "call_ether_get_neighbors failed"));
+
         interfaces.push(LinkEthernetInfo {
             mac: MacAddr::from(mac),
             if_index,
@@ -325,10 +332,55 @@ async fn get_all_interfaces() -> anyhow::Result<Vec<LinkEthernetInfo>> {
             bridge_if_index,
             vlan_id,
             link_stats,
+            neighbours: neighbours.unwrap_or_default(),
         });
     }
 
     Ok(interfaces)
+}
+
+async fn call_ether_get_neighbors(
+    router: &NlRouter,
+    if_index: i32,
+) -> anyhow::Result<Vec<MacAddr>> {
+    let if_info_msg = NdmsgBuilder::default()
+        .ndm_family(RtAddrFamily::Unspecified)
+        .ndm_index(if_index)
+        .ndm_state(Nud::empty())
+        .ndm_flags(Ntf::empty())
+        .ndm_type(Rtn::Unicast)
+        .build()?;
+
+    let mut recv: NlRouterReceiverHandle<Rtm, Ndmsg> = router
+        .send(
+            Rtm::Getneigh,
+            NlmF::DUMP | NlmF::REQUEST | NlmF::ACK,
+            NlPayload::Payload(if_info_msg),
+        )
+        .await?;
+
+    let mut neighbours = Vec::new();
+    while let Some(message) = recv.next().await {
+        let message: Nlmsghdr<Rtm, Ndmsg> = message?;
+        let Some(payload) = message.get_payload() else {
+            continue;
+        };
+
+        if *payload.ndm_index() != if_index {
+            continue;
+        }
+        if *payload.ndm_type() != Rtn::Unicast {
+            continue;
+        }
+
+        let attr_handle = payload.rtattrs().get_attr_handle();
+        let Ok(bytes) = attr_handle.get_attr_payload_as::<[u8; 6]>(Nda::Lladdr) else {
+            continue;
+        };
+
+        neighbours.push(MacAddr::from(bytes));
+    }
+    Ok(neighbours)
 }
 
 #[derive(Debug)]
