@@ -229,110 +229,76 @@ impl CMDUHandler {
             "Handling Topology Discovery CMDU",
         );
 
-        let mut remote_al_mac: Option<MacAddr> = None;
-        let mut remote_interface_mac: Option<MacAddr> = None;
-        let mut end_of_message_found = false;
-
-        for (index, tlv) in tlvs.iter().enumerate() {
-            let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
-
-            trace!(index, ?tlv_type, length = tlv.tlv_length, "Processing TLV");
-
-            match tlv_type {
-                IEEE1905TLVType::AlMacAddress => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
-                            remote_al_mac = Some(parsed.al_mac_address);
-                        }
-                    }
-                }
-                IEEE1905TLVType::MacAddress => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = MacAddress::parse(value) {
-                            remote_interface_mac = Some(parsed.mac_address);
-                        }
-                    }
-                }
-                IEEE1905TLVType::EndOfMessage => {
-                    end_of_message_found = true;
-                    trace!("End of CMDU Message found");
-                }
-                _ => trace!(?tlv_type, data = ?tlv.tlv_value, "Ignoring TLV"),
-            }
+        if EndOfMessage::find(tlvs).is_none() {
+            return error!("Topology Discovery CMDU is missing the required End of Message TLV. Ignoring CMDU.");
         }
 
-        if !end_of_message_found {
-            error!("Topology Discovery CMDU is missing the required End of Message TLV. Ignoring CMDU.");
-            return;
-        }
+        let Some(remote_al_mac) = AlMacAddress::find(tlvs) else {
+            return warn!("Topology Discovery failed: Missing AL MAC Address TLV");
+        };
 
-        if let (Some(remote_al_mac_address), Some(neighbor_interface_mac_address)) =
-            (remote_al_mac, remote_interface_mac)
-        {
-            let topology_db =
-                TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
-                    .await;
+        let Some(remote_interface_mac) = MacAddress::find(tlvs) else {
+            return warn!("Topology Discovery failed: Missing Neighbor Interface MAC TLV");
+        };
 
-            let device_data = Ieee1905DeviceData {
-                al_mac: remote_al_mac_address,
-                destination_frame_mac: source_mac,
-                destination_mac: Some(neighbor_interface_mac_address),
-                local_interface_mac,
-                local_interface_list: None,
-                registry_role: None,
-                supported_fragmentation: Default::default(),
-                supported_freq_band: None,
-                ieee1905profile_version: None,
-                device_identification_type: None,
-            };
+        let remote_al_mac = remote_al_mac.al_mac_address;
+        let remote_interface_mac = remote_interface_mac.mac_address;
 
-            let result = topology_db
-                .update_ieee1905_topology(
-                    device_data,
-                    UpdateType::DiscoveryReceived,
-                    None,
-                    Some(message_id),
-                    None,
+        let topology_db =
+            TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
+
+        let device_data = Ieee1905DeviceData {
+            al_mac: remote_al_mac,
+            destination_frame_mac: source_mac,
+            destination_mac: Some(remote_interface_mac),
+            local_interface_mac,
+            local_interface_list: None,
+            registry_role: None,
+            supported_fragmentation: Default::default(),
+            supported_freq_band: None,
+            ieee1905profile_version: None,
+            device_identification_type: None,
+        };
+
+        let result = topology_db
+            .update_ieee1905_topology(
+                device_data,
+                UpdateType::DiscoveryReceived,
+                None,
+                Some(message_id),
+                None,
+            )
+            .await;
+
+        info!(
+            al_mac = %remote_al_mac,
+            source = %source_mac,
+            %remote_interface_mac,
+            "Topology Discovery Processed",
+        );
+
+        // Now react to the event
+        match result.transmission_event {
+            TransmissionEvent::SendTopologyQuery(destination_al_mac) => {
+                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+
+                cmdu_topology_query_transmission(
+                    self.interface_name.clone(),
+                    Arc::clone(&self.sender),
+                    Arc::clone(&self.message_id_generator),
+                    self.local_al_mac,
+                    destination_al_mac,
+                    forwarding_interface_mac,
                 )
                 .await;
-
-            info!(
-                al_mac = %remote_al_mac_address,
-                source = %source_mac,
-                %neighbor_interface_mac_address,
-                "Topology Discovery Processed",
-            );
-
-            // Now react to the event
-            match result.transmission_event {
-                TransmissionEvent::SendTopologyQuery(destination_al_mac) => {
-                    let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
-
-                    cmdu_topology_query_transmission(
-                        self.interface_name.clone(),
-                        Arc::clone(&self.sender),
-                        Arc::clone(&self.message_id_generator),
-                        self.local_al_mac,
-                        destination_al_mac,
-                        forwarding_interface_mac,
-                    )
-                    .await;
-                }
-                TransmissionEvent::None => {
-                    debug!(
-                        remote = %remote_al_mac_address,
-                        "No transmission needed after topology discovery update"
-                    );
-                }
-                _ => {} // Future proof if more event types appear
             }
-        } else {
-            if remote_al_mac.is_none() {
-                warn!("Topology Discovery failed: Missing AL MAC Address TLV");
+            TransmissionEvent::None => {
+                debug!(
+                    remote = %remote_al_mac,
+                    "No transmission needed after topology discovery update"
+                );
             }
-            if remote_interface_mac.is_none() {
-                warn!("Topology Discovery failed: Missing Neighbor Interface MAC TLV");
-            }
+            _ => {} // Future proof if more event types appear
         }
     }
 
@@ -352,37 +318,8 @@ impl CMDUHandler {
             "Handling Topology Query CMDU",
         );
 
-        let mut remote_al_mac: Option<MacAddr> = None;
-        let mut end_of_message_found = false;
-
-        for (index, tlv) in tlvs.iter().enumerate() {
-            let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
-            tracing::trace!(
-                index,
-                tlv_type = ?tlv_type,
-                length = tlv.tlv_length,
-                "Processing TLV"
-            );
-
-            match tlv_type {
-                IEEE1905TLVType::AlMacAddress => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
-                            remote_al_mac = Some(parsed.al_mac_address);
-                            tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
-                        }
-                    }
-                }
-                IEEE1905TLVType::EndOfMessage => {
-                    end_of_message_found = true;
-                    tracing::trace!("End of CMDU Message found");
-                }
-                _ => trace!(?tlv_type, data = ?tlv.tlv_value, "Ignoring TLV"),
-            }
-        }
-
-        if !end_of_message_found {
-            tracing::error!("Topology Query CMDU missing EndOfMessage TLV → discarding message.");
+        if EndOfMessage::find(tlvs).is_none() {
+            error!("Topology Query CMDU missing EndOfMessage TLV → discarding message.");
             return true;
         }
 
@@ -391,9 +328,9 @@ impl CMDUHandler {
         let topology_db =
             TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
 
-        let device_data = if let Some(remote_al_mac) = remote_al_mac {
+        let device_data = if let Some(remote_al_mac) = AlMacAddress::find(tlvs) {
             Ieee1905DeviceData {
-                al_mac: remote_al_mac,
+                al_mac: remote_al_mac.al_mac_address,
                 destination_frame_mac: source_mac,
                 destination_mac: None,
                 local_interface_mac,
@@ -477,86 +414,42 @@ impl CMDUHandler {
             "Handling Topology Response CMDU",
         );
 
-        let mut remote_al_mac: Option<MacAddr> = None;
-        let mut interfaces: Vec<Ieee1905InterfaceData> = Vec::new();
-        let mut ieee_neighbors_map: HashMap<MacAddr, Vec<IEEE1905Neighbor>> = HashMap::new();
-        let mut non_ieee_neighbors_map: HashMap<MacAddr, Vec<MacAddr>> = HashMap::new();
-        let mut device_bridging_capability = None;
-        let mut end_of_message_found = false;
-
-        for tlv in tlvs {
-            let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
-            match tlv_type {
-                IEEE1905TLVType::AlMacAddress => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
-                            remote_al_mac = Some(parsed.al_mac_address);
-                            tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
-                        }
-                    }
-                }
-                IEEE1905TLVType::DeviceInformation => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = DeviceInformation::parse(value) {
-                            remote_al_mac = Some(parsed.al_mac_address);
-                            interfaces.extend(parsed.local_interface_list.into_iter().map(
-                                |iface| Ieee1905InterfaceData {
-                                    mac: iface.mac_address,
-                                    media_type: iface.media_type,
-                                    media_type_extra: iface.special_info,
-                                    bridging_flag: false,
-                                    bridging_tuple: None,
-                                    vlan: None,
-                                    metric: None,
-                                    phy_rate: None,
-                                    link_availability: None,
-                                    signal_strength_dbm: None,
-                                    non_ieee1905_neighbors: None,
-                                    ieee1905_neighbors: None,
-                                },
-                            ));
-                        }
-                    }
-                }
-                IEEE1905TLVType::Ieee1905NeighborDevices => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        let devices_count = ((tlv.tlv_length - 6) / 7) as usize;
-                        if let Ok((_, parsed)) = Ieee1905NeighborDevice::parse(value, devices_count)
-                        {
-                            ieee_neighbors_map
-                                .insert(parsed.local_mac_address, parsed.neighborhood_list);
-                        }
-                    }
-                }
-                IEEE1905TLVType::NonIeee1905NeighborDevices => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        let devices_count = (tlv.tlv_length - 6) / 6;
-                        if let Ok((_, parsed)) =
-                            NonIeee1905NeighborDevices::parse(value, devices_count)
-                        {
-                            non_ieee_neighbors_map
-                                .insert(parsed.local_mac_address, parsed.neighborhood_list);
-                        }
-                    }
-                }
-                IEEE1905TLVType::DeviceBridgingCapability => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = DeviceBridgingCapability::parse(value) {
-                            device_bridging_capability = Some(parsed);
-                        }
-                    }
-                }
-                IEEE1905TLVType::EndOfMessage => {
-                    end_of_message_found = true;
-                }
-                _ => trace!(?tlv_type, data = ?tlv.tlv_value, "Ignoring TLV"),
-            }
-        }
-
-        if !end_of_message_found {
-            tracing::warn!("Missing EndOfMessage TLV. Discarding Topology Response.");
+        if EndOfMessage::find(tlvs).is_none() {
+            warn!("Missing EndOfMessage TLV. Discarding Topology Response.");
             return true;
         }
+
+        let mut remote_al_mac = AlMacAddress::find(tlvs).map(|e| e.al_mac_address);
+        let mut interfaces = Vec::new();
+        let device_bridging_capability = DeviceBridgingCapability::find(tlvs);
+
+        if let Some(info) = DeviceInformation::find(tlvs) {
+            remote_al_mac = Some(info.al_mac_address);
+            interfaces.extend(info.local_interface_list.into_iter().map(|iface| {
+                Ieee1905InterfaceData {
+                    mac: iface.mac_address,
+                    media_type: iface.media_type,
+                    media_type_extra: iface.special_info,
+                    bridging_flag: false,
+                    bridging_tuple: None,
+                    vlan: None,
+                    metric: None,
+                    phy_rate: None,
+                    link_availability: None,
+                    signal_strength_dbm: None,
+                    non_ieee1905_neighbors: None,
+                    ieee1905_neighbors: None,
+                }
+            }));
+        }
+
+        let mut ieee_neighbors_map = Ieee1905NeighborDevice::find_all(tlvs)
+            .map(|e| (e.local_mac_address, e.neighborhood_list))
+            .collect::<HashMap<_, _>>();
+
+        let mut non_ieee_neighbors_map = NonIeee1905NeighborDevices::find_all(tlvs)
+            .map(|e| (e.local_mac_address, e.neighborhood_list))
+            .collect::<HashMap<_, _>>();
 
         if !ieee_neighbors_map.is_empty() {
             for iface in &mut interfaces {
@@ -693,56 +586,25 @@ impl CMDUHandler {
             "Handling Topology Notification CMDU",
         );
 
-        let mut remote_al_mac: Option<MacAddr> = None;
-        let mut end_of_message_found = false;
-        let mut client_association = None;
-
-        for (index, tlv) in tlvs.iter().enumerate() {
-            let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
-            debug!(index, ?tlv_type, length = tlv.tlv_length, "Processing TLV");
-
-            match tlv_type {
-                IEEE1905TLVType::AlMacAddress => {
-                    if let Some(ref value) = tlv.tlv_value {
-                        if let Ok((_, parsed)) = AlMacAddress::parse(value) {
-                            remote_al_mac = Some(parsed.al_mac_address);
-                            tracing::debug!("Extracted AL MAC Address: {}", parsed.al_mac_address);
-                        }
-                    }
-                }
-                IEEE1905TLVType::ClientAssociation => {
-                    if let Some(value) = tlv.tlv_value.as_ref() {
-                        if let Ok((_, parsed)) = ClientAssociation::parse(value, tlv.tlv_length) {
-                            client_association = Some(parsed);
-                        }
-                    }
-                }
-                IEEE1905TLVType::EndOfMessage => {
-                    end_of_message_found = true;
-                    tracing::debug!("End of CMDU Message found");
-                }
-                _ => trace!(?tlv_type, data = ?tlv.tlv_value, "Ignoring TLV"),
-            }
-        }
-
-        if !end_of_message_found {
+        if EndOfMessage::find(tlvs).is_none() {
             error!("Topology Notification CMDU missing EndOfMessage TLV → discarding message.");
             return true;
         }
 
-        if client_association.is_some() {
+        if ClientAssociation::find(tlvs).is_some() {
             warn!("Topology Notification has Comcast ClientAssociation TLV → fallback to SDU.");
             return false;
         }
 
-        let Some(remote_al_mac_address) = remote_al_mac else {
-            warn!("Topology Notification has Comcast VendorSpecific TLV but missing AL MAC → fallback to SDU.");
+        let Some(remote_al_mac_address) = AlMacAddress::find(tlvs) else {
+            warn!("Topology Notification CMDU is missing AL MAC TLV → fallback to SDU.");
             return false;
         };
 
         let topology_db =
             TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
 
+        let remote_al_mac_address = remote_al_mac_address.al_mac_address;
         let received_device_data = Ieee1905DeviceData {
             al_mac: remote_al_mac_address,
             destination_frame_mac: source_mac,
@@ -807,23 +669,7 @@ impl CMDUHandler {
             "Handling Link Metric Query CMDU",
         );
 
-        let mut query = None;
-
-        for (index, tlv) in tlvs.iter().enumerate() {
-            let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
-            debug!(index, ?tlv_type, length = tlv.tlv_length, "Processing TLV");
-
-            if let IEEE1905TLVType::LinkMetricQuery = tlv_type {
-                if let Some(ref value) = tlv.tlv_value {
-                    if let Ok((_, parsed)) = LinkMetricQuery::parse(value) {
-                        query = Some(parsed);
-                        debug!("Extracted LinkMetricQuery: {query:?}");
-                    }
-                }
-            }
-        }
-
-        let Some(query) = query else {
+        let Some(query) = LinkMetricQuery::find(tlvs) else {
             error!("Link Metric Query CMDU missing LinkMetricQuery TLV → discarding message.");
             return;
         };
@@ -868,24 +714,8 @@ impl CMDUHandler {
             "Handling ApAutoConfigResponse CMDU",
         );
 
-        let mut supported_freq_band = None;
-
-        for (index, tlv) in tlvs.iter().enumerate() {
-            let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
-            debug!(index, ?tlv_type, length = tlv.tlv_length, "Processing TLV");
-
-            if let IEEE1905TLVType::SupportedFreqBand = tlv_type {
-                if let Some(value) = tlv.tlv_value.as_ref() {
-                    if let Ok((_, parsed)) = SupportedFreqBand::parse(value) {
-                        supported_freq_band = Some(parsed);
-                    }
-                }
-            }
-        }
-
-        let Some(supported_freq_band) = supported_freq_band else {
-            error!("ApAutoConfigResponse CMDU missing SupportedFreqBand TLV");
-            return;
+        let Some(supported_freq_band) = SupportedFreqBand::find(tlvs) else {
+            return error!("ApAutoConfigResponse CMDU missing SupportedFreqBand TLV");
         };
 
         TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
@@ -906,23 +736,7 @@ impl CMDUHandler {
             "Handling ApAutoConfigWCS CMDU",
         );
 
-        let mut ap_capability = None;
-
-        for (index, tlv) in tlvs.iter().enumerate() {
-            let tlv_type = IEEE1905TLVType::from_u8(tlv.tlv_type);
-            debug!(index, ?tlv_type, length = tlv.tlv_length, "Processing TLV");
-
-            if let IEEE1905TLVType::Profile2ApCapability = tlv_type {
-                if let Some(ref value) = tlv.tlv_value {
-                    if let Ok((_, parsed)) = Profile2ApCapability::parse(value) {
-                        ap_capability = Some(parsed);
-                        debug!("Extracted Profile2ApCapability: {ap_capability:?}");
-                    }
-                }
-            }
-        }
-
-        let Some(ap_capability) = ap_capability else {
+        let Some(ap_capability) = Profile2ApCapability::find(tlvs) else {
             error!("ApAutoConfigWCS CMDU missing Profile2ApCapability TLV");
             return;
         };
@@ -944,7 +758,6 @@ impl CMDUHandler {
         source_mac: MacAddr,
         destination_mac: MacAddr,
     ) -> anyhow::Result<()> {
-        let mut end_of_message_found = false;
         debug!(
             src = %source_mac,
             dst = %destination_mac,
@@ -960,23 +773,12 @@ impl CMDUHandler {
                 index,
                 tlv_type = ?IEEE1905TLVType::from_u8(tlv.tlv_type),
                 length = tlv.tlv_length,
-                "Processing TLV"
+                raw_data = ?tlv.tlv_value,
+                "Processing TLV",
             );
-
-            match IEEE1905TLVType::from_u8(tlv.tlv_type) {
-                IEEE1905TLVType::EndOfMessage => {
-                    end_of_message_found = true;
-                    trace!("End of CMDU Message found");
-                }
-                _ => trace!(
-                    "TLV Type: {:#x?}, Raw Data: {:?}",
-                    tlv.tlv_type,
-                    tlv.tlv_value
-                ),
-            }
         }
 
-        if !end_of_message_found {
+        if EndOfMessage::find(tlvs).is_none() {
             error!("SDU from CMDU is missing the required End of Message TLV. Ignoring CMDU.");
             return Ok(());
         }
