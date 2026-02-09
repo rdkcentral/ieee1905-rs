@@ -4,6 +4,7 @@ use crate::cmdu_codec::MediaType;
 use crate::rbus::al_device::RBus_Al_Device;
 use crate::rbus::interface::RBus_Interface;
 use crate::rbus::interface_link::RBus_InterfaceLink;
+use crate::rbus::nt::RBus_NetworkTopology;
 use crate::rbus::nt_device::RBus_NetworkTopology_Ieee1905Device;
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
 use crate::rbus::nt_device_bridge_list::RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList;
@@ -23,6 +24,7 @@ use tracing::{debug, info, instrument, warn};
 mod al_device;
 mod interface;
 mod interface_link;
+mod nt;
 mod nt_device;
 mod nt_device_bridge;
 mod nt_device_bridge_list;
@@ -85,6 +87,7 @@ impl RBusConnection {
                 )),
             )),
             rbus_object("NetworkTopology", (
+                rbus_property("IEEE1905DeviceNumberOfEntries", RBus_NetworkTopology),
                 rbus_table("IEEE1905Device", RBus_NetworkTopology_Ieee1905Device, (
                     rbus_property("IEEE1905Id", RBus_NetworkTopology_Ieee1905Device),
                     rbus_property("Version", RBus_NetworkTopology_Ieee1905Device),
