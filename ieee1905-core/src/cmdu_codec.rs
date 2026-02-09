@@ -2212,10 +2212,12 @@ pub mod tests {
             IEEE1905TLVType::SupportedRole
         );
         assert_eq!(
-            IEEE1905TLVType::from_u8(0x14),
-            IEEE1905TLVType::GenericPhyDeviceInformation
             IEEE1905TLVType::from_u8(0x10),
             IEEE1905TLVType::SupportedFreqBand
+        );
+         assert_eq!(
+            IEEE1905TLVType::from_u8(0x14),
+            IEEE1905TLVType::GenericPhyDeviceInformation
         );
         assert_eq!(
             IEEE1905TLVType::from_u8(0x15),
