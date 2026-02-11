@@ -1017,6 +1017,7 @@ dependencies = [
  "console-subscriber",
  "crossterm 0.29.0",
  "cryptoki",
+ "either",
  "futures",
  "indexmap",
  "lazy_static",
