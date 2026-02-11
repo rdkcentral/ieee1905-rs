@@ -42,7 +42,7 @@ use tokio::sync::Mutex;
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 // Internal modules
-use crate::cmdu_codec::{CMDUFragmentation, IEEE1905TLVType, Profile2ApCapability, CMDU};
+use crate::cmdu_codec::{CMDUFragmentation, IEEE1905TLVType, Profile2ApCapability, TLVTrait, CMDU};
 use tokio::sync::oneshot;
 
 use once_cell::sync::Lazy;
