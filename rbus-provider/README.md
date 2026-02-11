@@ -1,6 +1,6 @@
 # RBus Provider
 
-The goal of this crate is to provide a simple to implement interface for RBus providers.
+The goal of this crate is to provide a simple way to implement interface for RBus providers.
 
 So instead of registering each element by hand and setting/handling callbacks, it can be written with a simple DSL-like structure:
 ```rust
