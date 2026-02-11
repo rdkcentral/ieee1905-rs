@@ -5,19 +5,58 @@ The goal of this crate is to provide a simple way to implement interface for RBu
 So instead of registering each element by hand and setting/handling callbacks, it can be written with a simple DSL-like structure:
 ```rust
 fn register_provider() -> RBusProvider {
-    RBusProvider::open("RBusDevice", || (
-      rbus_property("ID", DeviceHandler),
-      rbus_property("Name", DeviceHandler),
-      rbus_object("BuildInfo", (
-        rbus_property("Version", DeviceInfoHandler),
-        rbus_property("Architecture", DeviceInfoHandler),
-      )),
-      rbus_table("Interfaces", DeviceInterfacesHandler, (
-        rbus_property("Mac", /* ... */),
-        rbus_property("Type", /* ... */),
+    RBusProvider::open(c"ExampleDevice", || (
+      rbus_object("Device", (
+        rbus_property("ID", DeviceHandler),
+        rbus_property("Name", DeviceHandler),
+        rbus_object("BuildInfo", (
+          rbus_property("Version", DeviceInfoHandler),
+          rbus_property("Architecture", DeviceInfoHandler),
+        )),
+        rbus_table("Interfaces", DeviceInterfacesHandler, (
+          rbus_property("Mac", /* ... */),
+          rbus_property("Type", /* ... */),
+        ))
       ))
     ))
 }
+```
+
+Above registration will give following output when using `rbuscli`:
+```
+rbuscli> getvalues Device.
+Parameter  1:
+              Name  : Device.ID
+              Type  : string
+              Value : 1234-5678-8765-4321
+Parameter  2:
+              Name  : Device.Name
+              Type  : string
+              Value : router-9000
+Parameter  3:
+              Name  : Device.BuildInfo.Version
+              Type  : string
+              Value : 1.0.4
+Parameter  4:
+              Name  : Device.BuildInfo.Architecture
+              Type  : string
+              Value : arm64-v8a
+Parameter  5:
+              Name  : Device.Interfaces.0.Mac
+              Type  : string
+              Value : 00-00-00-00-00-00
+Parameter  6:
+              Name  : Device.Interfaces.0.Type
+              Type  : string
+              Value : IEEE 802.11
+Parameter  7:
+              Name  : Device.Interfaces.1.Mac
+              Type  : string
+              Value : 00-00-00-00-00-01
+Parameter  8:
+              Name  : Device.Interfaces.1.Type
+              Type  : string
+              Value : IEEE 802.11
 ```
 
 # Main Components
@@ -27,6 +66,17 @@ RBus Provider crate tries to be minimalistic and has only two main components:
 - `RBusProviderElement` - trait representing an accessible via RBus entity (tuple/tables/objects/properties)
 
 # Elements
+
+Let's take these RBus paths for example: 
+```
+Device.BuildInfo.Version
+Device.Interfaces.0.Mac
+Device.Interfaces.0.Type
+```
+
+- `Device` and `BuildInfo` are objects. They cannot be read and just group other elements together.
+- `Interfaces.0` is a table, where `Interfaces` is a table name and `0` is row index. They group other elements in rows.
+- `Version`, `Mac` and `Type` are properties. They are used to read/write values they represent.
 
 ## Object Element
 
@@ -163,7 +213,7 @@ impl RBusProviderGetter for DeviceHandler {
     fn get(&mut self, args: RBusProviderGetterArgs<Self::UserData>) -> Result<(), RBusError> {
         match args.path_name.as_bytes() {
             b"ID" => {
-                args.property.set("1234-5678-4321-8765");
+                args.property.set("1234-5678-8765-4321");
             }
             b"Name" => {
                 args.property.set("router-9000");
