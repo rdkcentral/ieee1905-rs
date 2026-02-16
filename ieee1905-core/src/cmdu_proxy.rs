@@ -20,9 +20,7 @@ use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
-use crate::topology_manager::{
-    Ieee1905Node, StateLocal, StateRemote, TopologyDatabase, UpdateType,
-};
+use crate::topology_manager::{Ieee1905Node, Role, StateLocal, StateRemote, TopologyDatabase, UpdateType};
 use crate::SDU;
 use crate::{next_task_id, MessageIdGenerator};
 use pnet::datalink::MacAddr;
@@ -168,6 +166,11 @@ pub async fn cmdu_topology_query_transmission(
                 tlv_value: Some(vendor_value),
             };
 
+            let local_role = topology_db.get_local_role().await;
+            let multi_ap_profile_tlv = local_role
+                .filter(|e| *e == Role::Registrar)
+                .map(|_| TLV::from(MultiApProfile::Profile3));
+
             let end_of_message_tlv = TLV {
                 tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
                 tlv_length: 0,
@@ -177,6 +180,9 @@ pub async fn cmdu_topology_query_transmission(
             let mut serialized_payload = vec![];
             serialized_payload.extend(al_mac_tlv.serialize());
             serialized_payload.extend(vendor_specific_tlv.serialize());
+            if let Some(multi_ap_profile_tlv) = multi_ap_profile_tlv {
+                serialized_payload.extend(multi_ap_profile_tlv.serialize());
+            }
             serialized_payload.extend(end_of_message_tlv.serialize());
 
             // Construct CMDU
