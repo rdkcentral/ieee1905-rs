@@ -81,6 +81,7 @@ pub enum UpdateType {
     QueryReceived,
     ResponseSent,
     ResponseReceived,
+    ApAutoConfigSearch,
 }
 
 pub struct UpdateTopologyResult {
@@ -781,6 +782,7 @@ impl TopologyDatabase {
                             //If needed we can indicate here a notification event to update topology data base in al neighbors but for now it is not needed
                             //initial DB snapshot covers current uses cases for RDK-B but we can update this part if needed in the future
                         }
+                        UpdateType::ApAutoConfigSearch => TransmissionEvent::None,
                     };
 
                     converged = node.metadata.has_converged();
@@ -815,6 +817,11 @@ impl TopologyDatabase {
                             nodes.insert(al_mac, new_node);
                             tracing::debug!(al_mac = ?al_mac, "Inserted node from query");
                             TransmissionEvent::SendTopologyResponse(al_mac)
+                        }
+                        UpdateType::ApAutoConfigSearch => {
+                            nodes.insert(al_mac, new_node);
+                            debug!(al_mac = ?al_mac, "Inserted node from Discovery");
+                            TransmissionEvent::None
                         }
                         _ => {
                             tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
