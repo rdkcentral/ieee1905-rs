@@ -7,10 +7,10 @@ services:
     container_name: ieee1905_node1
     cap_add: [NET_ADMIN, NET_RAW]
     privileged: true
-    command: ["/app/ieee1905"]
+    command: ["sleep", "infinity"]
     ports:
-      - "6669:6669"   # tokio-console node1
-      - "8081:8080"   # app node1
+      - "6669:6669"
+      - "8081:8080"
     environment:
       - RUST_CONSOLE_BIND=0.0.0.0:6669
     networks:
@@ -23,10 +23,10 @@ services:
     container_name: ieee1905_node2
     cap_add: [NET_ADMIN, NET_RAW]
     privileged: true
-    command: ["/app/ieee1905"]
+    command: ["sleep", "infinity"]
     ports:
-      - "6670:6669"   # tokio-console node2 (host 6670 -> container 6669)
-      - "8082:8080"   # app node2
+      - "6670:6669"
+      - "8082:8080"
     environment:
       - RUST_CONSOLE_BIND=0.0.0.0:6669
     networks:

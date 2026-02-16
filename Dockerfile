@@ -39,4 +39,3 @@ EXPOSE 8080 6669
 # Tokio Console bind
 ENV RUST_CONSOLE_BIND=0.0.0.0:6669
 
-CMD ["/app/ieee1905"]
