@@ -27,7 +27,6 @@ pub mod cmdu_observer;
 pub mod cmdu_proxy;
 pub mod cmdu_reassembler;
 pub mod crypto_engine;
-pub mod device_edge_manager;
 pub mod ethernet_subject_reception;
 pub mod ethernet_subject_transmission;
 pub mod interface_manager;
