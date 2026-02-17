@@ -92,10 +92,10 @@ venv/
 yarn.lock
 
 # Ignore docker files
-Docker*
+#Docker*
 
 # Ignore docker-compose files
-docker-*
+#docker-*
 
 # Exception for docker files in "ieee1905-tests" subdirectory for github actions
 !ieee1905-tests/
