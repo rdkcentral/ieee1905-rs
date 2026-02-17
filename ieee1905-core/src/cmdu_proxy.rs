@@ -20,7 +20,10 @@ use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
-use crate::topology_manager::{Ieee1905Node, Role, StateLocal, StateRemote, TopologyDatabase, UpdateType};
+use crate::tlv_cmdu_codec::TLVTrait;
+use crate::topology_manager::{
+    Ieee1905Node, Role, StateLocal, StateRemote, TopologyDatabase, UpdateType,
+};
 use crate::SDU;
 use crate::{next_task_id, MessageIdGenerator};
 use pnet::datalink::MacAddr;

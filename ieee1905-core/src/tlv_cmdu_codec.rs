@@ -28,8 +28,9 @@ use nom::{
 }; // Alias for errors returned by `nom` parsers.
 
 // Standard library
-use crate::cmdu_codec::TLVTrait;
+use crate::cmdu::IEEE1905TLVType;
 use std::fmt::Debug;
+use tracing::warn;
 // Allows the `TLV` struct to be formatted for debugging purposes.
 
 ///////////////////////////////////////////////////////////////////////////
@@ -120,6 +121,33 @@ impl TLV {
         }
 
         bytes
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+pub trait TLVTrait: Sized {
+    const TYPE: IEEE1905TLVType;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self>;
+    fn serialize(&self) -> Vec<u8>;
+
+    fn find(vec: &[TLV]) -> Option<Self> {
+        Self::find_all(vec).next()
+    }
+
+    fn find_all(vec: &[TLV]) -> impl Iterator<Item = Self> {
+        vec.iter().filter_map(|e| {
+            if e.tlv_type != Self::TYPE.to_u8() {
+                return None;
+            }
+            match Self::parse(e.tlv_value.as_deref().unwrap_or_default()) {
+                Ok(e) => Some(e.1),
+                Err(e) => {
+                    warn!(kind = ?Self::TYPE, %e, "failed to parse TLV");
+                    None
+                }
+            }
+        })
     }
 }
 
