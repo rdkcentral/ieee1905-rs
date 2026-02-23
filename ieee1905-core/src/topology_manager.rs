@@ -851,6 +851,7 @@ impl TopologyDatabase {
                         }
                         UpdateType::ApAutoConfigSearch => {
                             nodes.insert(al_mac, new_node);
+                            node_was_crated = true;
                             debug!(al_mac = ?al_mac, "Inserted node from Discovery");
                             TransmissionEvent::None
                         }
