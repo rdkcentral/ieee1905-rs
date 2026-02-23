@@ -183,6 +183,16 @@ impl CMDUHandler {
                 info!("Handling Link Metric Response CMDU");
                 handled = true;
             }
+            CMDUType::ApAutoConfigSearch => {
+                self.handle_ap_auto_config_search(
+                    &tlvs,
+                    message_id,
+                    source_mac,
+                    local_interface_mac,
+                )
+                .await;
+                handled = false;
+            }
             CMDUType::ApAutoConfigResponse => {
                 self.handle_ap_auto_config_response(&tlvs, message_id, source_mac)
                     .await;
@@ -701,6 +711,53 @@ impl CMDUHandler {
         } else {
             debug!("No transmission event triggered by Link Metric Query");
         }
+    }
+
+    /// Handles and logs TLVs for AP AutoConfig Search.
+    #[instrument(skip_all, name = "auto_config_search")]
+    async fn handle_ap_auto_config_search(
+        &self,
+        tlvs: &[TLV],
+        message_id: u16,
+        source_mac: MacAddr,
+        local_interface_mac: MacAddr,
+    ) {
+        debug!(
+            source = %source_mac,
+            msg_id = message_id,
+            interface = self.interface_name,
+            "Handling ApAutoConfigSearch CMDU",
+        );
+
+        let Some(al_mac) = AlMacAddress::find(tlvs) else {
+            return error!("ApAutoConfigSearch CMDU missing AlMacAddress TLV");
+        };
+
+        let device_data = Ieee1905DeviceData {
+            al_mac: al_mac.al_mac_address,
+            destination_frame_mac: source_mac,
+            destination_mac: None,
+            local_interface_mac,
+            local_interface_list: None,
+            registry_role: None,
+            supported_fragmentation: Default::default(),
+            supported_freq_band: None,
+            ieee1905profile_version: None,
+            device_identification_type: None,
+        };
+
+        TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
+            .await
+            .update_ieee1905_topology(
+                device_data,
+                UpdateType::ApAutoConfigSearch,
+                None,
+                Some(message_id),
+                None,
+            )
+            .await;
+
+        info!(source = %source_mac, "ApAutoConfigSearch Processed");
     }
 
     /// Handles and logs TLVs for AP AutoConfig Response.
