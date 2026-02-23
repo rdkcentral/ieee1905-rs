@@ -19,7 +19,6 @@
 
 #![deny(warnings)]
 
-use std::collections::HashSet;
 // External crates
 use pnet::datalink::{self, MacAddr};
 
@@ -37,17 +36,17 @@ use crate::topology_manager::{Ieee1905InterfaceData, Ieee1905LocalInterface};
 use indexmap::IndexMap;
 use neli::attr::Attribute;
 use neli::consts::nl::{GenlId, NlmF};
-use neli::consts::rtnl::{Arphrd, Iff, Ifla, IflaInfo, IflaVlan, RtAddrFamily, Rtm};
+use neli::consts::rtnl::{
+    Arphrd, Iff, Ifla, IflaInfo, IflaVlan, Nda, Ntf, Nud, RtAddrFamily, Rtm, Rtn,
+};
 use neli::consts::socket::NlFamily;
 use neli::genl::{AttrTypeBuilder, GenlAttrHandle, Genlmsghdr, GenlmsghdrBuilder, NlattrBuilder};
 use neli::nl::{NlPayload, Nlmsghdr};
 use neli::router::asynchronous::{NlRouter, NlRouterReceiverHandle};
-use neli::rtnl::{Ifinfomsg, IfinfomsgBuilder, RtAttrHandle};
+use neli::rtnl::{Ifinfomsg, IfinfomsgBuilder, Ndmsg, NdmsgBuilder, RtAttrHandle};
 use neli::types::GenlBuffer;
 use neli::utils::Groups;
-use std::fs;
 use std::ops::Div;
-use std::process::Command;
 use tracing::warn;
 
 pub fn get_local_al_mac(interface_name: String) -> Option<MacAddr> {
@@ -108,76 +107,6 @@ pub fn get_mac_address_by_interface(interface_name: &str) -> Option<MacAddr> {
         .and_then(|iface| iface.mac) // Extract MAC address if found
 }
 
-pub fn is_bridge_member(interface_name: &str) -> bool {
-    let path = format!("/sys/class/net/{}/brport", interface_name);
-    fs::metadata(&path).is_ok() // If this directory exists, it's part of a bridge
-}
-
-/// Retrieves VLAN ID from `/proc/net/vlan/config`
-pub fn get_vlan_id(interface_name: &str) -> Option<u16> {
-    let contents = fs::read_to_string("/proc/net/vlan/config").ok()?;
-    for line in contents.lines().skip(2) {
-        // Skip headers
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 && parts[0] == interface_name {
-            return parts[1].parse().ok();
-        }
-    }
-    None
-}
-
-/// Fetches MAC addresses learned on a bridge interface.
-/// Gets MAC addresses of neighbors on a **specific** interface.
-pub fn get_neighbor_macs(interface_name: &str) -> Vec<MacAddr> {
-    let mut mac_addresses = HashSet::new(); // Use HashSet to avoid duplicates
-
-    // Run `ip neigh show dev <interface_name>` to list neighbors **only** for the given interface
-    let output = Command::new("ip")
-        .arg("neigh")
-        .arg("show")
-        .arg("dev")
-        .arg(interface_name) // Now filters by specific interface
-        .output();
-
-    if let Ok(output) = output {
-        if let Ok(stdout) = str::from_utf8(&output.stdout) {
-            // Convert raw output to string
-            for line in stdout.lines() {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 5 && parts.contains(&"lladdr") {
-                    if let Some(mac_index) = parts.iter().position(|&x| x == "lladdr") {
-                        if mac_index + 1 < parts.len() {
-                            if let Ok(parsed_mac) = parse_mac(parts[mac_index + 1]) {
-                                mac_addresses.insert(parsed_mac);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        eprintln!("Failed to execute 'ip neigh show dev {}'", interface_name);
-    }
-
-    mac_addresses.into_iter().collect() // Convert HashSet to Vec
-}
-
-/// Helper function to parse a MAC address from a string
-fn parse_mac(mac_str: &str) -> Result<MacAddr, ()> {
-    let bytes: Vec<u8> = mac_str
-        .split(':')
-        .filter_map(|s| u8::from_str_radix(s, 16).ok())
-        .collect();
-
-    if bytes.len() == 6 {
-        Ok(MacAddr::new(
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
-        ))
-    } else {
-        Err(())
-    }
-}
-
 pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
     let mut interfaces = IndexMap::new();
     for ethernet in get_all_interfaces().await? {
@@ -192,7 +121,7 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
             phy_rate: Some(1_000_000),
             link_availability: None,
             signal_strength_dbm: None,
-            non_ieee1905_neighbors: None,
+            non_ieee1905_neighbors: Some(ethernet.neighbours.clone()),
             ieee1905_neighbors: None,
         };
         let interface = Ieee1905LocalInterface {
@@ -261,6 +190,7 @@ struct LinkEthernetInfo {
     bridge_if_index: Option<u32>,
     vlan_id: Option<u16>,
     link_stats: Option<RtnlLinkStats64>,
+    neighbours: Vec<MacAddr>,
 }
 
 async fn get_all_interfaces() -> anyhow::Result<Vec<LinkEthernetInfo>> {
@@ -317,6 +247,10 @@ async fn get_all_interfaces() -> anyhow::Result<Vec<LinkEthernetInfo>> {
         let bridge_if_index = attr_handle.get_attr_payload_as(Ifla::Master).ok();
         let link_stats = get_link_stats(&attr_handle);
 
+        let neighbours = call_ether_get_neighbors(&router, if_index)
+            .await
+            .inspect_err(|e| warn!(%e, "call_ether_get_neighbors failed"));
+
         interfaces.push(LinkEthernetInfo {
             mac: MacAddr::from(mac),
             if_index,
@@ -325,10 +259,55 @@ async fn get_all_interfaces() -> anyhow::Result<Vec<LinkEthernetInfo>> {
             bridge_if_index,
             vlan_id,
             link_stats,
+            neighbours: neighbours.unwrap_or_default(),
         });
     }
 
     Ok(interfaces)
+}
+
+async fn call_ether_get_neighbors(
+    router: &NlRouter,
+    if_index: i32,
+) -> anyhow::Result<Vec<MacAddr>> {
+    let if_info_msg = NdmsgBuilder::default()
+        .ndm_family(RtAddrFamily::Unspecified)
+        .ndm_index(if_index)
+        .ndm_state(Nud::empty())
+        .ndm_flags(Ntf::empty())
+        .ndm_type(Rtn::Unicast)
+        .build()?;
+
+    let mut recv: NlRouterReceiverHandle<Rtm, Ndmsg> = router
+        .send(
+            Rtm::Getneigh,
+            NlmF::DUMP | NlmF::REQUEST | NlmF::ACK,
+            NlPayload::Payload(if_info_msg),
+        )
+        .await?;
+
+    let mut neighbours = Vec::new();
+    while let Some(message) = recv.next().await {
+        let message: Nlmsghdr<Rtm, Ndmsg> = message?;
+        let Some(payload) = message.get_payload() else {
+            continue;
+        };
+
+        if *payload.ndm_index() != if_index {
+            continue;
+        }
+        if *payload.ndm_type() != Rtn::Unicast {
+            continue;
+        }
+
+        let attr_handle = payload.rtattrs().get_attr_handle();
+        let Ok(bytes) = attr_handle.get_attr_payload_as::<[u8; 6]>(Nda::Lladdr) else {
+            continue;
+        };
+
+        neighbours.push(MacAddr::from(bytes));
+    }
+    Ok(neighbours)
 }
 
 #[derive(Debug)]

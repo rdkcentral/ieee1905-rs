@@ -18,6 +18,7 @@
 */
 
 #![deny(warnings)]
+
 // External crates
 use nom::{
     bytes::complete::take,
@@ -29,9 +30,10 @@ use nom::{Err as NomErr, Needed};
 
 use anyhow::bail;
 use nom::combinator::{all_consuming, cond};
-use nom::multi::{count, many0};
+use nom::multi::{count, length_count, many0};
 use pnet::datalink::MacAddr;
 use std::fmt::{Debug, Display, Formatter};
+use tracing::warn;
 // Internal modules
 use crate::cmdu_reassembler::CmduReassemblyError;
 use crate::tlv_cmdu_codec::TLV;
@@ -53,6 +55,8 @@ pub enum CMDUType {
     ApAutoConfigSearch,
     ApAutoConfigResponse,
     ApAutoConfigWCS,
+    GenericPhyQuery,
+    GenericPhyResponse,
     Unknown(u16), // To handle unknown or unsupported CMDU types
 }
 
@@ -69,6 +73,8 @@ impl CMDUType {
             0x0007 => CMDUType::ApAutoConfigSearch,
             0x0008 => CMDUType::ApAutoConfigResponse,
             0x0009 => CMDUType::ApAutoConfigWCS,
+            0x0011 => CMDUType::GenericPhyQuery,
+            0x0012 => CMDUType::GenericPhyResponse,
             _ => CMDUType::Unknown(value), // For unrecognized CMDU types
         }
     }
@@ -82,10 +88,11 @@ impl CMDUType {
             CMDUType::TopologyResponse => 0x0003,
             CMDUType::LinkMetricQuery => 0x0005,
             CMDUType::LinkMetricResponse => 0x0006,
-            //TODO remove this linkMetric
             CMDUType::ApAutoConfigSearch => 0x0007,
             CMDUType::ApAutoConfigResponse => 0x0008,
             CMDUType::ApAutoConfigWCS => 0x0009,
+            CMDUType::GenericPhyQuery => 0x0011,
+            CMDUType::GenericPhyResponse => 0x0012,
             CMDUType::Unknown(value) => value, // Return the unknown value as-is
         }
     }
@@ -119,35 +126,6 @@ impl MessageVersion {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum MultiApProfile {
-    Profile1,     // 0x01
-    Profile2,     // 0x02
-    Profile3,     // 0x03
-    Reserved(u8), // 0x04..=0xFF
-}
-impl MultiApProfile {
-    pub fn to_u8(self) -> u8 {
-        match self {
-            MultiApProfile::Profile1 => 0x01,
-            MultiApProfile::Profile2 => 0x02,
-            MultiApProfile::Profile3 => 0x03,
-            MultiApProfile::Reserved(v) => v,
-        }
-    }
-    pub fn from_u8(v: u8) -> Result<Self, ()> {
-        Ok(match v {
-            0x01 => MultiApProfile::Profile1,
-            0x02 => MultiApProfile::Profile2,
-            0x03 => MultiApProfile::Profile3,
-            0x04..=0xFF => MultiApProfile::Reserved(v),
-            _ => return Err(()), // 0x00 is invalid for Multi-AP Profile
-        })
-    }
-}
-
-///////////////////////////////////////////////////////////////////////////
 //Comcast selector
 ///////////////////////////////////////////////////////////////////////////
 pub const COMCAST_OUI: [u8; 3] = [0xD8, 0x9C, 0x8E];
@@ -171,6 +149,10 @@ pub enum IEEE1905TLVType {
     LinkMetricResultCode,
     SearchedRole,
     SupportedRole,
+    GenericPhyDeviceInformation,
+    SupportedFreqBand,
+    DeviceIdentificationType,
+    Ieee1905ProfileVersion,
     ClientAssociation,
     MultiApProfile,
     Profile2ApCapability,
@@ -195,6 +177,10 @@ impl IEEE1905TLVType {
             0x0c => IEEE1905TLVType::LinkMetricResultCode,
             0x0d => IEEE1905TLVType::SearchedRole,
             0x0f => IEEE1905TLVType::SupportedRole,
+            0x14 => IEEE1905TLVType::GenericPhyDeviceInformation,
+            0x10 => IEEE1905TLVType::SupportedFreqBand,
+            0x15 => IEEE1905TLVType::DeviceIdentificationType,
+            0x1a => IEEE1905TLVType::Ieee1905ProfileVersion,
             0x92 => IEEE1905TLVType::ClientAssociation,
             0xb3 => IEEE1905TLVType::MultiApProfile,
             0xb4 => IEEE1905TLVType::Profile2ApCapability,
@@ -219,6 +205,10 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::LinkMetricResultCode => 0x0c,
             IEEE1905TLVType::SearchedRole => 0x0d,
             IEEE1905TLVType::SupportedRole => 0x0f,
+            IEEE1905TLVType::GenericPhyDeviceInformation => 0x14,
+            IEEE1905TLVType::SupportedFreqBand => 0x10,
+            IEEE1905TLVType::DeviceIdentificationType => 0x15,
+            IEEE1905TLVType::Ieee1905ProfileVersion => 0x1a,
             IEEE1905TLVType::ClientAssociation => 0x92,
             IEEE1905TLVType::MultiApProfile => 0xb3,
             IEEE1905TLVType::Profile2ApCapability => 0xb4,
@@ -228,76 +218,88 @@ impl IEEE1905TLVType {
 }
 
 ///////////////////////////////////////////////////////////////////////////
+pub trait TLVTrait: Sized {
+    const TYPE: IEEE1905TLVType;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self>;
+    fn serialize(&self) -> Vec<u8>;
+
+    fn find(vec: &[TLV]) -> Option<Self> {
+        Self::find_all(vec).next()
+    }
+
+    fn find_all(vec: &[TLV]) -> impl Iterator<Item = Self> {
+        vec.iter().filter_map(|e| {
+            if e.tlv_type != Self::TYPE.to_u8() {
+                return None;
+            }
+            match Self::parse(e.tlv_value.as_deref().unwrap_or_default()) {
+                Ok(e) => Some(e.1),
+                Err(e) => {
+                    warn!(kind = ?Self::TYPE, %e, "failed to parse TLV");
+                    None
+                }
+            }
+        })
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+pub struct EndOfMessage;
+
+impl TLVTrait for EndOfMessage {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::EndOfMessage;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        if input.len() > 0 {
+            return Err(nom::Err::Error(Error::new(input, ErrorKind::Verify)));
+        }
+        Ok((input, Self))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        Vec::new()
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq)]
 pub struct AlMacAddress {
     pub al_mac_address: MacAddr,
 }
 
-impl AlMacAddress {
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, mac_bytes) = take(6usize)(input)?;
+impl TLVTrait for AlMacAddress {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::AlMacAddress;
 
-        let al_mac_address = MacAddr::new(
-            mac_bytes[0],
-            mac_bytes[1],
-            mac_bytes[2],
-            mac_bytes[3],
-            mac_bytes[4],
-            mac_bytes[5],
-        );
-
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, al_mac_address) = take_mac_addr(input)?;
         Ok((input, Self { al_mac_address }))
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&[
-            self.al_mac_address.0,
-            self.al_mac_address.1,
-            self.al_mac_address.2,
-            self.al_mac_address.3,
-            self.al_mac_address.4,
-            self.al_mac_address.5,
-        ]);
-        bytes
+    fn serialize(&self) -> Vec<u8> {
+        self.al_mac_address.octets().to_vec()
     }
 }
-///////////////////////////////////////////////////////////////////////////
 
+///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq)]
 pub struct MacAddress {
     pub mac_address: MacAddr,
 }
 
-impl MacAddress {
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, mac_bytes) = take(6usize)(input)?;
+impl TLVTrait for MacAddress {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::MacAddress;
 
-        let mac_address = MacAddr::new(
-            mac_bytes[0],
-            mac_bytes[1],
-            mac_bytes[2],
-            mac_bytes[3],
-            mac_bytes[4],
-            mac_bytes[5],
-        );
-
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, mac_address) = take_mac_addr(input)?;
         Ok((input, Self { mac_address }))
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&[
-            self.mac_address.0,
-            self.mac_address.1,
-            self.mac_address.2,
-            self.mac_address.3,
-            self.mac_address.4,
-            self.mac_address.5,
-        ]);
-        bytes
+    fn serialize(&self) -> Vec<u8> {
+        self.mac_address.octets().to_vec()
     }
 }
+
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct LocalInterface {
@@ -372,6 +374,7 @@ impl LocalInterface {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq)]
 pub struct DeviceInformation {
     pub al_mac_address: MacAddr,                   // Added AlMacAddress
@@ -387,34 +390,12 @@ impl DeviceInformation {
             local_interface_list,
         }
     }
+}
 
-    /// Serializes the `DeviceInformation` TLV to raw bytes.
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
+impl TLVTrait for DeviceInformation {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::DeviceInformation;
 
-        // Serialize AlMacAddress (6 bytes)
-        bytes.extend_from_slice(&[
-            self.al_mac_address.0,
-            self.al_mac_address.1,
-            self.al_mac_address.2,
-            self.al_mac_address.3,
-            self.al_mac_address.4,
-            self.al_mac_address.5,
-        ]);
-
-        // Serialize local_interface_count (1 byte)
-        bytes.push(self.local_interface_count);
-
-        // Serialize each LocalInterface
-        for local_interface in &self.local_interface_list {
-            bytes.extend_from_slice(&local_interface.serialize());
-        }
-
-        bytes
-    }
-
-    /// Parses a `DeviceInformation` TLV from raw bytes.
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         // Parse AlMacAddress (6 bytes)
         let (input, al_mac_bytes) = take(6usize)(input)?;
         let al_mac_address = MacAddr::new(
@@ -443,10 +424,33 @@ impl DeviceInformation {
             },
         ))
     }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        // Serialize AlMacAddress (6 bytes)
+        bytes.extend_from_slice(&[
+            self.al_mac_address.0,
+            self.al_mac_address.1,
+            self.al_mac_address.2,
+            self.al_mac_address.3,
+            self.al_mac_address.4,
+            self.al_mac_address.5,
+        ]);
+
+        // Serialize local_interface_count (1 byte)
+        bytes.push(self.local_interface_count);
+
+        // Serialize each LocalInterface
+        for local_interface in &self.local_interface_list {
+            bytes.extend_from_slice(&local_interface.serialize());
+        }
+
+        bytes
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct BridgingTuple {
     pub bridging_mac_count: u8,
@@ -507,15 +511,17 @@ impl BridgingTuple {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq)]
 pub struct DeviceBridgingCapability {
     pub bridging_tuples_count: u8,
     pub bridging_tuples_list: Vec<BridgingTuple>,
 }
 
-impl DeviceBridgingCapability {
-    /// Parses a `DeviceBridgingCapability` from a byte slice
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+impl TLVTrait for DeviceBridgingCapability {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::DeviceBridgingCapability;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         // Parse the bridging_tuples_count (1 byte)
         let (mut input, bridging_tuples_count) = be_u8(input)?;
 
@@ -537,8 +543,7 @@ impl DeviceBridgingCapability {
         ))
     }
 
-    /// Serializes the `DeviceBridgingCapability` into a byte vector
-    pub fn serialize(&self) -> Vec<u8> {
+    fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
         // Serialize the bridging_tuples_count (u8)
@@ -558,6 +563,7 @@ impl DeviceBridgingCapability {
 pub struct NonIEEE1905Neighbor {
     pub neighbor_mac: MacAddr,
 }
+
 impl NonIEEE1905Neighbor {
     // Parse function for NonIEEE1905Neighbor
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
@@ -591,6 +597,7 @@ impl NonIEEE1905Neighbor {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct NonIEEE1905LocalInterfaceNeighborhood {
     pub local_mac_address: MacAddr,
@@ -650,64 +657,22 @@ impl NonIEEE1905LocalInterfaceNeighborhood {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct NonIeee1905NeighborDevices {
     pub local_mac_address: MacAddr,      // Single local MAC address
     pub neighborhood_list: Vec<MacAddr>, // List of neighbor MACs
 }
 
-impl NonIeee1905NeighborDevices {
-    /// **Parsing function**
-    pub fn parse(input: &[u8], neighbor_count: u16) -> IResult<&[u8], Self> {
-        let mut remaining_input = input;
+impl TLVTrait for NonIeee1905NeighborDevices {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::NonIeee1905NeighborDevices;
 
-        // **Step 1: Ensure There Are Enough Bytes for the Local MAC Address**
-        if remaining_input.len() < 6 {
-            return Err(nom::Err::Error(nom::error::Error::new(
-                remaining_input,
-                nom::error::ErrorKind::Eof,
-            )));
-        }
-
-        // **Parse Local MAC Address**
-        let (next_input, mac_bytes) = take(6usize)(remaining_input)?;
-        let local_mac_address = MacAddr::new(
-            mac_bytes[0],
-            mac_bytes[1],
-            mac_bytes[2],
-            mac_bytes[3],
-            mac_bytes[4],
-            mac_bytes[5],
-        );
-        remaining_input = next_input;
-
-        // **Step 2: Ensure There Are Enough Bytes for All Neighbor MAC Addresses**
-        let required_bytes = (neighbor_count as usize) * 6;
-        if remaining_input.len() < required_bytes {
-            return Err(nom::Err::Error(nom::error::Error::new(
-                remaining_input,
-                nom::error::ErrorKind::Eof,
-            )));
-        }
-
-        // **Parse Neighbors**
-        let mut neighborhood_list = Vec::new();
-        for _ in 0..neighbor_count {
-            let (next_input, mac_bytes) = take(6usize)(remaining_input)?;
-            let neighbor_mac_address = MacAddr::new(
-                mac_bytes[0],
-                mac_bytes[1],
-                mac_bytes[2],
-                mac_bytes[3],
-                mac_bytes[4],
-                mac_bytes[5],
-            );
-            neighborhood_list.push(neighbor_mac_address);
-            remaining_input = next_input;
-        }
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, local_mac_address) = take_mac_addr(input)?;
+        let (input, neighborhood_list) = all_consuming(many0(take_mac_addr)).parse(input)?;
 
         Ok((
-            remaining_input, // Return remaining input
+            input, // Return remaining input
             NonIeee1905NeighborDevices {
                 local_mac_address,
                 neighborhood_list,
@@ -715,27 +680,10 @@ impl NonIeee1905NeighborDevices {
         ))
     }
 
-    /// **Serialization function**
-    pub fn serialize(&self) -> Vec<u8> {
+    fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-
-        // **Step 1: Serialize the Local MAC Address (6 bytes)**
-        bytes.extend_from_slice(&[
-            self.local_mac_address.0,
-            self.local_mac_address.1,
-            self.local_mac_address.2,
-            self.local_mac_address.3,
-            self.local_mac_address.4,
-            self.local_mac_address.5,
-        ]);
-
-        // **Step 2: Serialize each Neighbor MAC Address (6 bytes each)**
-        for neighbor in &self.neighborhood_list {
-            bytes.extend_from_slice(&[
-                neighbor.0, neighbor.1, neighbor.2, neighbor.3, neighbor.4, neighbor.5,
-            ]);
-        }
-
+        bytes.extend(self.local_mac_address.octets());
+        bytes.extend(self.neighborhood_list.iter().flat_map(|e| e.octets()));
         bytes
     }
 }
@@ -795,38 +743,23 @@ impl IEEE1905Neighbor {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Ieee1905NeighborDevice {
     pub local_mac_address: MacAddr,
     pub neighborhood_list: Vec<IEEE1905Neighbor>,
 }
 
-impl Ieee1905NeighborDevice {
-    /// Parse an `Ieee1905NeighborDevice` from a byte slice
-    pub fn parse(input: &[u8], neighbor_count: usize) -> IResult<&[u8], Self> {
-        // Parse the local_mac_address (6 bytes)
-        let (input, mac_bytes) = take(6usize)(input)?;
-        let local_mac_address = MacAddr::new(
-            mac_bytes[0],
-            mac_bytes[1],
-            mac_bytes[2],
-            mac_bytes[3],
-            mac_bytes[4],
-            mac_bytes[5],
-        );
+impl TLVTrait for Ieee1905NeighborDevice {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::Ieee1905NeighborDevices;
 
-        // Parse the list of IEEE1905Neighbor objects
-        let mut neighborhood_list = Vec::new();
-        let mut remaining_input = input;
-
-        for _ in 0..neighbor_count {
-            let (next_input, neighbor) = IEEE1905Neighbor::parse(remaining_input)?;
-            neighborhood_list.push(neighbor);
-            remaining_input = next_input;
-        }
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, local_mac_address) = take_mac_addr(input)?;
+        let (input, neighborhood_list) =
+            all_consuming(many0(IEEE1905Neighbor::parse)).parse(input)?;
 
         Ok((
-            remaining_input,
+            input,
             Ieee1905NeighborDevice {
                 local_mac_address,
                 neighborhood_list,
@@ -834,67 +767,51 @@ impl Ieee1905NeighborDevice {
         ))
     }
 
-    /// Serialize the `Ieee1905NeighborDevice` into a byte vector
-    pub fn serialize(&self) -> Vec<u8> {
+    fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-
-        // Serialize the local_mac_address (6 bytes)
-        bytes.extend_from_slice(&[
-            self.local_mac_address.0,
-            self.local_mac_address.1,
-            self.local_mac_address.2,
-            self.local_mac_address.3,
-            self.local_mac_address.4,
-            self.local_mac_address.5,
-        ]);
-
-        // Serialize each IEEE1905Neighbor in the neighborhood_list
-        for neighbor in &self.neighborhood_list {
-            bytes.extend_from_slice(&neighbor.serialize());
-        }
-
+        bytes.extend(self.local_mac_address.octets());
+        bytes.extend(self.neighborhood_list.iter().flat_map(|e| e.serialize()));
         bytes
     }
 }
 
 ///////////////////////////////////////////////////////////////////////////
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct VendorSpecificInfo {
     pub oui: [u8; 3],
     pub vendor_data: Vec<u8>,
 }
-impl VendorSpecificInfo {
-    // Function to parse VendorSpecificTLV from a RawTLV
-    pub fn parse(input: &[u8], input_length: u16) -> IResult<&[u8], Self> {
-        let (input, oui) = take(3usize)(input)?;
-        let (input, vendor_data) = take(input_length as usize - 3)(input)?;
-        Ok((
-            input,
-            Self {
-                oui: [oui[0], oui[1], oui[2]],
-                vendor_data: vendor_data.to_vec(),
-            },
-        ))
+
+impl TLVTrait for VendorSpecificInfo {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::VendorSpecificInfo;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, oui) = take_n_bytes::<3>(input)?;
+        let this = Self {
+            oui: *oui,
+            vendor_data: input.to_vec(),
+        };
+        Ok((&[], this))
     }
-    // Serialize the VendorSpecificValue into bytes
-    pub fn serialize(&self) -> Vec<u8> {
+
+    fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.oui); // Add OUI
         bytes.extend_from_slice(&self.vendor_data); // Add vendor-specific data
         bytes
     }
 }
-///////////////////////////////////////////////////////////////////////////
 
+///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq)]
 pub struct SearchedRole {
     pub role: u8,
 }
 
-impl SearchedRole {
-    /// Parse `SearchedRole` from raw TLV data
-    pub fn parse(input: &[u8], _input_length: u16) -> IResult<&[u8], Self> {
+impl TLVTrait for SearchedRole {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::SearchedRole;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, role_bytes) = take(1usize)(input)?;
         let role = role_bytes[0];
 
@@ -910,8 +827,7 @@ impl SearchedRole {
         ))
     }
 
-    /// Serialize `SearchedRole` into bytes
-    pub fn serialize(&self) -> Vec<u8> {
+    fn serialize(&self) -> Vec<u8> {
         vec![self.role]
     }
 }
@@ -922,9 +838,10 @@ pub struct SupportedRole {
     pub role: u8,
 }
 
-impl SupportedRole {
-    /// Parse `SupportedRole` from raw TLV data, ensuring the role is exactly 0x00
-    pub fn parse(input: &[u8], _input_length: u16) -> IResult<&[u8], Self> {
+impl TLVTrait for SupportedRole {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::SupportedRole;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, role_bytes) = take(1usize)(input)?;
         let role = role_bytes[0];
 
@@ -935,11 +852,132 @@ impl SupportedRole {
         Ok((input, Self { role }))
     }
 
-    /// Serialize `SupportedRole` into bytes
-    pub fn serialize(&self) -> Vec<u8> {
+    fn serialize(&self) -> Vec<u8> {
         vec![self.role]
     }
 }
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum SupportedFreqBand {
+    Band_802_11_2_4,
+    Band_802_11_5,
+    Band_802_11_60,
+    Reserved(u8),
+}
+
+impl SupportedFreqBand {
+    pub fn from_u8(input: u8) -> Self {
+        match input {
+            0x00 => Self::Band_802_11_2_4,
+            0x01 => Self::Band_802_11_5,
+            0x02 => Self::Band_802_11_60,
+            x => Self::Reserved(x),
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            Self::Band_802_11_2_4 => 0x00,
+            Self::Band_802_11_5 => 0x01,
+            Self::Band_802_11_60 => 0x02,
+            Self::Reserved(e) => *e,
+        }
+    }
+}
+
+impl TLVTrait for SupportedFreqBand {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::SupportedFreqBand;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        nom::combinator::map(be_u8, Self::from_u8).parse(input)
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        self.to_u8().to_be_bytes().to_vec()
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceIdentificationType {
+    pub friendly_name: String,
+    pub manufacturer_name: String,
+    pub manufacturer_model: String,
+}
+
+impl TLVTrait for DeviceIdentificationType {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::DeviceIdentificationType;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, friendly_name) = take_utf8_fixed::<64>(input)?;
+        let (input, manufacturer_name) = take_utf8_fixed::<64>(input)?;
+        let (input, manufacturer_model) = take_utf8_fixed::<64>(input)?;
+
+        let this = Self {
+            friendly_name,
+            manufacturer_name,
+            manufacturer_model,
+        };
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        fn push_utf8(buf: &mut Vec<u8>, str: &str) {
+            let base_len = buf.len();
+            let push_len = str.floor_char_boundary(64);
+            buf.extend(&str.as_bytes()[..push_len]);
+            buf.resize(base_len + 64, 0);
+        }
+
+        let mut buf = Vec::with_capacity(64 * 3);
+        push_utf8(&mut buf, &self.friendly_name);
+        push_utf8(&mut buf, &self.manufacturer_name);
+        push_utf8(&mut buf, &self.manufacturer_model);
+        buf
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub enum Ieee1905ProfileVersion {
+    #[default]
+    Ieee1905_1,
+    Ieee1905_1a,
+    Reserved(u8),
+}
+
+impl Ieee1905ProfileVersion {
+    pub fn from_u8(input: u8) -> Self {
+        match input {
+            0x00 => Self::Ieee1905_1,
+            0x01 => Self::Ieee1905_1a,
+            x => Self::Reserved(x),
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            Self::Ieee1905_1 => 0x00,
+            Self::Ieee1905_1a => 0x01,
+            Self::Reserved(e) => *e,
+        }
+    }
+}
+
+impl TLVTrait for Ieee1905ProfileVersion {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::Ieee1905ProfileVersion;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        nom::combinator::map(be_u8, Self::from_u8).parse(input)
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        self.to_u8().to_be_bytes().to_vec()
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssociationState {
@@ -955,28 +993,13 @@ pub struct ClientAssociation {
     pub association_state: AssociationState,
 }
 
-impl ClientAssociation {
-    pub fn parse(input: &[u8], _input_length: u16) -> IResult<&[u8], Self> {
-        let (input, sta_bytes) = take(6usize)(input)?;
-        let (input, ap_bytes) = take(6usize)(input)?;
-        let (input, assoc_byte) = take(1usize)(input)?;
+impl TLVTrait for ClientAssociation {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::ClientAssociation;
 
-        let sta_mac = MacAddr::new(
-            sta_bytes[0],
-            sta_bytes[1],
-            sta_bytes[2],
-            sta_bytes[3],
-            sta_bytes[4],
-            sta_bytes[5],
-        );
-        let ap_mac = MacAddr::new(
-            ap_bytes[0],
-            ap_bytes[1],
-            ap_bytes[2],
-            ap_bytes[3],
-            ap_bytes[4],
-            ap_bytes[5],
-        );
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, sta_mac) = take_mac_addr(input)?;
+        let (input, ap_mac) = take_mac_addr(input)?;
+        let (input, assoc_byte) = take(1usize)(input)?;
 
         let assoc_bits = assoc_byte[0];
 
@@ -1001,7 +1024,7 @@ impl ClientAssociation {
         ))
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
+    fn serialize(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(13);
         buf.extend_from_slice(&self.sta_mac.octets());
         buf.extend_from_slice(&self.ap_mac.octets());
@@ -1018,25 +1041,49 @@ impl ClientAssociation {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
-pub struct MultiApProfileValue {
-    pub profile: MultiApProfile,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultiApProfile {
+    Profile1,     // 0x01
+    Profile2,     // 0x02
+    Profile3,     // 0x03
+    Reserved(u8), // 0x04..=0xFF
 }
 
-impl MultiApProfileValue {
-    pub fn parse(input: &[u8], _input_length: u16) -> IResult<&[u8], Self> {
-        let (rest, bytes) = take(1usize)(input)?;
-        let v = bytes[0];
-
-        match MultiApProfile::from_u8(v) {
-            Ok(profile) => Ok((rest, Self { profile })),
-            Err(_) => Err(nom::Err::Failure(Error::new(rest, ErrorKind::Verify))),
+impl MultiApProfile {
+    pub fn to_u8(self) -> u8 {
+        match self {
+            MultiApProfile::Profile1 => 0x01,
+            MultiApProfile::Profile2 => 0x02,
+            MultiApProfile::Profile3 => 0x03,
+            MultiApProfile::Reserved(v) => v,
         }
     }
 
-    /// Serialize the value to a single byte.
-    pub fn serialize(&self) -> Vec<u8> {
-        vec![self.profile.to_u8()]
+    pub fn from_u8(v: u8) -> Option<Self> {
+        Some(match v {
+            0x01 => MultiApProfile::Profile1,
+            0x02 => MultiApProfile::Profile2,
+            0x03 => MultiApProfile::Profile3,
+            0x04..=0xFF => MultiApProfile::Reserved(v),
+            _ => return None, // 0x00 is invalid for Multi-AP Profile
+        })
+    }
+}
+
+impl TLVTrait for MultiApProfile {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::MultiApProfile;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (rest, byte) = be_u8(input)?;
+
+        let profile = MultiApProfile::from_u8(byte)
+            .ok_or_else(|| nom::Err::Failure(Error::new(input, ErrorKind::Verify)))?;
+
+        Ok((rest, profile))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        vec![self.to_u8()]
     }
 }
 
@@ -1053,8 +1100,10 @@ pub struct Profile2ApCapability {
     pub max_vids: u8,
 }
 
-impl Profile2ApCapability {
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+impl TLVTrait for Profile2ApCapability {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::Profile2ApCapability;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, max_prioritization_rules) = be_u8(input)?;
         let (input, reserved) = be_u8(input)?;
         let (input, flags) = be_u8(input)?;
@@ -1073,7 +1122,7 @@ impl Profile2ApCapability {
         Ok((input, this))
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
+    fn serialize(&self) -> Vec<u8> {
         let flags = (self.byte_counter_units.to_u8() << 6)
             | ((self.prioritization as u8) << 5)
             | ((self.dpp_onboarding as u8) << 4)
@@ -1133,8 +1182,12 @@ impl LinkMetricQuery {
     pub const METRIC_TX: u8 = 0x00;
     pub const METRIC_RX: u8 = 0x01;
     pub const METRIC_TX_RX: u8 = 0x02;
+}
 
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+impl TLVTrait for LinkMetricQuery {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::LinkMetricQuery;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, neighbor_type) = be_u8(input)?;
 
         let specific_neighbor = neighbor_type == Self::NEIGHBOR_SPECIFIC;
@@ -1151,20 +1204,12 @@ impl LinkMetricQuery {
         ))
     }
 
-    pub fn serialize(&self) -> anyhow::Result<Vec<u8>> {
+    fn serialize(&self) -> Vec<u8> {
         let mut vec = Vec::new();
-        vec.push(self.neighbor_type);
-
-        if self.neighbor_type == Self::NEIGHBOR_SPECIFIC {
-            if let Some(mac) = self.neighbor_mac {
-                vec.extend(mac.octets());
-            } else {
-                bail!("LinkMetricQuery -> mac is missing when NEIGHBOR_SPECIFIC flag is present");
-            }
-        }
-        vec.push(self.requested_metrics);
-
-        Ok(vec)
+        vec.extend(self.neighbor_type.to_be_bytes());
+        vec.extend(self.neighbor_mac.iter().flat_map(|e| e.octets()));
+        vec.extend(self.requested_metrics.to_be_bytes());
+        vec
     }
 }
 
@@ -1176,8 +1221,10 @@ pub struct LinkMetricTx {
     pub interface_pairs: Vec<LinkMetricTxPair>,
 }
 
-impl LinkMetricTx {
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+impl TLVTrait for LinkMetricTx {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::LinkMetricTx;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, source_al_mac) = take_mac_addr(input)?;
         let (input, neighbour_al_mac) = take_mac_addr(input)?;
         let (input, interface_pairs) =
@@ -1193,7 +1240,7 @@ impl LinkMetricTx {
         ))
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
+    fn serialize(&self) -> Vec<u8> {
         let mut vec = Vec::new();
         vec.extend(self.source_al_mac.octets());
         vec.extend(self.neighbour_al_mac.octets());
@@ -1269,8 +1316,10 @@ pub struct LinkMetricRx {
     pub interface_pairs: Vec<LinkMetricRxPair>,
 }
 
-impl LinkMetricRx {
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+impl TLVTrait for LinkMetricRx {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::LinkMetricRx;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, source_al_mac) = take_mac_addr(input)?;
         let (input, neighbour_al_mac) = take_mac_addr(input)?;
         let (input, interface_pairs) =
@@ -1286,7 +1335,7 @@ impl LinkMetricRx {
         ))
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
+    fn serialize(&self) -> Vec<u8> {
         let mut vec = Vec::new();
         vec.extend(self.source_al_mac.octets());
         vec.extend(self.neighbour_al_mac.octets());
@@ -1349,8 +1398,10 @@ pub enum LinkMetricResultCode {
     UnknownCode(u8),
 }
 
-impl LinkMetricResultCode {
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+impl TLVTrait for LinkMetricResultCode {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::LinkMetricResultCode;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, code) = be_u8(input)?;
         let this = match code {
             0x00 => Self::InvalidNeighbor,
@@ -1359,7 +1410,7 @@ impl LinkMetricResultCode {
         Ok((input, this))
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
+    fn serialize(&self) -> Vec<u8> {
         let code = match self {
             Self::InvalidNeighbor => 0x00,
             Self::UnknownCode(e) => *e,
@@ -1527,6 +1578,90 @@ impl MediaTypeSpecialInfoWifi {
         vec.extend(self.ap_channel_band.to_be_bytes());
         vec.extend(self.ap_channel_center_frequency_index1.to_be_bytes());
         vec.extend(self.ap_channel_center_frequency_index2.to_be_bytes());
+        vec
+    }
+}
+
+///
+/// Generic Phy device information (Table 6-29)
+///
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenericPhyDeviceInformation {
+    pub al_mac: MacAddr,
+    pub local_interfaces: Vec<GenericPhyLocalInterface>,
+}
+
+impl GenericPhyDeviceInformation {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, al_mac) = take_mac_addr(input)?;
+        let (input, local_interfaces) =
+            all_consuming(length_count(be_u8, GenericPhyLocalInterface::parse)).parse(input)?;
+
+        let this = Self {
+            al_mac,
+            local_interfaces,
+        };
+
+        Ok((input, this))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.al_mac.octets());
+        vec.extend((self.local_interfaces.len() as u8).to_be_bytes());
+        vec.extend(self.local_interfaces.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///
+/// Generic Phy local interface (Table 6-29)
+///
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenericPhyLocalInterface {
+    pub mac: MacAddr,
+    pub oui: [u8; 3],
+    pub variant_index: u8,
+    pub variant_name: String,
+    pub xml_description_url: String,
+    pub media_specific_information: Vec<u8>,
+}
+
+impl GenericPhyLocalInterface {
+    const VARIANT_NAME_LEN: usize = 32;
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, mac) = take_mac_addr(input)?;
+        let (input, oui) = take_n_bytes(input)?;
+        let (input, variant_index) = be_u8(input)?;
+        let (input, variant_name) = take_utf8(input, Self::VARIANT_NAME_LEN)?;
+        let (input, xml_description_url_len) = be_u8(input)?;
+        let (input, media_info_len) = be_u8(input)?;
+        let (input, xml_description_url) = take_utf8(input, xml_description_url_len as usize)?;
+        let (input, media_info) = take(media_info_len as usize).parse(input)?;
+
+        let this = Self {
+            mac,
+            oui: *oui,
+            variant_index,
+            variant_name,
+            xml_description_url,
+            media_specific_information: media_info.to_vec(),
+        };
+
+        Ok((input, this))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.mac.octets());
+        vec.extend(self.oui);
+        vec.extend(self.variant_index.to_be_bytes());
+        extend_from_utf8_n(&mut vec, &self.variant_name, Self::VARIANT_NAME_LEN);
+        vec.extend((self.xml_description_url.len() as u8).to_be_bytes());
+        vec.extend((self.media_specific_information.len() as u8).to_be_bytes());
+        vec.extend(self.xml_description_url.as_bytes());
+        vec.extend(self.media_specific_information.as_slice());
         vec
     }
 }
@@ -1798,12 +1933,34 @@ impl CMDU {
     }
 }
 
+fn take_utf8(input: &[u8], len: usize) -> IResult<&[u8], String> {
+    let (input, bytes) = take(len).parse(input)?;
+    let str = String::from_utf8_lossy(bytes);
+    let str = str.trim_matches('\0');
+    Ok((input, str.to_owned()))
+}
+
+fn extend_from_utf8_n(target: &mut Vec<u8>, str: &str, len: usize) {
+    let bytes = str.as_bytes();
+    target.extend(bytes.iter().take(len));
+    target.extend((bytes.len()..len).map(|_| 0));
+}
+
 fn take_n_bytes<const N: usize>(input: &[u8]) -> IResult<&[u8], &[u8; N]> {
     let (input, bytes) = take(N)(input)?;
     match bytes.try_into() {
         Ok(e) => Ok((input, e)),
         Err(_) => Err(nom::Err::Incomplete(Needed::new(N))),
     }
+}
+
+fn take_utf8_fixed<const N: usize>(input: &[u8]) -> IResult<&[u8], String> {
+    let (input, bytes) = take_n_bytes::<N>(input)?;
+    let string = String::from_utf8_lossy(bytes)
+        .trim_matches('\0')
+        .trim()
+        .to_string();
+    Ok((input, string))
 }
 
 fn take_mac_addr(input: &[u8]) -> IResult<&[u8], MacAddr> {
@@ -1886,6 +2043,8 @@ pub mod tests {
         assert_eq!(CMDUType::from_u16(7), CMDUType::ApAutoConfigSearch);
         assert_eq!(CMDUType::from_u16(8), CMDUType::ApAutoConfigResponse);
         assert_eq!(CMDUType::from_u16(9), CMDUType::ApAutoConfigWCS);
+        assert_eq!(CMDUType::from_u16(0x11), CMDUType::GenericPhyQuery);
+        assert_eq!(CMDUType::from_u16(0x12), CMDUType::GenericPhyResponse);
     }
 
     // Verify function for getting message version of CMDU
@@ -1915,6 +2074,8 @@ pub mod tests {
         assert_eq!(CMDUType::ApAutoConfigSearch.to_u16(), 7);
         assert_eq!(CMDUType::ApAutoConfigResponse.to_u16(), 8);
         assert_eq!(CMDUType::ApAutoConfigWCS.to_u16(), 9);
+        assert_eq!(CMDUType::GenericPhyQuery.to_u16(), 0x11);
+        assert_eq!(CMDUType::GenericPhyResponse.to_u16(), 0x12);
     }
 
     // Verify the correctness of conversion from u8 to IEEE1905TLVType
@@ -1979,6 +2140,22 @@ pub mod tests {
             IEEE1905TLVType::SupportedRole
         );
         assert_eq!(
+            IEEE1905TLVType::from_u8(0x10),
+            IEEE1905TLVType::SupportedFreqBand
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x14),
+            IEEE1905TLVType::GenericPhyDeviceInformation
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x15),
+            IEEE1905TLVType::DeviceIdentificationType
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x1a),
+            IEEE1905TLVType::Ieee1905ProfileVersion
+        );
+        assert_eq!(
             IEEE1905TLVType::from_u8(0x92),
             IEEE1905TLVType::ClientAssociation,
         );
@@ -1988,6 +2165,46 @@ pub mod tests {
         );
         assert_eq!(
             IEEE1905TLVType::from_u8(0xb4),
+            IEEE1905TLVType::Profile2ApCapability,
+        );
+    }
+
+    #[test]
+    fn test_ieee1905_tlv_trait_type_check() {
+        // Expect successes
+        assert_eq!(EndOfMessage::TYPE, IEEE1905TLVType::EndOfMessage);
+        assert_eq!(AlMacAddress::TYPE, IEEE1905TLVType::AlMacAddress);
+        assert_eq!(MacAddress::TYPE, IEEE1905TLVType::MacAddress);
+        assert_eq!(DeviceInformation::TYPE, IEEE1905TLVType::DeviceInformation);
+        assert_eq!(
+            DeviceBridgingCapability::TYPE,
+            IEEE1905TLVType::DeviceBridgingCapability,
+        );
+        assert_eq!(
+            NonIeee1905NeighborDevices::TYPE,
+            IEEE1905TLVType::NonIeee1905NeighborDevices,
+        );
+        assert_eq!(
+            Ieee1905NeighborDevice::TYPE,
+            IEEE1905TLVType::Ieee1905NeighborDevices,
+        );
+        assert_eq!(LinkMetricQuery::TYPE, IEEE1905TLVType::LinkMetricQuery);
+        assert_eq!(LinkMetricTx::TYPE, IEEE1905TLVType::LinkMetricTx);
+        assert_eq!(LinkMetricRx::TYPE, IEEE1905TLVType::LinkMetricRx);
+        assert_eq!(
+            VendorSpecificInfo::TYPE,
+            IEEE1905TLVType::VendorSpecificInfo,
+        );
+        assert_eq!(
+            LinkMetricResultCode::TYPE,
+            IEEE1905TLVType::LinkMetricResultCode,
+        );
+        assert_eq!(SearchedRole::TYPE, IEEE1905TLVType::SearchedRole);
+        assert_eq!(SupportedRole::TYPE, IEEE1905TLVType::SupportedRole);
+        assert_eq!(ClientAssociation::TYPE, IEEE1905TLVType::ClientAssociation);
+        assert_eq!(MultiApProfile::TYPE, IEEE1905TLVType::MultiApProfile);
+        assert_eq!(
+            Profile2ApCapability::TYPE,
             IEEE1905TLVType::Profile2ApCapability,
         );
     }
@@ -2011,6 +2228,10 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::LinkMetricResultCode.to_u8(), 0x0c);
         assert_eq!(IEEE1905TLVType::SearchedRole.to_u8(), 0x0d);
         assert_eq!(IEEE1905TLVType::SupportedRole.to_u8(), 0x0f);
+        assert_eq!(IEEE1905TLVType::GenericPhyDeviceInformation.to_u8(), 0x14);
+        assert_eq!(IEEE1905TLVType::SupportedFreqBand.to_u8(), 0x10);
+        assert_eq!(IEEE1905TLVType::DeviceIdentificationType.to_u8(), 0x15);
+        assert_eq!(IEEE1905TLVType::Ieee1905ProfileVersion.to_u8(), 0x1a);
         assert_eq!(IEEE1905TLVType::ClientAssociation.to_u8(), 0x92);
         assert_eq!(IEEE1905TLVType::MultiApProfile.to_u8(), 0xb3);
         assert_eq!(IEEE1905TLVType::Profile2ApCapability.to_u8(), 0xb4);
@@ -2279,7 +2500,7 @@ pub mod tests {
         let serialized = device.serialize();
 
         // neighbor_count = 2
-        let parsed = Ieee1905NeighborDevice::parse(&serialized, 2);
+        let parsed = Ieee1905NeighborDevice::parse(&serialized);
         assert!(parsed.is_ok());
 
         let (_, parsed_device) = parsed.unwrap();
@@ -2302,7 +2523,7 @@ pub mod tests {
 
         let serialized = device.serialize();
 
-        let parsed = Ieee1905NeighborDevice::parse(&serialized, 0);
+        let parsed = Ieee1905NeighborDevice::parse(&serialized);
         assert!(parsed.is_ok());
 
         let (_, parsed_device) = parsed.unwrap();
@@ -2321,10 +2542,9 @@ pub mod tests {
             .cloned()
             .chain(vendor_data.iter().cloned())
             .collect();
-        let input_length = raw_bytes.len() as u16;
 
         // Parse
-        let result = VendorSpecificInfo::parse(&raw_bytes, input_length);
+        let result = VendorSpecificInfo::parse(&raw_bytes);
         assert!(result.is_ok(), "Parsing failed: {:?}", result);
 
         let (_, parsed) = result.unwrap();
@@ -2630,6 +2850,66 @@ pub mod tests {
         assert_eq!(cmdu_autoconfig_response, parsed_cmdus);
     }
 
+    #[test]
+    fn test_supported_freq_band() {
+        let test_values = [
+            (0x00, SupportedFreqBand::Band_802_11_2_4),
+            (0x01, SupportedFreqBand::Band_802_11_5),
+            (0x02, SupportedFreqBand::Band_802_11_60),
+            (0x03, SupportedFreqBand::Reserved(0x03)),
+            (0xff, SupportedFreqBand::Reserved(0xff)),
+        ];
+
+        for (original, expected) in test_values {
+            let parsed = SupportedFreqBand::from_u8(original);
+            assert_eq!(parsed, expected);
+
+            let serialized = parsed.to_u8();
+            assert_eq!(serialized, original, "{original} => {expected:?}");
+        }
+    }
+
+    #[test]
+    fn test_device_identification_type() {
+        let friendly_name = "😀friendly_name😀";
+        let manufacturer_name = "⚠️manufacturer_name⚠️";
+        let manufacturer_model = "⛔manufacturer_model⛔";
+
+        let mut original = Vec::new();
+        original.extend(friendly_name.as_bytes());
+        original.resize(64, 0);
+        original.extend(manufacturer_name.as_bytes());
+        original.resize(128, 0);
+        original.extend(manufacturer_model.as_bytes());
+        original.resize(192, 0);
+
+        let parsed = DeviceIdentificationType::parse(&original).unwrap().1;
+        assert_eq!(parsed.friendly_name, friendly_name);
+        assert_eq!(parsed.manufacturer_name, manufacturer_name);
+        assert_eq!(parsed.manufacturer_model, manufacturer_model);
+
+        let serialized = parsed.serialize();
+        assert_eq!(serialized, original);
+    }
+
+    #[test]
+    fn test_ieee1905_profile_version() {
+        let test_values = [
+            (0x00, Ieee1905ProfileVersion::Ieee1905_1),
+            (0x01, Ieee1905ProfileVersion::Ieee1905_1a),
+            (0x02, Ieee1905ProfileVersion::Reserved(0x02)),
+            (0xff, Ieee1905ProfileVersion::Reserved(0xff)),
+        ];
+
+        for (original, expected) in test_values {
+            let parsed = Ieee1905ProfileVersion::from_u8(original);
+            assert_eq!(parsed, expected);
+
+            let serialized = parsed.to_u8();
+            assert_eq!(serialized, original);
+        }
+    }
+
     // Verify serializing and parsing AP autoconfig search CMDU with proper role
     #[test]
     fn test_ap_autoconfig_search_with_proper_role() {
@@ -2672,7 +2952,7 @@ pub mod tests {
             .as_ref()
             .expect("SearchedRole TLV has no value");
 
-        let result = SearchedRole::parse(value, searched_tlv.tlv_length);
+        let result = SearchedRole::parse(value);
 
         assert!(result.is_ok());
     }
@@ -2683,7 +2963,7 @@ pub mod tests {
         let role = SupportedRole { role: 0x00 };
         let serialized = role.serialize();
         //        let parsed = SupportedRole::parse(&serialized.clone()[..], serialized.len() as u16);
-        let parsed = SupportedRole::parse(&serialized[..], serialized.len() as u16);
+        let parsed = SupportedRole::parse(&serialized);
 
         // Expect that parsing succeed
         assert_eq!(role, parsed.unwrap().1);
@@ -2854,7 +3134,7 @@ pub mod tests {
         neighbor_devices.append(&mut neighbor_mac.clone());
 
         // Parse vector of raw bytes as NonIeee1905NeighborDevices
-        let parsed = NonIeee1905NeighborDevices::parse(&neighbor_devices, 1)
+        let parsed = NonIeee1905NeighborDevices::parse(&neighbor_devices)
             .unwrap()
             .1;
 
@@ -2902,10 +3182,9 @@ pub mod tests {
     fn test_vendor_specific_info_parse_invalid_length() {
         // Only 2 bytes of OUI provided (invalid). Should be 3 bytes.
         let input = vec![0x01, 0x02];
-        let input_length = input.len() as u16;
 
         // Expect failure as the OUI is too short (2 bytes instead of 3)
-        let result = VendorSpecificInfo::parse(&input, input_length);
+        let result = VendorSpecificInfo::parse(&input);
         assert!(
             result.is_err(),
             "Expected parsing to fail due to insufficient length"
@@ -2957,7 +3236,7 @@ pub mod tests {
             .as_ref()
             .expect("SearchedRole TLV has no value");
 
-        let result = SearchedRole::parse(value, searched_tlv.tlv_length);
+        let result = SearchedRole::parse(value);
 
         match result {
             Err(Err::Failure(e)) => assert_eq!(e.code, ErrorKind::Verify),
@@ -2973,7 +3252,7 @@ pub mod tests {
     fn test_supported_role_invalid_role() {
         let role = SupportedRole { role: 0x01 };
         let serialized = role.serialize();
-        let parsed = SupportedRole::parse(&serialized[..], serialized.len() as u16);
+        let parsed = SupportedRole::parse(&serialized);
 
         // Expect ErrorKind::Verify because role 0x01 is not valid
         match parsed {
@@ -3003,22 +3282,18 @@ pub mod tests {
             ]
         );
 
-        let parsed = ClientAssociation::parse(&bytes, bytes.len() as u16)
-            .unwrap()
-            .1;
+        let parsed = ClientAssociation::parse(&bytes).unwrap().1;
         assert_eq!(parsed, original);
     }
 
     #[test]
     fn test_multi_ap_profile_value_serialization() {
-        let original = MultiApProfileValue {
-            profile: MultiApProfile::Profile1,
-        };
+        let original = MultiApProfile::Profile1;
 
         let bytes = original.serialize();
         assert_eq!(bytes, [0x01]);
 
-        let parsed = MultiApProfileValue::parse(&bytes, bytes.len() as u16).unwrap();
+        let parsed = MultiApProfile::parse(&bytes).unwrap();
         assert_eq!(parsed.1, original);
     }
 
@@ -3062,7 +3337,7 @@ pub mod tests {
         assert_eq!(parsed.neighbor_mac, None);
         assert_eq!(parsed.requested_metrics, LinkMetricQuery::METRIC_TX_RX);
 
-        let serialized = parsed.serialize().unwrap();
+        let serialized = parsed.serialize();
         assert_eq!(serialized, original);
     }
 
@@ -3078,7 +3353,7 @@ pub mod tests {
         );
         assert_eq!(parsed.requested_metrics, LinkMetricQuery::METRIC_RX);
 
-        let serialized = parsed.serialize().unwrap();
+        let serialized = parsed.serialize();
         assert_eq!(serialized, original);
     }
 
@@ -3210,6 +3485,38 @@ pub mod tests {
     }
 
     #[test]
+    fn test_generic_phy_device_information() {
+        let original = [
+            0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, // al mac
+            0x01, // number of local interfaces
+            0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, // mac
+            0x01, 0x02, 0x03, // oui
+            0x42, // variant index
+            b'a', b'b', b'c', b'd', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // variant name p1
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,    // variant name p2
+            0x08, // xml url len
+            0x03, // media info len
+            b'h', b't', b't', b'p', b's', b':', b'/', b'/', // xml url
+            0x0a, 0x0b, 0x0c, // media info
+        ];
+
+        let parsed = GenericPhyDeviceInformation::parse(&original).unwrap().1;
+        assert_eq!(parsed.al_mac.octets(), [0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6]);
+        assert_eq!(parsed.local_interfaces.len(), 1);
+
+        let interface = &parsed.local_interfaces[0];
+        assert_eq!(interface.mac.octets(), [0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6]);
+        assert_eq!(interface.oui, [0x01, 0x02, 0x03]);
+        assert_eq!(interface.variant_index, 0x42);
+        assert_eq!(interface.variant_name, "abcd");
+        assert_eq!(interface.xml_description_url, "https://");
+        assert_eq!(interface.media_specific_information, [0x0a, 0x0b, 0x0c]);
+
+        let serialized = parsed.serialize();
+        assert_eq!(serialized, original);
+    }
+
+    #[test]
     fn test_multi_ap_profile_serialization() {
         assert_eq!(MultiApProfile::Profile1.to_u8(), 0x01);
         assert_eq!(MultiApProfile::Profile2.to_u8(), 0x02);
@@ -3219,14 +3526,23 @@ pub mod tests {
 
     #[test]
     fn test_multi_ap_profile_deserialization() {
-        assert_eq!(MultiApProfile::from_u8(0x01), Ok(MultiApProfile::Profile1));
-        assert_eq!(MultiApProfile::from_u8(0x02), Ok(MultiApProfile::Profile2));
-        assert_eq!(MultiApProfile::from_u8(0x03), Ok(MultiApProfile::Profile3));
+        assert_eq!(
+            MultiApProfile::from_u8(0x01),
+            Some(MultiApProfile::Profile1)
+        );
+        assert_eq!(
+            MultiApProfile::from_u8(0x02),
+            Some(MultiApProfile::Profile2)
+        );
+        assert_eq!(
+            MultiApProfile::from_u8(0x03),
+            Some(MultiApProfile::Profile3)
+        );
         assert_eq!(
             MultiApProfile::from_u8(0x80),
-            Ok(MultiApProfile::Reserved(0x80))
+            Some(MultiApProfile::Reserved(0x80))
         );
-        assert_eq!(MultiApProfile::from_u8(0x00), Err(()));
+        assert_eq!(MultiApProfile::from_u8(0x00), None);
     }
 
     // Try to serialize and parse unknown CMDU type
@@ -3344,7 +3660,7 @@ pub mod tests {
         let neighbor_devices: Vec<u8> = partial_local_mac;
 
         // Try to parse vector with not enough of data as NonIeee1905NeighborDevices
-        let parsed = NonIeee1905NeighborDevices::parse(&neighbor_devices, 1);
+        let parsed = NonIeee1905NeighborDevices::parse(&neighbor_devices);
 
         // Expect ErrorKind::Eof error after trying to parse incomplete data as NonIeee1905NeighborDevices
         match parsed {
@@ -3372,7 +3688,7 @@ pub mod tests {
         neighbor_devices.append(&mut neighbor_mac.clone());
 
         // Try to parse invalid (incomplete) data and expect ErrorKind::Eof error
-        let parsed = NonIeee1905NeighborDevices::parse(&neighbor_devices, 1);
+        let parsed = NonIeee1905NeighborDevices::parse(&neighbor_devices);
 
         // Expect ErrorKind::Eof error after trying to parse incomplete data as NonIeee1905NeighborDevices
         match parsed {

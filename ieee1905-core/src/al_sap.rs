@@ -42,7 +42,7 @@ use tokio::sync::Mutex;
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 // Internal modules
-use crate::cmdu_codec::{CMDUFragmentation, IEEE1905TLVType, Profile2ApCapability, CMDU};
+use crate::cmdu_codec::{CMDUFragmentation, IEEE1905TLVType, Profile2ApCapability, TLVTrait, CMDU};
 use tokio::sync::oneshot;
 
 use once_cell::sync::Lazy;
@@ -50,6 +50,9 @@ use once_cell::sync::Lazy;
 use crate::cmdu::{CMDUType, TLV};
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
+
+use sd_notify;
+use sd_notify::NotifyState;
 
 pub static SAP_INSTANCE: Lazy<Mutex<Option<Arc<Mutex<AlServiceAccessPoint>>>>> =
     Lazy::new(|| Mutex::new(None));
@@ -160,6 +163,9 @@ impl AlServiceAccessPoint {
 
         tracing::info!("Control socket listening at {:?}", ctrl_path);
         tracing::info!("Data socket listening at {:?}", data_path);
+
+        // Notify systemd (when used) that we are ready to serve
+        let _ = sd_notify::notify(false, &[NotifyState::Ready]);
 
         // Accept client connections (control and data)
         tracing::debug!("Waiting for sockets");

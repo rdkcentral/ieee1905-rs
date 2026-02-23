@@ -47,6 +47,8 @@ pub fn init_logger(cli: &CliArgs) -> Option<WorkerGuard> {
 
     #[cfg(feature = "enable_tokio_console")]
     if cli.console_subscriber {
+        use tracing_subscriber::Layer;
+        
         tracing::info!("Tokio console: Enabled");
         tracing_subscriber::registry()
             .with(logging_layer.with_filter(filter))

@@ -26,18 +26,23 @@ console-subscriber = "0.5.0"
 async-trait = "0.1.89"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
-ratatui = "0.29"
+tracing-appender = "0.2.4"
+ratatui = "0.30"
 crossterm = "0.29.0"
-netdev = "0.39.0"
+netdev = "0.40.0"
 anyhow = "1.0.100"
 futures = "0.3"
 tokio-util = "0.7.17"
 clap = { version = "4.5.53", features = ["derive"] }
 lazy_static = "1.5.0"
 once_cell = "1.21.3"
-cryptoki = "0.10"
-tracing-appender = "0.2.3"
+cryptoki = "0.12"
 thiserror = "2.0.16"
 indexmap = "2.12.1"
 neli = { version = "0.7.3", features = ["async"] }
 chrono = "0.4.43"
+sd-notify = "0.4.5"
+either = "1.15.0"
+
+# RUSTSEC transitive dependency overrides
+time = ">=0.3.47"

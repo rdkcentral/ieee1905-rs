@@ -48,7 +48,8 @@ use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
 use tokio::task::JoinSet;
 // Internal modules
 use crate::cmdu_codec::{
-    CMDUFragmentation, LinkMetricQuery, MediaType, MediaTypeSpecialInfo, Profile2ApCapability,
+    CMDUFragmentation, DeviceIdentificationType, Ieee1905ProfileVersion, LinkMetricQuery,
+    MediaType, MediaTypeSpecialInfo, Profile2ApCapability, SupportedFreqBand,
 };
 use crate::interface_manager::get_interfaces;
 use crate::linux::if_link::RtnlLinkStats64;
@@ -288,6 +289,9 @@ pub struct Ieee1905DeviceData {
     pub local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
     pub registry_role: Option<Role>,
     pub supported_fragmentation: CMDUFragmentation,
+    pub supported_freq_band: Option<SupportedFreqBand>,
+    pub ieee1905profile_version: Option<Ieee1905ProfileVersion>,
+    pub device_identification_type: Option<DeviceIdentificationType>,
 }
 
 impl Ieee1905DeviceData {
@@ -308,21 +312,32 @@ impl Ieee1905DeviceData {
             local_interface_list,
             registry_role,
             supported_fragmentation: Default::default(),
+            supported_freq_band: None,
+            ieee1905profile_version: None,
+            device_identification_type: None,
         }
     }
 
     /// **Update existing `Ieee1905DeviceData` fields**
-    pub fn update(
-        &mut self,
-        new_destination_mac: Option<MacAddr>,
-        new_interfaces: Option<Vec<Ieee1905InterfaceData>>,
-    ) {
-        if let Some(destination_mac) = new_destination_mac {
+    pub fn update_from(&mut self, other: Self) -> bool {
+        let mut changed = false;
+        if let Some(destination_mac) = other.destination_mac {
+            changed = true;
             self.destination_mac = Some(destination_mac);
         }
-        if let Some(interfaces) = new_interfaces {
+        if let Some(interfaces) = other.local_interface_list {
+            changed = true;
             self.local_interface_list = Some(interfaces);
         }
+        if let Some(value) = other.ieee1905profile_version {
+            changed = true;
+            self.ieee1905profile_version = Some(value);
+        }
+        if let Some(value) = other.device_identification_type {
+            changed = true;
+            self.device_identification_type = Some(value);
+        }
+        changed
     }
 
     pub fn has_changed(&self, other: &Self) -> bool {
@@ -507,6 +522,29 @@ impl TopologyDatabase {
         ))
     }
 
+    fn update_local_neighbours_ieee1905_compatibility(
+        interfaces: &mut [Ieee1905LocalInterface],
+        ieee1905_nodes: &IndexMap<MacAddr, Ieee1905Node>,
+    ) {
+        for interface in interfaces {
+            let Some(neighbors) = interface.data.non_ieee1905_neighbors.as_mut() else {
+                continue;
+            };
+
+            let ieee1905_neighbors = interface.data.ieee1905_neighbors.get_or_insert_default();
+            ieee1905_neighbors.extend(
+                neighbors
+                    .extract_if(.., |e| {
+                        Self::find_node_by_port(ieee1905_nodes.values(), *e).is_some()
+                    })
+                    .map(|e| IEEE1905Neighbor {
+                        neighbor_al_mac: e,
+                        neighbor_flags: 0,
+                    }),
+            );
+        }
+    }
+
     #[instrument(skip_all, name = "topo_db_refresh_topology", fields(task = next_task_id()))]
     async fn refresh_topology_worker(self: Arc<Self>) {
         let mut ticker = interval(Duration::from_secs(5)); // Runs every 5 seconds
@@ -573,6 +611,11 @@ impl TopologyDatabase {
                 Ok(interfaces) => {
                     let mut list = self.local_interface_list.write().await;
 
+                    if let Some(list) = list.as_mut() {
+                        let nodes = self.nodes.read().await;
+                        Self::update_local_neighbours_ieee1905_compatibility(list, &nodes);
+                    }
+
                     if interfaces.is_empty() {
                         *list = None;
                         debug!("No interfaces found — set to None");
@@ -632,7 +675,7 @@ impl TopologyDatabase {
                         UpdateType::DiscoveryReceived => {
                             let local_state = node.metadata.node_state_local;
 
-                            node.device_data.update(device_data.destination_mac, None);
+                            node.device_data.update_from(device_data);
                             node.metadata.update(
                                 Some(operation),
                                 local_msg_id,
@@ -697,19 +740,16 @@ impl TopologyDatabase {
                                     None,
                                 );
 
-                                tracing::debug!(
+                                debug!(
                                     current_local_interface_list = ?node.device_data.local_interface_list,
                                     new_local_interface_list = ?device_data.local_interface_list,
                                     "Comparing local_interface_list"
                                 );
 
                                 if node.device_data.has_changed(&device_data) {
-                                    tracing::debug!("Device data changed local_interface_list)");
+                                    debug!("Device data changed local_interface_list)");
 
-                                    node.device_data.update(
-                                        device_data.destination_mac,
-                                        device_data.local_interface_list,
-                                    );
+                                    node.device_data.update_from(device_data);
 
                                     let multicast_mac =
                                         MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13);
@@ -790,10 +830,12 @@ impl TopologyDatabase {
                         device_data,
                     };
 
+                    let node_was_crated;
                     converged = false;
                     transmission_event = match operation {
                         UpdateType::DiscoveryReceived => {
                             nodes.insert(al_mac, new_node);
+                            node_was_crated = true;
                             tracing::debug!(al_mac = ?al_mac, "Inserted node from Discovery");
                             TransmissionEvent::SendTopologyQuery(al_mac)
                         }
@@ -801,14 +843,23 @@ impl TopologyDatabase {
                             new_node.metadata.node_state_remote =
                                 StateRemote::ConvergingRemote(Instant::now());
                             nodes.insert(al_mac, new_node);
+                            node_was_crated = true;
                             tracing::debug!(al_mac = ?al_mac, "Inserted node from query");
                             TransmissionEvent::SendTopologyResponse(al_mac)
                         }
                         _ => {
                             tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
+                            node_was_crated = false;
                             TransmissionEvent::None
                         }
                     };
+
+                    if node_was_crated {
+                        let mut interfaces = self.local_interface_list.write().await;
+                        if let Some(vec) = interfaces.as_mut() {
+                            Self::update_local_neighbours_ieee1905_compatibility(vec, &nodes);
+                        }
+                    }
                 }
             };
         }
@@ -858,6 +909,19 @@ impl TopologyDatabase {
         };
 
         Some((node_al_mac, neighbors))
+    }
+
+    pub async fn handle_ap_auto_config_response(
+        &self,
+        source: MacAddr,
+        supported_freq_band: SupportedFreqBand,
+    ) {
+        let mut nodes = self.nodes.write().await;
+        let Some(node) = Self::find_node_by_port_mut(nodes.values_mut(), source) else {
+            return debug!(%source, "handle_ap_auto_config_response — node not found");
+        };
+
+        node.device_data.supported_freq_band = Some(supported_freq_band);
     }
 
     pub async fn handle_ap_auto_config_wcs(

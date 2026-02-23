@@ -22,7 +22,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use cryptoki::{
-    context::{CInitializeArgs, Pkcs11},
+    context::{CInitializeArgs, CInitializeFlags, Pkcs11},
     object::{Attribute, KeyType, ObjectClass, ObjectHandle},
     session::{Session, UserType},
     types::AuthPin,
@@ -42,14 +42,14 @@ pub static CRYPTO_CONTEXT: Lazy<Arc<Mutex<CryptoContext>>> = Lazy::new(|| {
 
     let pkcs11 = Pkcs11::new(lib_path).expect("Failed to load PKCS#11");
     pkcs11
-        .initialize(CInitializeArgs::OsThreads)
+        .initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))
         .expect("Init failed");
 
     let slot = pkcs11.get_slots_with_token().expect("No slot").remove(0);
     let mut session = pkcs11.open_ro_session(slot).expect("Session failed");
     // Log in to the session
     session
-        .login(UserType::User, Some(&AuthPin::new(pin)))
+        .login(UserType::User, Some(&AuthPin::new(pin.into())))
         .expect("Login failed");
 
     // Retrieve GTK and PMK keys
