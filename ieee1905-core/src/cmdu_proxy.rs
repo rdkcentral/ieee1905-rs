@@ -29,6 +29,7 @@ use pnet::datalink::MacAddr;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, info_span, instrument, trace, warn, Instrument};
 
 #[instrument(skip_all, name = "cmdu_discovery_transmission", fields(task = next_task_id()))]
@@ -603,6 +604,76 @@ pub fn cmdu_topology_notification_transmission(
             info_span!(parent: None, "cmdu_notification_transmission", task = next_task_id()),
         ),
     );
+}
+
+#[instrument(skip_all, name = "cmdu_link_metric_query_transmission", fields(task = next_task_id()))]
+pub async fn cmdu_link_metric_query_transmission_worker(
+    sender: Arc<EthernetSender>,
+    message_id_generator: Arc<MessageIdGenerator>,
+    local_interface_mac: MacAddr,
+    cancellation_token: CancellationToken,
+) {
+    let mut ticker = interval(Duration::from_secs(10));
+
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => (),
+            _ = cancellation_token.cancelled() => return,
+        }
+
+        let message_id = message_id_generator.next_id();
+        debug!(message_id, "Creating CMDU");
+
+        let link_metric_query = LinkMetricQuery {
+            neighbor_type: LinkMetricQuery::NEIGHBOR_ALL,
+            neighbor_mac: None,
+            requested_metrics: LinkMetricQuery::METRIC_TX_RX,
+        };
+        let link_metric_query_vec = link_metric_query.serialize();
+        let link_metric_query_tlv = TLV {
+            tlv_type: IEEE1905TLVType::LinkMetricQuery.to_u8(),
+            tlv_length: link_metric_query_vec.len() as u16,
+            tlv_value: Some(link_metric_query_vec),
+        };
+
+        let end_of_message_tlv = TLV {
+            tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
+            tlv_length: 0,
+            tlv_value: None,
+        };
+
+        let mut payload = Vec::new();
+        payload.extend(link_metric_query_tlv.serialize());
+        payload.extend(end_of_message_tlv.serialize());
+
+        let cmdu = CMDU {
+            message_version: MessageVersion::Version2013.to_u8(),
+            reserved: 0,
+            message_type: CMDUType::LinkMetricQuery.to_u16(),
+            message_id,
+            fragment: 0,
+            flags: 0x80,
+            payload,
+        };
+
+        let cmdu_bytes = cmdu.serialize();
+        trace!(message_id, ?cmdu_bytes, "CMDU serialized");
+        debug!(message_id, "Sending CMDU");
+
+        let result = sender
+            .enqueue_frame(
+                IEEE1905_CONTROL_ADDRESS,
+                local_interface_mac,
+                EthernetSender::ETHER_TYPE,
+                cmdu_bytes,
+            )
+            .await;
+
+        match result {
+            Ok(()) => info!(message_id, "CMDU sent successfully"),
+            Err(e) => error!(message_id, %e, "Failed to send CMDU"),
+        }
+    }
 }
 
 #[instrument(skip_all, name = "cmdu_link_metric_response_transmission", fields(task = next_task_id()))]
