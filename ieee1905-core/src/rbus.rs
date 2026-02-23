@@ -4,6 +4,7 @@ use crate::cmdu_codec::MediaType;
 use crate::rbus::al_device::RBus_Al_Device;
 use crate::rbus::interface::RBus_Interface;
 use crate::rbus::interface_link::RBus_InterfaceLink;
+use crate::rbus::interface_link_metric::RBus_InterfaceLinkMetric;
 use crate::rbus::nt::RBus_NetworkTopology;
 use crate::rbus::nt_device::RBus_NetworkTopology_Ieee1905Device;
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
@@ -24,6 +25,7 @@ use tracing::{debug, info, instrument, warn};
 mod al_device;
 mod interface;
 mod interface_link;
+mod interface_link_metric;
 mod nt;
 mod nt_device;
 mod nt_device_bridge;
@@ -84,6 +86,17 @@ impl RBusConnection {
                     rbus_property("IEEE1905Id", RBus_InterfaceLink),
                     rbus_property("InterfaceId", RBus_InterfaceLink),
                     rbus_property("MediaType", RBus_InterfaceLink),
+                    rbus_object("Metric", (
+                        rbus_property("IEEE802dot1Bridge", RBus_InterfaceLinkMetric),
+                        rbus_property("PacketErrors", RBus_InterfaceLinkMetric),
+                        rbus_property("PacketErrorsReceived", RBus_InterfaceLinkMetric),
+                        rbus_property("TransmittedPackets", RBus_InterfaceLinkMetric),
+                        rbus_property("PacketsReceived", RBus_InterfaceLinkMetric),
+                        rbus_property("MACThroughputCapacity", RBus_InterfaceLinkMetric),
+                        rbus_property("LinkAvailability", RBus_InterfaceLinkMetric),
+                        rbus_property("PHYRate", RBus_InterfaceLinkMetric),
+                        rbus_property("RSSI", RBus_InterfaceLinkMetric),
+                    )),
                 )),
             )),
             rbus_object("NetworkTopology", (
