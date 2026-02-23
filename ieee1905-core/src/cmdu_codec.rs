@@ -33,10 +33,9 @@ use nom::combinator::{all_consuming, cond};
 use nom::multi::{count, length_count, many0};
 use pnet::datalink::MacAddr;
 use std::fmt::{Debug, Display, Formatter};
-use tracing::warn;
 // Internal modules
 use crate::cmdu_reassembler::CmduReassemblyError;
-use crate::tlv_cmdu_codec::TLV;
+use crate::tlv_cmdu_codec::{TLVTrait, TLV};
 
 ///////////////////////////////////////////////////////////////////////////
 //DEFINITION OF CMDU TYPES and IEEE1905 TLVs
@@ -214,33 +213,6 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::Profile2ApCapability => 0xb4,
             IEEE1905TLVType::Unknown(value) => value, // Return the unknown value as-is
         }
-    }
-}
-
-///////////////////////////////////////////////////////////////////////////
-pub trait TLVTrait: Sized {
-    const TYPE: IEEE1905TLVType;
-
-    fn parse(input: &[u8]) -> IResult<&[u8], Self>;
-    fn serialize(&self) -> Vec<u8>;
-
-    fn find(vec: &[TLV]) -> Option<Self> {
-        Self::find_all(vec).next()
-    }
-
-    fn find_all(vec: &[TLV]) -> impl Iterator<Item = Self> {
-        vec.iter().filter_map(|e| {
-            if e.tlv_type != Self::TYPE.to_u8() {
-                return None;
-            }
-            match Self::parse(e.tlv_value.as_deref().unwrap_or_default()) {
-                Ok(e) => Some(e.1),
-                Err(e) => {
-                    warn!(kind = ?Self::TYPE, %e, "failed to parse TLV");
-                    None
-                }
-            }
-        })
     }
 }
 

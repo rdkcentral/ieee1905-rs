@@ -807,66 +807,33 @@ version built into the image.
 
 There are available two methods for building and testing the project in docker:
 
-1. The first (primary) method for simulation.
+1. The first method for simulation using single dockerconfig file.
 
    This is the primary method for building the docker container for simulation process.
    It requires rebuild of docker container after every rebuild of Rust sources (cargo build)
 
     ```sh
-        docker buildx build --no-cache -t ieee1905 .
-        docker exec -it ieee1905_node1 /bin/sh
+        docker build -t ieee1905 .
+        docker run -it --name ieee1905_node1 ieee1905
     ```
-
-2. Secondary method for faster development.
-
-   This method is dedicated for faster development. It does not require to rebuild the docker container after every rebuild of Rust sources but is a bit more complicated to run.
-
-   In this approach the docker container should be rebuild and rerun only when the project is "clean" so in these cases:
-   - first build of the project
-   - after "cargo clean"
-
-Step 1: Install "musl" library target.
-
-```sh
-rustup target add x86_64-unknown-linux-musl
-```
-
-Step 2: Build "tokio-console" for "musl" library target.
-
-```sh
-cargo install --root /tmp/cargo_tokio --target x86_64-unknown-linux-musl tokio-console
-```
-
-Step 3: Build the IEEE1905 project for "musl" library target.
-
-```sh
-cargo build --target=x86_64-unknown-linux-musl
-```
-
-Step 4: Build the docker containter.
-
-```sh
-docker compose -f docker-compose-development.yaml build --no-cache
-```
-
-Step 5. Run the docker container
-
-```sh
-docker compose -f docker-compose-development.yaml up
-```
-
+    Once your docker image is present you can use just docker start and stop
+    ```sh
+        docker start -ai ieee1905_node1 
+        docker stop ieee1905_node1
+     
+    ```
+2. Secondary method via docker compose.
+    ```sh
+        docker compose build --no-cache
+        docker compose up
+    ```
+  
+   
 At this point two docker containers:
     - ieee1905_node1
     - ieee1905_node2
 
-should be running and ready for running the tests.
-
-#### Rebuilding of the IEEE1905 project without need to rebuild the docker containers
-
-This section concerns the second method for building the IEEE1905 project without necessity of rebuilding both docker containers from scratch.
-After every rebuild of the IEEE1905 project (the step 3 from the list above) the result binary **ieee1905** is visible in both docker containers once it is built. It means that it is **not** necessary to restart any of the docker containers to run just built  **ieee1905** binary.
-
-The only additional step is required after running **cargo clean** on the project. Both docker containers should be terminated by pressing combination of **ctrl+c**, letting the docker to gracefully shutdown and run both dockers again (step 5 from list above). After this restart of both docker containers the environment should be ready for running tests again.
+should be connected to the bridge ieee1905_bridge.
 
 ### Running the tests
 
@@ -882,10 +849,10 @@ The only additional step is required after running **cargo clean** on the projec
     docker exec -it ieee1905_node2 /bin/sh
 ```
 
-then inside these containers run the **ieee1905** binary:
+then inside these containers run the **ieee1905** binary (the option "-t" is to open CLI):
 
 ```sh
-    ./ieee1905
+    ./ieee1905 -t
 ```
 
 possibly with parameters and arguments.

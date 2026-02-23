@@ -28,7 +28,10 @@ use nom::{
 }; // Alias for errors returned by `nom` parsers.
 
 // Standard library
-use std::fmt::Debug; // Allows the `TLV` struct to be formatted for debugging purposes.
+use crate::cmdu::IEEE1905TLVType;
+use std::fmt::Debug;
+use tracing::warn;
+// Allows the `TLV` struct to be formatted for debugging purposes.
 
 ///////////////////////////////////////////////////////////////////////////
 /// A `TLV` represents a single Type-Length-Value structure commonly used
@@ -118,6 +121,44 @@ impl TLV {
         }
 
         bytes
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+pub trait TLVTrait: Sized {
+    const TYPE: IEEE1905TLVType;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self>;
+    fn serialize(&self) -> Vec<u8>;
+
+    fn find(vec: &[TLV]) -> Option<Self> {
+        Self::find_all(vec).next()
+    }
+
+    fn find_all(vec: &[TLV]) -> impl Iterator<Item = Self> {
+        vec.iter().filter_map(|e| {
+            if e.tlv_type != Self::TYPE.to_u8() {
+                return None;
+            }
+            match Self::parse(e.tlv_value.as_deref().unwrap_or_default()) {
+                Ok(e) => Some(e.1),
+                Err(e) => {
+                    warn!(kind = ?Self::TYPE, %e, "failed to parse TLV");
+                    None
+                }
+            }
+        })
+    }
+}
+
+impl<T: TLVTrait> From<T> for TLV {
+    fn from(value: T) -> Self {
+        let buffer = value.serialize();
+        Self {
+            tlv_type: T::TYPE.to_u8(),
+            tlv_length: buffer.len() as u16,
+            tlv_value: Some(buffer),
+        }
     }
 }
 

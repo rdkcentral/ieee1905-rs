@@ -20,8 +20,9 @@ use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
+use crate::tlv_cmdu_codec::TLVTrait;
 use crate::topology_manager::{
-    Ieee1905Node, StateLocal, StateRemote, TopologyDatabase, UpdateType,
+    Ieee1905Node, Role, StateLocal, StateRemote, TopologyDatabase, UpdateType,
 };
 use crate::SDU;
 use crate::{next_task_id, MessageIdGenerator};
@@ -168,6 +169,11 @@ pub async fn cmdu_topology_query_transmission(
                 tlv_value: Some(vendor_value),
             };
 
+            let local_role = topology_db.get_local_role().await;
+            let multi_ap_profile_tlv = local_role
+                .filter(|e| *e == Role::Registrar)
+                .map(|_| TLV::from(MultiApProfile::Profile3));
+
             let end_of_message_tlv = TLV {
                 tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
                 tlv_length: 0,
@@ -177,6 +183,9 @@ pub async fn cmdu_topology_query_transmission(
             let mut serialized_payload = vec![];
             serialized_payload.extend(al_mac_tlv.serialize());
             serialized_payload.extend(vendor_specific_tlv.serialize());
+            if let Some(multi_ap_profile_tlv) = multi_ap_profile_tlv {
+                serialized_payload.extend(multi_ap_profile_tlv.serialize());
+            }
             serialized_payload.extend(end_of_message_tlv.serialize());
 
             // Construct CMDU
@@ -360,23 +369,6 @@ pub fn cmdu_topology_response_transmission(
                 tlv_value: Some(device_information_vec),
             };
 
-            //TODO biridging TUPLE
-            /*
-            let mut bridging_tuples_list: Vec<BridgingTuple> = Vec::new();
-            if let Some(ieee1905_local_interfaces) = node.device_data.local_interface_list.as_ref() {
-                for iface in ieee1905_local_interfaces {
-                    if iface.bridging_tuple.is_some() { // Check existence without using the variable
-                        if let Some(non_ieee_neighbors) = &iface.non_ieee1905_neighbors {
-                            let bridging_tuple = BridgingTuple {
-                                bridging_mac_count: non_ieee_neighbors.len() as u8,
-                                bridging_mac_list: non_ieee_neighbors.clone(),
-                            };
-                            bridging_tuples_list.push(bridging_tuple);
-                        }
-                    }
-                }
-            }
-            */
             let ieee_neighbors_list: Vec<IEEE1905Neighbor> = {
                 let mut list = Vec::new();
                 let nodes = topology_db.nodes.read().await;
@@ -420,6 +412,24 @@ pub fn cmdu_topology_response_transmission(
                 }
             };
 
+            let non_ieee_neighbors_list_tlv_vec = {
+                let interfaces = topology_db.local_interface_list.read().await;
+                Vec::from_iter(interfaces.iter().flatten().map(|e| {
+                    let interfaces = e.non_ieee1905_neighbors.as_deref();
+                    let neighbours = NonIeee1905NeighborDevices {
+                        local_mac_address: e.mac,
+                        neighborhood_list: interfaces.unwrap_or_default().to_owned(),
+                    };
+
+                    let neighbours_data = neighbours.serialize();
+                    TLV {
+                        tlv_type: IEEE1905TLVType::NonIeee1905NeighborDevices.to_u8(),
+                        tlv_length: neighbours_data.len() as u16,
+                        tlv_value: Some(neighbours_data),
+                    }
+                }))
+            };
+
             // End of Message TLV
             let end_of_message_tlv = TLV {
                 tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
@@ -432,6 +442,9 @@ pub fn cmdu_topology_response_transmission(
             serialized_payload.extend(vendor_specific_tlv.serialize());
             serialized_payload.extend(device_information_tlv.serialize());
             serialized_payload.extend(ieee_neighbors_tlv.serialize());
+            for tlv in non_ieee_neighbors_list_tlv_vec {
+                serialized_payload.extend(tlv.serialize());
+            }
             if let Some(device_bridging_capability_tlv) = device_bridging_capability_tlv {
                 serialized_payload.extend(device_bridging_capability_tlv.serialize());
             }

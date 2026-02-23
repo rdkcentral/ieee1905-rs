@@ -523,6 +523,29 @@ impl TopologyDatabase {
         ))
     }
 
+    fn update_local_neighbours_ieee1905_compatibility(
+        interfaces: &mut [Ieee1905LocalInterface],
+        ieee1905_nodes: &IndexMap<MacAddr, Ieee1905Node>,
+    ) {
+        for interface in interfaces {
+            let Some(neighbors) = interface.data.non_ieee1905_neighbors.as_mut() else {
+                continue;
+            };
+
+            let ieee1905_neighbors = interface.data.ieee1905_neighbors.get_or_insert_default();
+            ieee1905_neighbors.extend(
+                neighbors
+                    .extract_if(.., |e| {
+                        Self::find_node_by_port(ieee1905_nodes.values(), *e).is_some()
+                    })
+                    .map(|e| IEEE1905Neighbor {
+                        neighbor_al_mac: e,
+                        neighbor_flags: 0,
+                    }),
+            );
+        }
+    }
+
     #[instrument(skip_all, name = "topo_db_refresh_topology", fields(task = next_task_id()))]
     async fn refresh_topology_worker(self: Arc<Self>) {
         let mut ticker = interval(Duration::from_secs(5)); // Runs every 5 seconds
@@ -588,6 +611,11 @@ impl TopologyDatabase {
             match get_interfaces().await {
                 Ok(interfaces) => {
                     let mut list = self.local_interface_list.write().await;
+
+                    if let Some(list) = list.as_mut() {
+                        let nodes = self.nodes.read().await;
+                        Self::update_local_neighbours_ieee1905_compatibility(list, &nodes);
+                    }
 
                     if interfaces.is_empty() {
                         *list = None;
@@ -804,10 +832,12 @@ impl TopologyDatabase {
                         device_data,
                     };
 
+                    let node_was_crated;
                     converged = false;
                     transmission_event = match operation {
                         UpdateType::DiscoveryReceived => {
                             nodes.insert(al_mac, new_node);
+                            node_was_crated = true;
                             tracing::debug!(al_mac = ?al_mac, "Inserted node from Discovery");
                             TransmissionEvent::SendTopologyQuery(al_mac)
                         }
@@ -815,6 +845,7 @@ impl TopologyDatabase {
                             new_node.metadata.node_state_remote =
                                 StateRemote::ConvergingRemote(Instant::now());
                             nodes.insert(al_mac, new_node);
+                            node_was_crated = true;
                             tracing::debug!(al_mac = ?al_mac, "Inserted node from query");
                             TransmissionEvent::SendTopologyResponse(al_mac)
                         }
@@ -825,9 +856,17 @@ impl TopologyDatabase {
                         }
                         _ => {
                             tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
+                            node_was_crated = false;
                             TransmissionEvent::None
                         }
                     };
+
+                    if node_was_crated {
+                        let mut interfaces = self.local_interface_list.write().await;
+                        if let Some(vec) = interfaces.as_mut() {
+                            Self::update_local_neighbours_ieee1905_compatibility(vec, &nodes);
+                        }
+                    }
                 }
             };
         }

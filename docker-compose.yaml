@@ -1,0 +1,44 @@
+services:
+  node1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ieee1905:latest
+    container_name: ieee1905_node1
+    cap_add: [NET_ADMIN, NET_RAW]
+    privileged: true
+    command: ["sleep", "infinity"]
+    ports:
+      - "6669:6669"
+      - "8081:8080"
+    environment:
+      - RUST_CONSOLE_BIND=0.0.0.0:6669
+    networks:
+      ieee1905_network:
+        ipv4_address: 192.168.100.2
+    mac_address: "02:42:c0:a8:64:02"
+
+  node2:
+    image: ieee1905:latest
+    container_name: ieee1905_node2
+    cap_add: [NET_ADMIN, NET_RAW]
+    privileged: true
+    command: ["sleep", "infinity"]
+    ports:
+      - "6670:6669"
+      - "8082:8080"
+    environment:
+      - RUST_CONSOLE_BIND=0.0.0.0:6669
+    networks:
+      ieee1905_network:
+        ipv4_address: 192.168.100.3
+    mac_address: "02:42:c0:a8:64:03"
+
+networks:
+  ieee1905_network:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: ieee1905_bridge
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24
