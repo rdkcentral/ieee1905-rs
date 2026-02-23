@@ -30,7 +30,7 @@ use crate::cmdu_proxy::*;
 use crate::cmdu_reassembler::CmduReassembler;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::sdu_codec::SDU;
-use crate::tlv_cmdu_codec::TLV;
+use crate::tlv_cmdu_codec::{TLVTrait, TLV};
 use crate::topology_manager::*;
 use crate::MessageIdGenerator;
 use pnet::datalink::MacAddr;
