@@ -16,14 +16,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
+use crate::al_sap::AlServiceAccessPoint;
 use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
 use crate::tlv_cmdu_codec::TLVTrait;
-use crate::topology_manager::{
-    Ieee1905Node, Role, StateLocal, StateRemote, TopologyDatabase, UpdateType,
-};
+use crate::topology_manager::{Ieee1905Node, Role, TopologyDatabase, UpdateType};
 use crate::SDU;
 use crate::{next_task_id, MessageIdGenerator};
 use pnet::datalink::MacAddr;
@@ -745,6 +744,10 @@ pub async fn cmdu_link_metric_response_transmission(
 
 pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>, sdu: SDU) {
     tokio::spawn(async move {
+        if !AlServiceAccessPoint::is_connected_and_enabled().await {
+            return info!("AlSap is not active, ignoring SDU");
+        }
+
         trace!(?sdu, "Parsing CMDU from SDU payload");
         let destination_al_mac = sdu.destination_al_mac_address;
         let fragmentation;
@@ -772,12 +775,6 @@ pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>
                     let Some(node) = topology_db.get_device(sdu.destination_al_mac_address).await else {
                         return warn!("No destination_mac found for AL-MAC {destination_al_mac}");
                     };
-                    if node.metadata.node_state_local != StateLocal::ConvergedLocal {
-                        return warn!("node has not locally converged, AL-MAC={destination_al_mac}");
-                    }
-                    if node.metadata.node_state_remote != StateRemote::ConvergedRemote {
-                        return warn!("node has not remotely converged, AL-MAC={destination_al_mac}");
-                    }
 
                     fragmentation = node.device_data.supported_fragmentation;
                     node.device_data.destination_frame_mac

@@ -201,6 +201,13 @@ impl AlServiceAccessPoint {
         &self.data_socket_path
     }
 
+    pub async fn is_connected_and_enabled() -> bool {
+        let Some(instance) = get_instance_mut().await else {
+            return false;
+        };
+        instance.lock_owned().await.enabled
+    }
+
     pub async fn control_is_connected(&mut self) -> bool {
         self.framed_control_socket
             .get_mut()

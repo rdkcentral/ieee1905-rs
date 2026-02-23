@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, trace, warn};
 
-use crate::al_sap::service_access_point_data_indication;
+use crate::al_sap::{service_access_point_data_indication, AlServiceAccessPoint};
 use crate::cmdu::{CMDUType, CMDU};
 use crate::cmdu_codec::*;
 use crate::cmdu_proxy::*;
@@ -197,19 +197,14 @@ impl CMDUHandler {
         };
 
         if !handled {
-            let result = self
-                .handle_sdu_from_cmdu_reception(
-                    &tlvs,
-                    message_id,
-                    cmdu.message_type,
-                    source_mac,
-                    destination_mac,
-                )
-                .await;
-
-            if let Err(e) = result {
-                error!(message_id, ?cmdu_type, %e, "Error forwarding SDU");
-            }
+            self.handle_sdu_from_cmdu_reception(
+                &tlvs,
+                message_id,
+                cmdu_type,
+                source_mac,
+                destination_mac,
+            )
+            .await;
         }
     }
 
@@ -260,7 +255,7 @@ impl CMDUHandler {
             device_identification_type: None,
         };
 
-        let result = topology_db
+        let transmission_event = topology_db
             .update_ieee1905_topology(
                 device_data,
                 UpdateType::DiscoveryReceived,
@@ -278,7 +273,7 @@ impl CMDUHandler {
         );
 
         // Now react to the event
-        match result.transmission_event {
+        match transmission_event {
             TransmissionEvent::SendTopologyQuery(destination_al_mac) => {
                 let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
 
@@ -298,7 +293,9 @@ impl CMDUHandler {
                     "No transmission needed after topology discovery update"
                 );
             }
-            _ => {} // Future proof if more event types appear
+            _ => {
+                warn!("Unexpected TransmissionEvent in handle_topology_discovery");
+            }
         }
     }
 
@@ -351,7 +348,7 @@ impl CMDUHandler {
         };
 
         let remote_al_mac = device_data.al_mac;
-        let result = topology_db
+        let transmission_event = topology_db
             .update_ieee1905_topology(
                 device_data,
                 UpdateType::QueryReceived,
@@ -367,7 +364,7 @@ impl CMDUHandler {
             "Topology Query Processed",
         );
 
-        match result.transmission_event {
+        match transmission_event {
             TransmissionEvent::SendTopologyResponse(destination_mac) => {
                 debug!(
                     remote = %remote_al_mac,
@@ -385,17 +382,20 @@ impl CMDUHandler {
                     forwarding_interface_mac,
                     message_id,
                 );
+                true
             }
             TransmissionEvent::None => {
                 debug!(
                     remote = %remote_al_mac,
                     "No transmission needed after topology query update"
                 );
+                false
             }
-            _ => {}
-        };
-
-        !result.converged // don't consume message if we have converged
+            _ => {
+                warn!("Unexpected TransmissionEvent in handle_topology_query");
+                false
+            }
+        }
     }
 
     /// Handles and logs TLVs for Topology Response.
@@ -522,7 +522,7 @@ impl CMDUHandler {
             device_identification_type: None,
         };
 
-        let result = topology_db
+        let transmission_event = topology_db
             .update_ieee1905_topology(
                 updated_device_data,
                 UpdateType::ResponseReceived,
@@ -539,7 +539,7 @@ impl CMDUHandler {
             "Topology Response Processed",
         );
 
-        match result.transmission_event {
+        match transmission_event {
             TransmissionEvent::SendTopologyNotification(_destination_mac) => {
                 debug!(
                     al_mac = %remote_al_mac,
@@ -556,6 +556,7 @@ impl CMDUHandler {
                     self.local_al_mac,
                     forwarding_interface_mac,
                 );
+                true
             }
             TransmissionEvent::None => {
                 debug!(
@@ -563,11 +564,13 @@ impl CMDUHandler {
                     source = %source_mac,
                     "Topology update did not require sending notification"
                 );
+                false
             }
-            _ => {}
-        };
-
-        !result.converged // don't consume message if we have converged
+            _ => {
+                warn!("Unexpected TransmissionEvent in handle_topology_response");
+                false
+            }
+        }
     }
 
     /// Handles and logs TLVs from the CMDU payload for Topology Notification.
@@ -618,7 +621,7 @@ impl CMDUHandler {
             device_identification_type: None,
         };
 
-        let result = topology_db
+        let transmission_event = topology_db
             .update_ieee1905_topology(
                 received_device_data,
                 UpdateType::NotificationReceived,
@@ -634,7 +637,7 @@ impl CMDUHandler {
             "Topology Notification Processed",
         );
 
-        match result.transmission_event {
+        match transmission_event {
             TransmissionEvent::SendTopologyQuery(dest_mac) => {
                 let forwarding_interface = topology_db.get_forwarding_interface_mac().await;
 
@@ -647,16 +650,17 @@ impl CMDUHandler {
                     forwarding_interface,
                 )
                 .await;
+                true
             }
             TransmissionEvent::None => {
-                tracing::debug!("No transmission event triggered by Topology Notification");
+                debug!("No transmission event triggered by Topology Notification");
+                false
             }
             _ => {
-                tracing::warn!("Unexpected TransmissionEvent in handle_topology_notification");
+                warn!("Unexpected TransmissionEvent in handle_topology_notification");
+                false
             }
-        };
-
-        !result.converged // don't consume message if we have converged
+        }
     }
 
     /// Handles and logs TLVs for Link Metric Query.
@@ -754,15 +758,19 @@ impl CMDUHandler {
         &self,
         tlvs: &[TLV],
         message_id: u16,
-        message_type: u16,
+        message_type: CMDUType,
         source_mac: MacAddr,
         destination_mac: MacAddr,
-    ) -> anyhow::Result<()> {
+    ) {
+        if !AlServiceAccessPoint::is_connected_and_enabled().await {
+            return info!("AlSap is not active, ignoring CMDU");
+        }
+
         debug!(
             src = %source_mac,
             dst = %destination_mac,
             msg_id = message_id,
-            msg_type = message_type,
+            msg_type = ?message_type,
             tlv_no = tlvs.len(),
             interface = self.interface_name,
             "Handle SDU from CMDU",
@@ -779,13 +787,11 @@ impl CMDUHandler {
         }
 
         if EndOfMessage::find(tlvs).is_none() {
-            error!("SDU from CMDU is missing the required End of Message TLV. Ignoring CMDU.");
-            return Ok(());
+            return error!("Missing the required End of Message TLV. Ignoring CMDU.");
         }
 
         if destination_mac != IEEE1905_CONTROL_ADDRESS && destination_mac != self.local_al_mac {
-            debug!("Skipping SDU from CMDU as destination mac {destination_mac:?} is different as local al mac {}",self.local_al_mac);
-            return Ok(());
+            return debug!("Skipping SDU from CMDU as destination mac {destination_mac:?} is different as local al mac {}", self.local_al_mac);
         }
 
         let topology_db =
@@ -793,9 +799,7 @@ impl CMDUHandler {
 
         if let Some(updated_node) = topology_db.get_device(source_mac).await {
             trace!("Node: {updated_node:?}");
-            if updated_node.metadata.has_converged()
-                && updated_node.device_data.al_mac != self.local_al_mac
-            {
+            if updated_node.device_data.al_mac != self.local_al_mac {
                 debug!(
                     remote= %source_mac,
                     metadata = ?updated_node.metadata,
@@ -815,7 +819,7 @@ impl CMDUHandler {
                     payload: CMDU {
                         message_version: MessageVersion::Version2013.to_u8(),
                         reserved: 0x00,
-                        message_type,
+                        message_type: message_type.to_u16(),
                         message_id,
                         fragment: 0,
                         flags: 0x80,
@@ -823,17 +827,17 @@ impl CMDUHandler {
                     }
                     .serialize(),
                 };
+
                 trace!("Sending SDU from CMDU: <{sdu:?}>");
-                service_access_point_data_indication(&sdu).await?;
+                if let Err(e) = service_access_point_data_indication(&sdu).await {
+                    error!(message_id, ?message_type, %e, "Error forwarding SDU");
+                }
             } else {
-                trace!(
-                    "Skipping as not in converged mode or update device data equal to local al mac"
-                );
+                trace!("Skipping as update device data equal to local al mac");
             }
         } else {
-            trace!("Cannot find device for {} topology_db", source_mac);
+            trace!("Cannot find device for {source_mac} topology_db");
         }
-        Ok(())
     }
 }
 

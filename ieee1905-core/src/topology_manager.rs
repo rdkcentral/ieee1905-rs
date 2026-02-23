@@ -83,11 +83,6 @@ pub enum UpdateType {
     ResponseReceived,
 }
 
-pub struct UpdateTopologyResult {
-    pub converged: bool,
-    pub transmission_event: TransmissionEvent,
-}
-
 pub enum TransmissionEvent {
     SendTopologyQuery(MacAddr),
     SendTopologyResponse(MacAddr),
@@ -266,11 +261,6 @@ impl Ieee1905NodeInfo {
         }
 
         self.last_seen = Instant::now();
-    }
-
-    pub fn has_converged(&self) -> bool {
-        self.node_state_local == StateLocal::ConvergedLocal
-            && self.node_state_remote == StateRemote::ConvergedRemote
     }
 }
 
@@ -654,9 +644,8 @@ impl TopologyDatabase {
         local_msg_id: Option<u16>,
         remote_msg_id: Option<u16>,
         lldp_neighbor: Option<PortId>,
-    ) -> UpdateTopologyResult {
+    ) -> TransmissionEvent {
         let al_mac = device_data.al_mac;
-        let converged;
         let transmission_event;
 
         //TODO: use new update types.
@@ -810,8 +799,6 @@ impl TopologyDatabase {
                             //initial DB snapshot covers current uses cases for RDK-B but we can update this part if needed in the future
                         }
                     };
-
-                    converged = node.metadata.has_converged();
                 }
                 None => {
                     tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Node not found — inserting");
@@ -831,7 +818,6 @@ impl TopologyDatabase {
                     };
 
                     let node_was_crated;
-                    converged = false;
                     transmission_event = match operation {
                         UpdateType::DiscoveryReceived => {
                             nodes.insert(al_mac, new_node);
@@ -865,10 +851,7 @@ impl TopologyDatabase {
         }
 
         debug!("Lock released — function continues safely");
-        UpdateTopologyResult {
-            converged,
-            transmission_event,
-        }
+        transmission_event
     }
 
     pub async fn handle_notification_sent(&self) {
