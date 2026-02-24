@@ -611,6 +611,7 @@ pub async fn cmdu_link_metric_query_transmission_worker(
     sender: Arc<EthernetSender>,
     message_id_generator: Arc<MessageIdGenerator>,
     local_interface_mac: MacAddr,
+    destination_mac: MacAddr,
     cancellation_token: CancellationToken,
 ) {
     let mut ticker = interval(Duration::from_secs(10));
@@ -622,29 +623,16 @@ pub async fn cmdu_link_metric_query_transmission_worker(
         }
 
         let message_id = message_id_generator.next_id();
-        debug!(message_id, "Creating CMDU");
+        debug!(%destination_mac, message_id, "Creating CMDU");
 
-        let link_metric_query = LinkMetricQuery {
-            neighbor_type: LinkMetricQuery::NEIGHBOR_ALL,
-            neighbor_mac: None,
-            requested_metrics: LinkMetricQuery::METRIC_TX_RX,
-        };
-        let link_metric_query_vec = link_metric_query.serialize();
-        let link_metric_query_tlv = TLV {
-            tlv_type: IEEE1905TLVType::LinkMetricQuery.to_u8(),
-            tlv_length: link_metric_query_vec.len() as u16,
-            tlv_value: Some(link_metric_query_vec),
-        };
-
-        let end_of_message_tlv = TLV {
-            tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
-            tlv_length: 0,
-            tlv_value: None,
-        };
-
-        let mut payload = Vec::new();
-        payload.extend(link_metric_query_tlv.serialize());
-        payload.extend(end_of_message_tlv.serialize());
+        let payload = [
+            TLV::from(LinkMetricQuery {
+                neighbor_type: LinkMetricQuery::NEIGHBOR_ALL,
+                neighbor_mac: None,
+                requested_metrics: LinkMetricQuery::METRIC_TX_RX,
+            }),
+            TLV::from(EndOfMessage),
+        ];
 
         let cmdu = CMDU {
             message_version: MessageVersion::Version2013.to_u8(),
@@ -653,16 +641,16 @@ pub async fn cmdu_link_metric_query_transmission_worker(
             message_id,
             fragment: 0,
             flags: 0x80,
-            payload,
+            payload: payload.iter().flat_map(TLV::serialize).collect(),
         };
 
         let cmdu_bytes = cmdu.serialize();
-        trace!(message_id, ?cmdu_bytes, "CMDU serialized");
-        debug!(message_id, "Sending CMDU");
+        trace!(%destination_mac, message_id, ?cmdu_bytes, "CMDU serialized");
+        debug!(%destination_mac, message_id, "Sending CMDU");
 
         let result = sender
             .enqueue_frame(
-                IEEE1905_CONTROL_ADDRESS,
+                destination_mac,
                 local_interface_mac,
                 EthernetSender::ETHER_TYPE,
                 cmdu_bytes,
@@ -670,8 +658,8 @@ pub async fn cmdu_link_metric_query_transmission_worker(
             .await;
 
         match result {
-            Ok(()) => info!(message_id, "CMDU sent successfully"),
-            Err(e) => error!(message_id, %e, "Failed to send CMDU"),
+            Ok(()) => info!(%destination_mac, message_id, "CMDU sent successfully"),
+            Err(e) => error!(%destination_mac, message_id, %e, "Failed to send CMDU"),
         }
     }
 }
