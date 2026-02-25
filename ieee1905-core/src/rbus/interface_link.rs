@@ -1,6 +1,6 @@
 use crate::rbus::{format_mac_address, format_media_type, peek_topology_database};
 use crate::topology_manager::{
-    Ieee1905DeviceData, Ieee1905InterfaceData, Ieee1905LocalInterface, Ieee1905Node,
+    Ieee1905DeviceData, Ieee1905InterfaceData, Ieee1905LocalInterface, Ieee1905NodeInternal,
 };
 use crate::TopologyDatabase;
 use nom::AsBytes;
@@ -40,9 +40,9 @@ impl RBus_InterfaceLink {
     }
 
     pub fn iter_links_by_interface<'a>(
-        nodes: impl Iterator<Item = &'a Ieee1905Node>,
+        nodes: impl Iterator<Item = &'a Ieee1905NodeInternal>,
         interface: &'a Ieee1905InterfaceData,
-    ) -> impl Iterator<Item = &'a Ieee1905Node> {
+    ) -> impl Iterator<Item = &'a Ieee1905NodeInternal> {
         nodes.filter(|e| e.device_data.local_interface_mac == interface.mac)
     }
 }

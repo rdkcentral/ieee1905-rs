@@ -746,16 +746,42 @@ impl CMDUHandler {
             device_identification_type: None,
         };
 
-        TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
-            .await
-            .update_ieee1905_topology(
-                device_data,
-                UpdateType::ApAutoConfigSearch,
-                None,
-                Some(message_id),
-                None,
-            )
-            .await;
+        let transmission_event =
+            TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
+                .await
+                .update_ieee1905_topology(
+                    device_data,
+                    UpdateType::ApAutoConfigSearch,
+                    None,
+                    Some(message_id),
+                    None,
+                )
+                .await;
+
+        match transmission_event {
+            TransmissionEvent::StartLinkMetricQueryWorker((destination, cancellation_token)) => {
+                debug!(
+                    al_mac = %al_mac.al_mac_address,
+                    source = %source_mac,
+                    "Topology update started link metric query worker"
+                );
+                tokio::spawn(cmdu_link_metric_query_transmission_worker(
+                    self.sender.clone(),
+                    self.message_id_generator.clone(),
+                    local_interface_mac,
+                    destination,
+                    cancellation_token,
+                ));
+            }
+            TransmissionEvent::None => {
+                debug!(
+                    al_mac = %al_mac.al_mac_address,
+                    source = %source_mac,
+                    "Topology update did not require sending notification"
+                );
+            }
+            _ => warn!("Unexpected TransmissionEvent in handle_ap_auto_config_search"),
+        }
 
         info!(source = %source_mac, "ApAutoConfigSearch Processed");
     }

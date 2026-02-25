@@ -46,6 +46,7 @@ use std::ops::Deref;
 use std::{io, sync::Arc};
 use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 // Internal modules
 use crate::cmdu_codec::{
     CMDUFragmentation, DeviceIdentificationType, Ieee1905ProfileVersion, LinkMetricQuery,
@@ -88,6 +89,7 @@ pub enum TransmissionEvent {
     SendTopologyQuery(MacAddr),
     SendTopologyResponse(MacAddr),
     SendTopologyNotification(MacAddr),
+    StartLinkMetricQueryWorker((MacAddr, CancellationToken)),
     None,
 }
 
@@ -357,12 +359,29 @@ pub struct Ieee1905Node {
     pub device_data: Ieee1905DeviceData, // Device-related information
 }
 
-impl Ieee1905Node {
+impl From<&Ieee1905NodeInternal> for Ieee1905Node {
+    fn from(value: &Ieee1905NodeInternal) -> Self {
+        Self {
+            metadata: value.metadata.clone(),
+            device_data: value.device_data.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Ieee1905NodeInternal {
+    pub metadata: Ieee1905NodeInfo,
+    pub device_data: Ieee1905DeviceData,
+    link_metrics_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
+}
+
+impl Ieee1905NodeInternal {
     /// **Create a new `Ieee1905Node` instance**
     pub fn new(metadata: Ieee1905NodeInfo, device_data: Ieee1905DeviceData) -> Self {
         Self {
             metadata,
             device_data,
+            link_metrics_query_cancellation_token: None,
         }
     }
 
@@ -379,6 +398,21 @@ impl Ieee1905Node {
             self.device_data = device_data;
         }
     }
+
+    fn prepare_link_metrics_query_transmission_event_if_needed(&mut self) -> TransmissionEvent {
+        if self.link_metrics_query_cancellation_token.is_some() {
+            return TransmissionEvent::None;
+        }
+
+        let cancellation_token = CancellationToken::new();
+        let drop_guard = cancellation_token.clone().drop_guard();
+        self.link_metrics_query_cancellation_token = Some(drop_guard);
+
+        TransmissionEvent::StartLinkMetricQueryWorker((
+            self.device_data.destination_frame_mac,
+            cancellation_token,
+        ))
+    }
 }
 
 pub static TOPOLOGY_DATABASE: OnceCell<Arc<TopologyDatabase>> = OnceCell::const_new();
@@ -388,7 +422,7 @@ pub struct TopologyDatabase {
     pub al_mac_address: Arc<RwLock<MacAddr>>,
     pub local_mac: Arc<RwLock<MacAddr>>,
     pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905LocalInterface>>>>,
-    pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905Node>>>,
+    pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905NodeInternal>>>,
     pub interface_name: Arc<RwLock<Option<String>>>,
     pub local_role: Arc<RwLock<Option<Role>>>,
 }
@@ -456,34 +490,37 @@ impl TopologyDatabase {
 
     /// **Retrieves a device node from the database**
     pub async fn get_device(&self, al_mac: MacAddr) -> Option<Ieee1905Node> {
-        let nodes = self.nodes.read().await; // Read lock
-        nodes.get(&al_mac).cloned() // Clone to return the device node
+        let nodes = self.nodes.read().await;
+        Some(nodes.get(&al_mac)?.into())
     }
 
     /// **Retrieves a device node from the database**
     pub async fn find_device_by_port(&self, mac: MacAddr) -> Option<Ieee1905Node> {
         let nodes = self.nodes.read().await;
-        Self::find_node_by_port(nodes.values(), mac).cloned()
+        Some(Self::find_node_by_port(nodes.values(), mac)?.into())
     }
 
     pub async fn lock_node_by_port_mut(
         &self,
         mac: MacAddr,
-    ) -> Option<RwLockMappedWriteGuard<'_, Ieee1905Node>> {
+    ) -> Option<RwLockMappedWriteGuard<'_, Ieee1905NodeInternal>> {
         let nodes = self.nodes.write().await;
         RwLockWriteGuard::try_map(nodes, |e| Self::find_node_by_port_mut(e.values_mut(), mac)).ok()
     }
 
-    fn find_node_by_port<'a, I>(mut iter: I, mac: MacAddr) -> Option<&'a Ieee1905Node>
+    fn find_node_by_port<'a, I>(mut iter: I, mac: MacAddr) -> Option<&'a Ieee1905NodeInternal>
     where
-        I: Iterator<Item = &'a Ieee1905Node>,
+        I: Iterator<Item = &'a Ieee1905NodeInternal>,
     {
         iter.find(|node| node.device_data.has_port(mac))
     }
 
-    fn find_node_by_port_mut<'a, I>(mut iter: I, mac: MacAddr) -> Option<&'a mut Ieee1905Node>
+    fn find_node_by_port_mut<'a, I>(
+        mut iter: I,
+        mac: MacAddr,
+    ) -> Option<&'a mut Ieee1905NodeInternal>
     where
-        I: Iterator<Item = &'a mut Ieee1905Node>,
+        I: Iterator<Item = &'a mut Ieee1905NodeInternal>,
     {
         iter.find(|node| node.device_data.has_port(mac))
     }
@@ -515,7 +552,7 @@ impl TopologyDatabase {
 
     fn update_local_neighbours_ieee1905_compatibility(
         interfaces: &mut [Ieee1905LocalInterface],
-        ieee1905_nodes: &IndexMap<MacAddr, Ieee1905Node>,
+        ieee1905_nodes: &IndexMap<MacAddr, Ieee1905NodeInternal>,
     ) {
         for interface in interfaces {
             let Some(neighbors) = interface.data.non_ieee1905_neighbors.as_mut() else {
@@ -750,9 +787,7 @@ impl TopologyDatabase {
                                     TransmissionEvent::None
                                 }
                             } else {
-                                tracing::debug!(
-                                    "Ignoring ResponseReceived — Node not in ConvergingLocal state"
-                                );
+                                debug!("Ignoring ResponseReceived — not in ConvergingLocal state");
                                 TransmissionEvent::None
                             }
                         }
@@ -799,13 +834,15 @@ impl TopologyDatabase {
                             //If needed we can indicate here a notification event to update topology data base in al neighbors but for now it is not needed
                             //initial DB snapshot covers current uses cases for RDK-B but we can update this part if needed in the future
                         }
-                        UpdateType::ApAutoConfigSearch => TransmissionEvent::None,
+                        UpdateType::ApAutoConfigSearch => {
+                            node.prepare_link_metrics_query_transmission_event_if_needed()
+                        }
                     };
                 }
                 None => {
                     tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Node not found — inserting");
 
-                    let mut new_node = Ieee1905Node {
+                    let mut new_node = Ieee1905NodeInternal {
                         metadata: Ieee1905NodeInfo {
                             al_mac: device_data.al_mac,
                             last_update: operation,
@@ -817,38 +854,39 @@ impl TopologyDatabase {
                             node_state_remote: StateRemote::Idle,
                         },
                         device_data,
+                        link_metrics_query_cancellation_token: None,
                     };
 
-                    let node_was_crated;
+                    let node_was_created;
                     transmission_event = match operation {
                         UpdateType::DiscoveryReceived => {
                             nodes.insert(al_mac, new_node);
-                            node_was_crated = true;
-                            tracing::debug!(al_mac = ?al_mac, "Inserted node from Discovery");
+                            node_was_created = true;
+                            debug!(al_mac = ?al_mac, "Inserted node from Discovery");
                             TransmissionEvent::SendTopologyQuery(al_mac)
                         }
                         UpdateType::QueryReceived => {
                             new_node.metadata.node_state_remote =
                                 StateRemote::ConvergingRemote(Instant::now());
                             nodes.insert(al_mac, new_node);
-                            node_was_crated = true;
-                            tracing::debug!(al_mac = ?al_mac, "Inserted node from query");
+                            node_was_created = true;
+                            debug!(al_mac = ?al_mac, "Inserted node from query");
                             TransmissionEvent::SendTopologyResponse(al_mac)
                         }
                         UpdateType::ApAutoConfigSearch => {
-                            nodes.insert(al_mac, new_node);
-                            node_was_crated = true;
-                            debug!(al_mac = ?al_mac, "Inserted node from Discovery");
-                            TransmissionEvent::None
+                            let node = nodes.entry(al_mac).insert_entry(new_node).into_mut();
+                            node_was_created = true;
+                            debug!(al_mac = ?al_mac, "Inserted node from ApAutoConfigSearch");
+                            node.prepare_link_metrics_query_transmission_event_if_needed()
                         }
                         _ => {
-                            tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
-                            node_was_crated = false;
+                            debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
+                            node_was_created = false;
                             TransmissionEvent::None
                         }
                     };
 
-                    if node_was_crated {
+                    if node_was_created {
                         let mut interfaces = self.local_interface_list.write().await;
                         if let Some(vec) = interfaces.as_mut() {
                             Self::update_local_neighbours_ieee1905_compatibility(vec, &nodes);
@@ -890,13 +928,9 @@ impl TopologyDatabase {
                     debug!(%source, "link_metric_query — neighbor {e} not found");
                     return None;
                 };
-                vec![neighbor.clone()]
+                vec![neighbor.into()]
             }
-            None => nodes
-                .iter()
-                .filter(|e| *e.0 != node_al_mac)
-                .map(|e| e.1.clone())
-                .collect(),
+            None => nodes.iter().map(|e| e.1.into()).collect(),
         };
 
         Some((node_al_mac, neighbors))
@@ -950,7 +984,12 @@ impl TopologyDatabase {
             let local_mac = self.al_mac_address.read().await.to_string();
 
             let interfaces = self.local_interface_list.read().await.clone();
-            let nodes = self.nodes.read().await.clone();
+            let nodes = {
+                let lock = self.nodes.read().await;
+                lock.iter()
+                    .map(|(k, v)| (*k, Ieee1905Node::from(v)))
+                    .collect::<Vec<_>>()
+            };
 
             terminal.draw(|f| {
                 let chunks = Layout::default()

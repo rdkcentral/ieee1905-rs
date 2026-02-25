@@ -28,6 +28,7 @@ use pnet::datalink::MacAddr;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, info_span, instrument, trace, warn, Instrument};
 
 #[instrument(skip_all, name = "cmdu_discovery_transmission", fields(task = next_task_id()))]
@@ -473,6 +474,64 @@ pub fn cmdu_topology_notification_transmission(
             info_span!(parent: None, "cmdu_notification_transmission", task = next_task_id()),
         ),
     );
+}
+
+#[instrument(skip_all, name = "cmdu_link_metric_query_transmission", fields(task = next_task_id()))]
+pub async fn cmdu_link_metric_query_transmission_worker(
+    sender: Arc<EthernetSender>,
+    message_id_generator: Arc<MessageIdGenerator>,
+    local_interface_mac: MacAddr,
+    destination_mac: MacAddr,
+    cancellation_token: CancellationToken,
+) {
+    let mut ticker = interval(Duration::from_secs(10));
+
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => (),
+            _ = cancellation_token.cancelled() => return,
+        }
+
+        let message_id = message_id_generator.next_id();
+        debug!(%destination_mac, message_id, "Creating CMDU");
+
+        let payload = [
+            TLV::from(LinkMetricQuery {
+                neighbor_type: LinkMetricQuery::NEIGHBOR_ALL,
+                neighbor_mac: None,
+                requested_metrics: LinkMetricQuery::METRIC_TX_RX,
+            }),
+            TLV::from(EndOfMessage),
+        ];
+
+        let cmdu = CMDU {
+            message_version: MessageVersion::Version2013.to_u8(),
+            reserved: 0,
+            message_type: CMDUType::LinkMetricQuery.to_u16(),
+            message_id,
+            fragment: 0,
+            flags: 0x80,
+            payload: payload.iter().flat_map(TLV::serialize).collect(),
+        };
+
+        let cmdu_bytes = cmdu.serialize();
+        trace!(%destination_mac, message_id, ?cmdu_bytes, "CMDU serialized");
+        debug!(%destination_mac, message_id, "Sending CMDU");
+
+        let result = sender
+            .enqueue_frame(
+                destination_mac,
+                local_interface_mac,
+                EthernetSender::ETHER_TYPE,
+                cmdu_bytes,
+            )
+            .await;
+
+        match result {
+            Ok(()) => info!(%destination_mac, message_id, "CMDU sent successfully"),
+            Err(e) => error!(%destination_mac, message_id, %e, "Failed to send CMDU"),
+        }
+    }
 }
 
 #[instrument(skip_all, name = "cmdu_link_metric_response_transmission", fields(task = next_task_id()))]
