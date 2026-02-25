@@ -46,6 +46,7 @@ use std::ops::Deref;
 use std::{io, sync::Arc};
 use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 // Internal modules
 use crate::cmdu_codec::{
     CMDUFragmentation, DeviceIdentificationType, Ieee1905ProfileVersion, LinkMetricQuery,
@@ -88,6 +89,7 @@ pub enum TransmissionEvent {
     SendTopologyQuery(MacAddr),
     SendTopologyResponse(MacAddr),
     SendTopologyNotification(MacAddr),
+    StartLinkMetricQueryWorker((MacAddr, CancellationToken)),
     None,
 }
 
@@ -370,7 +372,7 @@ impl From<&Ieee1905NodeInternal> for Ieee1905Node {
 pub struct Ieee1905NodeInternal {
     pub metadata: Ieee1905NodeInfo,
     pub device_data: Ieee1905DeviceData,
-    _link_metrics_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
+    link_metrics_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
 }
 
 impl Ieee1905NodeInternal {
@@ -379,7 +381,7 @@ impl Ieee1905NodeInternal {
         Self {
             metadata,
             device_data,
-            _link_metrics_query_cancellation_token: None,
+            link_metrics_query_cancellation_token: None,
         }
     }
 
@@ -395,6 +397,21 @@ impl Ieee1905NodeInternal {
         if let Some(device_data) = new_device_data {
             self.device_data = device_data;
         }
+    }
+
+    fn prepare_link_metrics_query_transmission_event_if_needed(&mut self) -> TransmissionEvent {
+        if self.link_metrics_query_cancellation_token.is_some() {
+            return TransmissionEvent::None;
+        }
+
+        let cancellation_token = CancellationToken::new();
+        let drop_guard = cancellation_token.clone().drop_guard();
+        self.link_metrics_query_cancellation_token = Some(drop_guard);
+
+        TransmissionEvent::StartLinkMetricQueryWorker((
+            self.device_data.destination_frame_mac,
+            cancellation_token,
+        ))
     }
 }
 
@@ -770,9 +787,7 @@ impl TopologyDatabase {
                                     TransmissionEvent::None
                                 }
                             } else {
-                                tracing::debug!(
-                                    "Ignoring ResponseReceived — Node not in ConvergingLocal state"
-                                );
+                                debug!("Ignoring ResponseReceived — not in ConvergingLocal state");
                                 TransmissionEvent::None
                             }
                         }
@@ -819,7 +834,9 @@ impl TopologyDatabase {
                             //If needed we can indicate here a notification event to update topology data base in al neighbors but for now it is not needed
                             //initial DB snapshot covers current uses cases for RDK-B but we can update this part if needed in the future
                         }
-                        UpdateType::ApAutoConfigSearch => TransmissionEvent::None,
+                        UpdateType::ApAutoConfigSearch => {
+                            node.prepare_link_metrics_query_transmission_event_if_needed()
+                        }
                     };
                 }
                 None => {
@@ -837,39 +854,39 @@ impl TopologyDatabase {
                             node_state_remote: StateRemote::Idle,
                         },
                         device_data,
-                        _link_metrics_query_cancellation_token: None,
+                        link_metrics_query_cancellation_token: None,
                     };
 
-                    let node_was_crated;
+                    let node_was_created;
                     transmission_event = match operation {
                         UpdateType::DiscoveryReceived => {
                             nodes.insert(al_mac, new_node);
-                            node_was_crated = true;
-                            tracing::debug!(al_mac = ?al_mac, "Inserted node from Discovery");
+                            node_was_created = true;
+                            debug!(al_mac = ?al_mac, "Inserted node from Discovery");
                             TransmissionEvent::SendTopologyQuery(al_mac)
                         }
                         UpdateType::QueryReceived => {
                             new_node.metadata.node_state_remote =
                                 StateRemote::ConvergingRemote(Instant::now());
                             nodes.insert(al_mac, new_node);
-                            node_was_crated = true;
-                            tracing::debug!(al_mac = ?al_mac, "Inserted node from query");
+                            node_was_created = true;
+                            debug!(al_mac = ?al_mac, "Inserted node from query");
                             TransmissionEvent::SendTopologyResponse(al_mac)
                         }
                         UpdateType::ApAutoConfigSearch => {
-                            nodes.insert(al_mac, new_node);
-                            node_was_crated = true;
-                            debug!(al_mac = ?al_mac, "Inserted node from Discovery");
-                            TransmissionEvent::None
+                            let node = nodes.entry(al_mac).insert_entry(new_node).into_mut();
+                            node_was_created = true;
+                            debug!(al_mac = ?al_mac, "Inserted node from ApAutoConfigSearch");
+                            node.prepare_link_metrics_query_transmission_event_if_needed()
                         }
                         _ => {
-                            tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
-                            node_was_crated = false;
+                            debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
+                            node_was_created = false;
                             TransmissionEvent::None
                         }
                     };
 
-                    if node_was_crated {
+                    if node_was_created {
                         let mut interfaces = self.local_interface_list.write().await;
                         if let Some(vec) = interfaces.as_mut() {
                             Self::update_local_neighbours_ieee1905_compatibility(vec, &nodes);
@@ -913,11 +930,7 @@ impl TopologyDatabase {
                 };
                 vec![neighbor.into()]
             }
-            None => nodes
-                .iter()
-                .filter(|e| *e.0 != node_al_mac)
-                .map(|e| e.1.into())
-                .collect(),
+            None => nodes.iter().map(|e| e.1.into()).collect(),
         };
 
         Some((node_al_mac, neighbors))
