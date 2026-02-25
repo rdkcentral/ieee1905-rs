@@ -249,8 +249,7 @@ impl CMDUHandler {
         let remote_al_mac = remote_al_mac.al_mac_address;
         let remote_interface_mac = remote_interface_mac.mac_address;
 
-        let topology_db =
-            TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
+        let topology_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
 
         let device_data = Ieee1905DeviceData {
             al_mac: remote_al_mac,
@@ -332,8 +331,7 @@ impl CMDUHandler {
 
         info!("Topology Query received from REMOTE_PORT_MAC={source_mac}");
 
-        let topology_db =
-            TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
+        let topology_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
 
         let device_data = if let Some(remote_al_mac) = AlMacAddress::find(tlvs) {
             Ieee1905DeviceData {
@@ -469,9 +467,7 @@ impl CMDUHandler {
             }
         }
 
-        let topology_db =
-            TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
-
+        let topology_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
         let Some(node) = topology_db.find_device_by_port(source_mac).await.clone() else {
             warn!(
                 al_mac = ?remote_al_mac,
@@ -614,8 +610,7 @@ impl CMDUHandler {
             return false;
         };
 
-        let topology_db =
-            TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
+        let topology_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
 
         let remote_al_mac_address = remote_al_mac_address.al_mac_address;
         let received_device_data = Ieee1905DeviceData {
@@ -688,10 +683,7 @@ impl CMDUHandler {
             return;
         };
 
-        let topology_db =
-            TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone()).await;
-
-        let result = topology_db
+        let result = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
             .handle_link_metric_query(source_mac, &query)
             .await;
 
@@ -746,8 +738,7 @@ impl CMDUHandler {
             device_identification_type: None,
         };
 
-        TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
-            .await
+        TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
             .update_ieee1905_topology(
                 device_data,
                 UpdateType::ApAutoConfigSearch,
@@ -779,8 +770,7 @@ impl CMDUHandler {
             return error!("ApAutoConfigResponse CMDU missing SupportedFreqBand TLV");
         };
 
-        TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
-            .await
+        TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
             .handle_ap_auto_config_response(source_mac, supported_freq_band)
             .await;
 
@@ -802,8 +792,7 @@ impl CMDUHandler {
             return;
         };
 
-        TopologyDatabase::get_instance(self.local_al_mac, self.interface_name.clone())
-            .await
+        TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
             .handle_ap_auto_config_wcs(source_mac, &ap_capability)
             .await;
 
@@ -851,8 +840,7 @@ impl CMDUHandler {
             return debug!("Skipping SDU from CMDU as destination mac {destination_mac:?} is different as local al mac {}", self.local_al_mac);
         }
 
-        let topology_db =
-            TopologyDatabase::get_instance(source_mac, self.interface_name.clone()).await;
+        let topology_db = TopologyDatabase::get_instance(source_mac, &self.interface_name);
 
         if let Some(updated_node) = topology_db.get_device(source_mac).await {
             trace!("Node: {updated_node:?}");

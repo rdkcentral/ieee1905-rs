@@ -239,21 +239,19 @@ impl AlServiceAccessPoint {
                     self.service_type = Some(request.service_type);
                     match request.service_type {
                         ServiceType::EasyMeshAgent => {
-                            tracing::info!("ServiceType EasyMeshAgent - Might be Enrollee");
+                            info!("ServiceType EasyMeshAgent - Might be Enrollee");
                             let db = TopologyDatabase::get_instance(
                                 get_local_al_mac(self.interface_name.clone()).unwrap(),
-                                self.interface_name.clone(),
-                            )
-                            .await;
+                                &self.interface_name,
+                            );
                             db.set_local_role(Some(Role::Enrollee)).await;
                         }
                         ServiceType::EasyMeshController => {
-                            tracing::info!("ServiceType EasyMeshController - Might be Registrar");
+                            info!("ServiceType EasyMeshController - Might be Registrar");
                             let db = TopologyDatabase::get_instance(
                                 get_local_al_mac(self.interface_name.clone()).unwrap(),
-                                self.interface_name.clone(),
-                            )
-                            .await;
+                                &self.interface_name,
+                            );
                             db.set_local_role(Some(Role::Registrar)).await;
                         }
                     };
@@ -302,9 +300,8 @@ impl AlServiceAccessPoint {
     pub async fn check_if_role_match(&self, role: Role) -> bool {
         let db = TopologyDatabase::get_instance(
             get_local_al_mac(self.interface_name.clone()).unwrap(),
-            self.interface_name.clone(),
-        )
-        .await;
+            &self.interface_name,
+        );
         if let Some(local_role) = db.get_local_role().await {
             tracing::trace!("Compare local_role {local_role:?} with {role:?}");
             role == local_role

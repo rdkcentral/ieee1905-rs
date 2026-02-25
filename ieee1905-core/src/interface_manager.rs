@@ -64,22 +64,21 @@ pub fn get_local_al_mac(interface_name: String) -> Option<MacAddr> {
     Some(MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
 }
 
-pub fn get_forwarding_interface_mac(interface_name: String) -> Option<MacAddr> {
+pub fn get_forwarding_interface_mac(interface_name: &str) -> MacAddr {
     // Fetch all network interfaces
     let interfaces = datalink::interfaces();
 
     // Find the first Ethernet interface (`ethX`)
     if let Some(mac_addr) = interfaces
         .iter()
-        .find(|iface| iface.name.starts_with(&interface_name))
+        .find(|iface| iface.name.starts_with(interface_name))
         .and_then(|iface| iface.mac)
-    // Extract and return MAC address if found
     {
         tracing::debug!("Ethernet interface found for forwarding {mac_addr}");
-        Some(mac_addr)
+        mac_addr
     } else {
         tracing::debug!("No Ethernet interface found for forwarding, using default.");
-        Some(MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
+        MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
     }
 }
 
