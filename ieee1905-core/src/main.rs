@@ -148,7 +148,7 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
 
     // // Initialize Database
 
-    let topology_db = TopologyDatabase::get_instance(al_mac, cli.interface.clone()).await;
+    let topology_db = TopologyDatabase::get_instance(al_mac, &cli.interface);
     let _db_workers = topology_db.start_workers();
 
     // Upon every loop restart topology database role can change

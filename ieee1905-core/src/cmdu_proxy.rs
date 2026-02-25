@@ -115,8 +115,7 @@ pub async fn cmdu_topology_query_transmission(
             );
 
             // Retrieve device data from the topology database
-            let topology_db =
-                TopologyDatabase::get_instance(local_al_mac_address, interface.clone()).await;
+            let topology_db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
             let Some(node) = topology_db.get_device(remote_al_mac_address).await else {
                 debug!(
                     "Could not find node in topology database for AL_MAC={}",
@@ -227,8 +226,7 @@ pub fn cmdu_topology_response_transmission(
             );
 
             // Retrieve node information from the topology database
-            let topology_db =
-                TopologyDatabase::get_instance(local_al_mac_address, interface.clone()).await;
+            let topology_db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
             let Some(node) = topology_db.get_device(remote_al_mac_address).await else {
                 warn!(
                     "Could not find node in topology database for AL_MAC={}",
@@ -413,8 +411,7 @@ pub fn cmdu_topology_notification_transmission(
                 message_id
             );
 
-            let topology_db =
-                TopologyDatabase::get_instance(local_al_mac_address, interface.clone()).await;
+            let topology_db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
 
             let payload = [
                 TLV::from(AlMacAddress {
@@ -552,7 +549,7 @@ pub async fn cmdu_link_metric_response_transmission(
     );
 
     // Retrieve device data from the topology database
-    let topology_db = TopologyDatabase::get_instance(local_al_mac_address, interface.clone()).await;
+    let topology_db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
     let Some(node) = topology_db.get_device(remote_al_mac_address).await else {
         debug!("Could not find node in topology database for AL_MAC={remote_al_mac_address}");
         return;
@@ -677,9 +674,8 @@ pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>
 
                     let topology_db = TopologyDatabase::get_instance(
                         sdu.source_al_mac_address,
-                        interface.clone(),
-                    )
-                        .await;
+                        &interface,
+                    );
 
                     trace!("Searching for destination {destination_al_mac} in topology database");
 
