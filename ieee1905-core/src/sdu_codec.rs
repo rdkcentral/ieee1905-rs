@@ -172,11 +172,7 @@ mod tests {
     // Verify parsing and serializing of SDU and CMDU
     #[test]
     fn test_sdu_with_topology_query_cmdus() {
-        let end_of_message_tlv = TLV {
-            tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
-            tlv_length: 0,
-            tlv_value: None,
-        };
+        let end_of_message_tlv = TLV::from(EndOfMessage);
 
         // Prepare CMDU with only EndOfMessage TLV
         let cmdu_topology_query = CMDU {
