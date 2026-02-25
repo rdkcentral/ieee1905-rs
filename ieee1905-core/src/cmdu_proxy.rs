@@ -21,7 +21,6 @@ use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
-use crate::tlv_cmdu_codec::TLVTrait;
 use crate::topology_manager::{Ieee1905Node, Role, TopologyDatabase, UpdateType};
 use crate::SDU;
 use crate::{next_task_id, MessageIdGenerator};
@@ -47,32 +46,16 @@ pub async fn cmdu_topology_discovery_transmission_worker(
 
         let message_id = message_id_generator.next_id();
         trace!(interface = %interface, message_id = message_id, "Creating CMDU Topology Discovery");
-        let al_mac_address = local_al_mac_address;
-        let mac_address = interface_mac_address;
 
-        // Define TLVs
-        let al_mac_tlv = TLV {
-            tlv_type: IEEE1905TLVType::AlMacAddress.to_u8(),
-            tlv_length: 6,
-            tlv_value: Some(AlMacAddress { al_mac_address }.serialize()),
-        };
-
-        let mac_address_tlv = TLV {
-            tlv_type: IEEE1905TLVType::MacAddress.to_u8(),
-            tlv_length: 6,
-            tlv_value: Some(MacAddress { mac_address }.serialize()),
-        };
-
-        let end_of_message_tlv = TLV {
-            tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
-            tlv_length: 0,
-            tlv_value: None,
-        };
-
-        let mut serialized_payload: Vec<u8> = vec![];
-        serialized_payload.extend(al_mac_tlv.serialize());
-        serialized_payload.extend(mac_address_tlv.serialize());
-        serialized_payload.extend(end_of_message_tlv.serialize());
+        let payload = [
+            TLV::from(AlMacAddress {
+                al_mac_address: local_al_mac_address,
+            }),
+            TLV::from(MacAddress {
+                mac_address: interface_mac_address,
+            }),
+            TLV::from(EndOfMessage),
+        ];
 
         // Construct CMDU
         let cmdu_topology_discovery = CMDU {
@@ -82,9 +65,8 @@ pub async fn cmdu_topology_discovery_transmission_worker(
             message_id,
             fragment: 0,
             flags: 0x80,
-            payload: serialized_payload,
+            payload: payload.iter().flat_map(TLV::serialize).collect(),
         };
-        //TODO only size based
 
         let serialized_cmdu = cmdu_topology_discovery.serialize();
         debug!(
@@ -148,45 +130,24 @@ pub async fn cmdu_topology_query_transmission(
 
             // **Retrieve Destination MAC Address**
             let destination_mac = device_data.destination_frame_mac;
+            let local_role = topology_db.get_local_role().await;
 
             // Define TLVs
-            let al_mac_address = local_al_mac_address;
-
-            let al_mac_tlv = TLV {
-                tlv_type: IEEE1905TLVType::AlMacAddress.to_u8(),
-                tlv_length: 6,
-                tlv_value: Some(al_mac_address.octets().to_vec()),
-            };
-            //Vendor Specific TLV (OUI 00:90:96, payload 00 01 00)
-            let vendor_info = VendorSpecificInfo {
-                oui: COMCAST_OUI,                        // Comcast OUI (per your request)
-                vendor_data: COMCAST_QUERY_TAG.to_vec(), // Vendor payload
-            };
-            let vendor_value = vendor_info.serialize();
-            let vendor_specific_tlv = TLV {
-                tlv_type: IEEE1905TLVType::VendorSpecificInfo.to_u8(),
-                tlv_length: vendor_value.len() as u16, // 3 (OUI) + payload length
-                tlv_value: Some(vendor_value),
-            };
-
-            let local_role = topology_db.get_local_role().await;
-            let multi_ap_profile_tlv = local_role
-                .filter(|e| *e == Role::Registrar)
-                .map(|_| TLV::from(MultiApProfile::Profile3));
-
-            let end_of_message_tlv = TLV {
-                tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
-                tlv_length: 0,
-                tlv_value: None,
-            };
-
-            let mut serialized_payload = vec![];
-            serialized_payload.extend(al_mac_tlv.serialize());
-            serialized_payload.extend(vendor_specific_tlv.serialize());
-            if let Some(multi_ap_profile_tlv) = multi_ap_profile_tlv {
-                serialized_payload.extend(multi_ap_profile_tlv.serialize());
-            }
-            serialized_payload.extend(end_of_message_tlv.serialize());
+            let payload = [
+                Some(TLV::from(AlMacAddress {
+                    al_mac_address: local_al_mac_address,
+                })),
+                Some(TLV::from(VendorSpecificInfo {
+                    oui: COMCAST_OUI,
+                    vendor_data: COMCAST_QUERY_TAG.to_vec(),
+                })),
+                if let Some(Role::Registrar) = local_role {
+                    Some(TLV::from(MultiApProfile::Profile3))
+                } else {
+                    None
+                },
+                Some(TLV::from(EndOfMessage)),
+            ];
 
             // Construct CMDU
             let cmdu_topology_query = CMDU {
@@ -196,7 +157,7 @@ pub async fn cmdu_topology_query_transmission(
                 message_id,
                 fragment: 0,
                 flags: 0x80,
-                payload: serialized_payload,
+                payload: payload.iter().flatten().flat_map(TLV::serialize).collect(),
             };
 
             let serialized_cmdu = cmdu_topology_query.serialize();
@@ -280,13 +241,12 @@ pub fn cmdu_topology_response_transmission(
             let destination_mac = node.device_data.destination_frame_mac;
             let fragmentation = node.device_data.supported_fragmentation;
 
-            // Construct DeviceInformation TLV
-            let ieee1905_local_interfaces: Vec<LocalInterface> = {
+            // Construct local interfaces
+            let local_interfaces: Vec<LocalInterface> = {
                 let interfaces = topology_db.local_interface_list.read().await;
                 interfaces
-                    .as_deref()
-                    .unwrap_or_default()
                     .iter()
+                    .flatten()
                     .map(|iface| LocalInterface {
                         mac_address: iface.mac,
                         media_type: iface.media_type,
@@ -298,13 +258,9 @@ pub fn cmdu_topology_response_transmission(
             // Construct DeviceBridgingCapability TLV
             let device_bridging_capability_tlv = {
                 let mut tuples_by_bridge = HashMap::<u32, Vec<MacAddr>>::new();
-                for interface in topology_db
-                    .local_interface_list
-                    .read()
-                    .await
-                    .iter()
-                    .flatten()
-                {
+
+                let interfaces = topology_db.local_interface_list.read().await;
+                for interface in interfaces.iter().flatten() {
                     if let Some(bridging_tuple) = interface.bridging_tuple {
                         tuples_by_bridge
                             .entry(bridging_tuple)
@@ -324,131 +280,66 @@ pub fn cmdu_topology_response_transmission(
                 }
 
                 if !tuples.is_empty() {
-                    let value = DeviceBridgingCapability {
+                    Some(TLV::from(DeviceBridgingCapability {
                         bridging_tuples_count: tuples.len() as u8,
                         bridging_tuples_list: tuples,
-                    }
-                    .serialize();
-
-                    Some(TLV {
-                        tlv_type: IEEE1905TLVType::DeviceBridgingCapability.to_u8(),
-                        tlv_length: value.len() as u16,
-                        tlv_value: Some(value),
-                    })
+                    }))
                 } else {
                     None
                 }
             };
 
-            // Construct AL MAC TLV
-
-            let al_mac_address: MacAddr = local_al_mac_address;
-            warn!("this is the al mac I'm using {}", remote_al_mac_address);
-            let al_mac_tlv = TLV {
-                tlv_type: IEEE1905TLVType::AlMacAddress.to_u8(),
-                tlv_length: 6,
-                tlv_value: Some(al_mac_address.octets().to_vec()),
-            };
-            let vendor_info = VendorSpecificInfo {
-                oui: COMCAST_OUI,                        // Comcast OUI (per your request)
-                vendor_data: COMCAST_QUERY_TAG.to_vec(), // Vendor payload
-            };
-            let vendor_value = vendor_info.serialize();
-            let vendor_specific_tlv = TLV {
-                tlv_type: IEEE1905TLVType::VendorSpecificInfo.to_u8(),
-                tlv_length: vendor_value.len() as u16, // 3 (OUI) + payload length
-                tlv_value: Some(vendor_value),
-            };
-            //Vendor Specific TLV (OUI 00:90:96, payload 00 01 00)
-            let device_information =
-                DeviceInformation::new(local_al_mac_address, ieee1905_local_interfaces);
-            let device_information_vec = device_information.serialize();
-            let device_information_tlv = TLV {
-                tlv_type: IEEE1905TLVType::DeviceInformation.to_u8(),
-                tlv_length: device_information_vec.len() as u16,
-                tlv_value: Some(device_information_vec),
-            };
-
+            // Construct ieee1905 neighbors
             let ieee_neighbors_list: Vec<IEEE1905Neighbor> = {
-                let mut list = Vec::new();
                 let nodes = topology_db.nodes.read().await;
-
-                for (neighbor_mac, neighbor_node) in nodes.iter() {
+                let list = nodes.iter().filter_map(|(neighbor_mac, neighbor_node)| {
                     if *neighbor_mac == local_al_mac_address {
-                        continue; // Dont include your self as a neighbor
-
-                        // set neighbor_flags based on metadata
+                        return None; // Don't include your self as a neighbor
                     }
-                    let neighbor_flags = match neighbor_node.metadata.lldp_neighbor.is_some() {
-                        true => 0b1000_0000,
-                        false => 0b0000_0000,
-                    };
-
-                    list.push(IEEE1905Neighbor {
+                    Some(IEEE1905Neighbor {
                         neighbor_al_mac: *neighbor_mac,
-                        neighbor_flags,
-                    });
-                }
-
-                list
+                        neighbor_flags: match neighbor_node.metadata.lldp_neighbor.is_some() {
+                            true => 0b1000_0000,
+                            false => 0b0000_0000,
+                        },
+                    })
+                });
+                list.collect()
             };
 
-            let ieee_neighbors_tlv = if ieee_neighbors_list.is_empty() {
-                TLV {
-                    tlv_type: IEEE1905TLVType::Ieee1905NeighborDevices.to_u8(),
-                    tlv_length: 0,
-                    tlv_value: None,
-                }
-            } else {
-                let ieee_neighbors = Ieee1905NeighborDevice {
-                    local_mac_address: interface_mac_address,
-                    neighborhood_list: ieee_neighbors_list,
-                };
-                let serialized = ieee_neighbors.serialize();
-                TLV {
-                    tlv_type: IEEE1905TLVType::Ieee1905NeighborDevices.to_u8(),
-                    tlv_length: serialized.len() as u16,
-                    tlv_value: Some(serialized),
-                }
-            };
-
+            // Construct non-ieee1905 neighbors
             let non_ieee_neighbors_list_tlv_vec = {
                 let interfaces = topology_db.local_interface_list.read().await;
                 Vec::from_iter(interfaces.iter().flatten().map(|e| {
                     let interfaces = e.non_ieee1905_neighbors.as_deref();
-                    let neighbours = NonIeee1905NeighborDevices {
+                    TLV::from(NonIeee1905NeighborDevices {
                         local_mac_address: e.mac,
                         neighborhood_list: interfaces.unwrap_or_default().to_owned(),
-                    };
-
-                    let neighbours_data = neighbours.serialize();
-                    TLV {
-                        tlv_type: IEEE1905TLVType::NonIeee1905NeighborDevices.to_u8(),
-                        tlv_length: neighbours_data.len() as u16,
-                        tlv_value: Some(neighbours_data),
-                    }
+                    })
                 }))
             };
 
-            // End of Message TLV
-            let end_of_message_tlv = TLV {
-                tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
-                tlv_length: 0,
-                tlv_value: None,
-            };
-
-            let mut serialized_payload = vec![];
-            serialized_payload.extend(al_mac_tlv.serialize());
-            serialized_payload.extend(vendor_specific_tlv.serialize());
-            serialized_payload.extend(device_information_tlv.serialize());
-            serialized_payload.extend(ieee_neighbors_tlv.serialize());
-            for tlv in non_ieee_neighbors_list_tlv_vec {
-                serialized_payload.extend(tlv.serialize());
-            }
-            if let Some(device_bridging_capability_tlv) = device_bridging_capability_tlv {
-                serialized_payload.extend(device_bridging_capability_tlv.serialize());
-            }
-            serialized_payload.extend(end_of_message_tlv.serialize());
+            // Building TLV payload
+            let mut payload = vec![
+                TLV::from(AlMacAddress {
+                    al_mac_address: local_al_mac_address,
+                }),
+                TLV::from(VendorSpecificInfo {
+                    oui: COMCAST_OUI,
+                    vendor_data: COMCAST_QUERY_TAG.to_vec(),
+                }),
+                TLV::from(DeviceInformation::new(
+                    local_al_mac_address,
+                    local_interfaces,
+                )),
+                TLV::from(Ieee1905NeighborDevice {
+                    local_mac_address: interface_mac_address,
+                    neighborhood_list: ieee_neighbors_list,
+                }),
+            ];
+            payload.extend(non_ieee_neighbors_list_tlv_vec);
+            payload.extend(device_bridging_capability_tlv);
+            payload.push(TLV::from(EndOfMessage));
 
             // Construct the CMDU
             let cmdu_topology_response = CMDU {
@@ -458,7 +349,7 @@ pub fn cmdu_topology_response_transmission(
                 message_id,
                 fragment: 0,
                 flags: 0x80, // Not fragmented
-                payload: serialized_payload,
+                payload: payload.iter().flat_map(TLV::serialize).collect(),
             };
 
             let send_future = enqueue_fragmented_cmdu(
@@ -489,7 +380,7 @@ pub fn cmdu_topology_response_transmission(
                         )
                         .await;
 
-                    info!("Topology Database updated: AL_MAC={al_mac_address} set to ResponseSent");
+                    info!("Topology Database updated: AL_MAC={local_al_mac_address} set to ResponseSent");
                 }
                 Err(e) => error!(
                     message_id = message_id,
@@ -497,7 +388,7 @@ pub fn cmdu_topology_response_transmission(
                 ),
             }
         }
-        .instrument(info_span!(parent: None, "cmdu_response_transmission", task = next_task_id())),
+            .instrument(info_span!(parent: None, "cmdu_response_transmission", task = next_task_id())),
     );
 }
 
@@ -525,37 +416,16 @@ pub fn cmdu_topology_notification_transmission(
             let topology_db =
                 TopologyDatabase::get_instance(local_al_mac_address, interface.clone()).await;
 
-            // Define the AL MAC TLV
-            let al_mac_address: MacAddr = local_al_mac_address;
-            let al_mac_tlv = TLV {
-                tlv_type: IEEE1905TLVType::AlMacAddress.to_u8(),
-                tlv_length: 6,
-                tlv_value: Some(al_mac_address.octets().to_vec()),
-            };
-
-            // Define the End of Message TLV
-            let end_of_message_tlv = TLV {
-                tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
-                tlv_length: 0,
-                tlv_value: None,
-            };
-
-            //Vendor Specific TLV (OUI 00:90:96, payload 00 01 00)
-            let vendor_info = VendorSpecificInfo {
-                oui: COMCAST_OUI,                        // Comcast OUI (per your request)
-                vendor_data: COMCAST_QUERY_TAG.to_vec(), // Vendor payload
-            };
-            let vendor_value = vendor_info.serialize();
-            let vendor_specific_tlv = TLV {
-                tlv_type: IEEE1905TLVType::VendorSpecificInfo.to_u8(),
-                tlv_length: vendor_value.len() as u16, // 3 (OUI) + payload length
-                tlv_value: Some(vendor_value),
-            };
-
-            let mut serialized_payload = vec![];
-            serialized_payload.extend(al_mac_tlv.serialize());
-            serialized_payload.extend(vendor_specific_tlv.serialize());
-            serialized_payload.extend(end_of_message_tlv.serialize());
+            let payload = [
+                TLV::from(AlMacAddress {
+                    al_mac_address: local_al_mac_address,
+                }),
+                TLV::from(VendorSpecificInfo {
+                    oui: COMCAST_OUI,
+                    vendor_data: COMCAST_QUERY_TAG.to_vec(),
+                }),
+                TLV::from(EndOfMessage),
+            ];
 
             // Construct the Topology Notification CMDU
             let cmdu_topology_notification = CMDU {
@@ -565,7 +435,7 @@ pub fn cmdu_topology_notification_transmission(
                 message_id,
                 fragment: 0,
                 flags: 0x80, // Not fragmented
-                payload: serialized_payload,
+                payload: payload.iter().flat_map(TLV::serialize).collect(),
             };
 
             // Serialize CMDU
@@ -724,18 +594,11 @@ pub async fn cmdu_link_metric_response_transmission(
                 rssi: interface.signal_strength_dbm.unwrap_or(0xffu8 as i8),
             };
 
-            let metric = LinkMetricRx {
+            tlvs.push(TLV::from(LinkMetricRx {
                 source_al_mac: local_al_mac_address,
                 neighbour_al_mac: neighbor.device_data.al_mac,
                 interface_pairs: vec![pair],
-            };
-
-            let metric_buf = metric.serialize();
-            tlvs.push(TLV {
-                tlv_type: IEEE1905TLVType::LinkMetricRx.to_u8(),
-                tlv_length: metric_buf.len() as u16,
-                tlv_value: Some(metric_buf),
-            })
+            }));
         }
 
         if include_tx {
@@ -752,27 +615,16 @@ pub async fn cmdu_link_metric_response_transmission(
                 phy_rate,
             };
 
-            let metric = LinkMetricTx {
+            tlvs.push(TLV::from(LinkMetricTx {
                 source_al_mac: local_al_mac_address,
                 neighbour_al_mac: neighbor.device_data.al_mac,
                 interface_pairs: vec![pair],
-            };
-
-            let metric_buf = metric.serialize();
-            tlvs.push(TLV {
-                tlv_type: IEEE1905TLVType::LinkMetricTx.to_u8(),
-                tlv_length: metric_buf.len() as u16,
-                tlv_value: Some(metric_buf),
-            })
+            }));
         }
     }
 
     // End of message TLV
-    tlvs.push(TLV {
-        tlv_type: IEEE1905TLVType::EndOfMessage.to_u8(),
-        tlv_length: 0,
-        tlv_value: None,
-    });
+    tlvs.push(TLV::from(EndOfMessage));
 
     // Construct CMDU
     let cmdu = CMDU {
@@ -782,7 +634,7 @@ pub async fn cmdu_link_metric_response_transmission(
         message_id,
         fragment: 0,
         flags: 0x80,
-        payload: tlvs.iter().map(TLV::serialize).flatten().collect(),
+        payload: tlvs.iter().flat_map(TLV::serialize).collect(),
     };
 
     match enqueue_fragmented_cmdu(&sender, target_mac, source_mac, cmdu, fragmentation).await {
