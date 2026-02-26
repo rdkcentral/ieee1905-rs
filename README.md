@@ -163,11 +163,11 @@ sequenceDiagram
     deactivate Agent
 ```
 
-## 🔁 AL Finite State Machine
+## 🔁 IEEE1905 Finite State Machines
 
-### Finite State machine Diagram
+### Finite State machine Diagram (Topology Convergence)
 
-![ARCH](docs/architecture/fsm_diagram/ieee1905_fsm.jpg)
+![ARCH](docs/architecture/fsm_diagram/ieee1905_fsm_topology.jpg)
 
 Input Event                     | Precondition                               | New Local             | New Remote                 | Output event                               |
 |----------------------------|--------------------------------------------|-----------------------|----------------------------|---------------------------------------------|
@@ -183,6 +183,34 @@ Input Event                     | Precondition                               | N
 | **ResponseSent**            | Remote= ConvergingRemote                  | (unchanged)           | ConvergedRemote            | None                                        |
 
 \* Only if remote wasn’t already `ConvergedRemote`.
+
+### Finite State machine Diagram (AL_MAC destination table look up)
+
+![ARCH](docs/architecture/fsm_diagram/ieee1905_fsm_table.jpg)
+
+Input Event                | Precondition                              | New State | Output Event
+---------------------------|-------------------------------------------|-----------------|---------------------
+IEEE1905-UP                | Local == INIT                             | LEARNING        | None
+IEEE1905-DOWN              | Local == LEARNING                         | INIT            | None
+AP_AUTOCONFIG_SEARCH       | Local == LEARNING && AL_MAC_PRESENT       | FORWARDING      | StartForwarding
+TOPOLOGY_DISCOVERY         | Local == LEARNING && AL_MAC_PRESENT       | FORWARDING      | StartForwarding
+AL_MAC_REMOVED             | Local == FORWARDING                       | LEARNING        | StopForwarding
+AL_MAC_PRESENT             | Local == FORWARDING                       | (unchanged)     | None
+
+### Finite State machine Diagram (CMDU Forwarding)
+
+![ARCH](docs/architecture/fsm_diagram/ieee1905_fsm_forwarding.jpg)
+
+Input Event                  | Precondition                     | New State     | Output Event
+----------------------------|----------------------------------|---------------|-------------------------
+HLE_REGISTRATION_SUCCESS    | State == INIT                    | Registered    | None
+HLE_REGISTRATION_ERROR      | State == INIT                    | INIT          | None
+SAP_ENABLE                  | State == Registered              | Forwarding    | None
+SAP_DISABLE                 | State == Forwarding              | Registered    | None
+EM_CMDU_INCOMING            | State == Forwarding && AL_MAC    | (unchanged)   | Forward
+EM_CMDU_INCOMING            | State == Forwarding && !AL_MAC   | (unchanged)   | Discard
+EM_CMDU_FORWARDING          | State == Forwarding && AL_MAC    | (unchanged)   | Forward
+EM_CMDU_FORWARDING          | State == Forwarding && !AL_MAC   | (unchanged)   | Discard
 
 ## 🧱 Architecture
 
