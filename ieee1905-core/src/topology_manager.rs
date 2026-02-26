@@ -34,15 +34,16 @@ use ratatui::{
     Terminal,
 };
 use tokio::{
-    sync::{OnceCell, RwLock},
+    sync::RwLock,
     task::yield_now,
     time::{interval, Duration, Instant},
 };
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument};
 // Standard library
 use indexmap::IndexMap;
 use neli::consts::rtnl::Iff;
 use std::ops::Deref;
+use std::sync::OnceLock;
 use std::{io, sync::Arc};
 use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
 use tokio::task::JoinSet;
@@ -415,37 +416,34 @@ impl Ieee1905NodeInternal {
     }
 }
 
-pub static TOPOLOGY_DATABASE: OnceCell<Arc<TopologyDatabase>> = OnceCell::const_new();
+static TOPOLOGY_DATABASE: OnceLock<Arc<TopologyDatabase>> = OnceLock::new();
 
 #[derive(Debug)]
 pub struct TopologyDatabase {
-    pub al_mac_address: Arc<RwLock<MacAddr>>,
+    pub al_mac_address: MacAddr,
+    pub interface_name: String,
     pub local_mac: Arc<RwLock<MacAddr>>,
     pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905LocalInterface>>>>,
     pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905NodeInternal>>>,
-    pub interface_name: Arc<RwLock<Option<String>>>,
     pub local_role: Arc<RwLock<Option<Role>>>,
 }
 
 impl TopologyDatabase {
     /// **Creates a new `TopologyDatabase` instance**
-    pub async fn new(al_mac_address: MacAddr, interface_name: String) -> Arc<Self> {
+    fn new(al_mac_address: MacAddr, interface_name: String) -> Arc<Self> {
         debug!(al_mac = %al_mac_address, "Database initialized");
 
-        // TODO singletons initialization must not be failable. this db should be
-        //  initialized eagerly from main, and propagated as a dependency
+        // TODO this db should be initialized eagerly from main, and propagated as a dependency
 
         // Get local MAC address from forwarding interface
-        let local_mac = Arc::new(RwLock::new(
-            get_forwarding_interface_mac(interface_name.clone()).unwrap(),
-        ));
+        let local_mac = get_forwarding_interface_mac(&interface_name);
 
-        Arc::new(TopologyDatabase {
-            al_mac_address: Arc::new(RwLock::new(al_mac_address)), // Wrapped in Arc<RwLock<T>>
-            local_mac,
+        Arc::new(Self {
+            al_mac_address,
+            interface_name,
+            local_mac: Arc::new(RwLock::new(local_mac)),
             local_interface_list: Arc::new(RwLock::new(None)),
             nodes: Arc::new(RwLock::new(IndexMap::new())),
-            interface_name: Arc::new(RwLock::new(Some(interface_name))),
             local_role: Arc::new(RwLock::new(None)),
         })
     }
@@ -473,13 +471,9 @@ impl TopologyDatabase {
     }
 
     /// **Returns a globally shared `TopologyDatabase` instance (async)**
-    pub async fn get_instance(
-        al_mac_address: MacAddr,
-        interface_name: String,
-    ) -> Arc<TopologyDatabase> {
+    pub fn get_instance(al_mac_address: MacAddr, interface_name: &str) -> Arc<TopologyDatabase> {
         TOPOLOGY_DATABASE
-            .get_or_init(|| TopologyDatabase::new(al_mac_address, interface_name))
-            .await
+            .get_or_init(|| TopologyDatabase::new(al_mac_address, interface_name.to_owned()))
             .clone()
     }
 
@@ -657,18 +651,13 @@ impl TopologyDatabase {
                 }
             }
 
-            if let Some(int_name) = self.interface_name.read().await.clone() {
-                match get_forwarding_interface_mac(int_name) {
-                    Some(e) => *self.local_mac.write().await = e,
-                    None => warn!("Failed to fetch forwarding mac address"),
-                }
-            }
+            *self.local_mac.write().await = get_forwarding_interface_mac(&self.interface_name);
         }
     }
 
     /// Tie breaker function in case we need to give priority in case of collision
     pub async fn tiebreaker(&self, remote_al_mac: MacAddr) -> bool {
-        let local_mac = *self.al_mac_address.read().await;
+        let local_mac = self.al_mac_address;
         let local_last = local_mac.5;
         let remote_last = remote_al_mac.5;
 
@@ -981,8 +970,7 @@ impl TopologyDatabase {
         let mut terminal = Terminal::new(backend)?;
 
         loop {
-            let local_mac = self.al_mac_address.read().await.to_string();
-
+            let local_mac = self.al_mac_address.to_string();
             let interfaces = self.local_interface_list.read().await.clone();
             let nodes = {
                 let lock = self.nodes.read().await;
@@ -1140,7 +1128,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_remote_controller_won() {
-        let db = TopologyDatabase::new(MacAddr::new(0, 0, 0, 0, 0, 0), "en1".to_string()).await;
+        let db = TopologyDatabase::new(MacAddr::new(0, 0, 0, 0, 0, 0), "en1".to_string());
 
         let device_mac = MacAddr::new(0, 0, 0, 0, 0, 1);
         let device_al_mac = MacAddr::new(0, 0, 0, 0, 0, 2);

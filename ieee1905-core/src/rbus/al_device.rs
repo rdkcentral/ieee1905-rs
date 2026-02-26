@@ -18,8 +18,7 @@ impl RBusProviderGetter for RBus_Al_Device {
 
         match args.path_name.as_bytes() {
             b"IEEE1905Id" => {
-                let mac_addr = db.al_mac_address.blocking_read().clone();
-                args.property.set(&format_mac_address(&mac_addr));
+                args.property.set(&format_mac_address(&db.al_mac_address));
                 Ok(())
             }
             b"InterfaceNumberOfEntries" => {
