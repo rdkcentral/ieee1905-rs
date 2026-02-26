@@ -1434,6 +1434,12 @@ impl MediaType {
     }
 }
 
+impl Default for MediaType {
+    fn default() -> Self {
+        Self::ETHERNET_802_3u
+    }
+}
+
 impl Debug for MediaType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "MediaType({:04X?})", self.0)
