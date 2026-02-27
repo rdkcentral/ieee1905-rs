@@ -34,18 +34,20 @@ use ratatui::{
     Terminal,
 };
 use tokio::{
-    sync::{OnceCell, RwLock},
+    sync::RwLock,
     task::yield_now,
     time::{interval, Duration, Instant},
 };
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument};
 // Standard library
 use indexmap::IndexMap;
 use neli::consts::rtnl::Iff;
 use std::ops::Deref;
+use std::sync::OnceLock;
 use std::{io, sync::Arc};
 use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 // Internal modules
 use crate::cmdu_codec::{
     CMDUFragmentation, DeviceIdentificationType, Ieee1905ProfileVersion, LinkMetricQuery,
@@ -81,17 +83,14 @@ pub enum UpdateType {
     QueryReceived,
     ResponseSent,
     ResponseReceived,
-}
-
-pub struct UpdateTopologyResult {
-    pub converged: bool,
-    pub transmission_event: TransmissionEvent,
+    ApAutoConfigSearch,
 }
 
 pub enum TransmissionEvent {
     SendTopologyQuery(MacAddr),
     SendTopologyResponse(MacAddr),
     SendTopologyNotification(MacAddr),
+    StartLinkMetricQueryWorker((MacAddr, CancellationToken)),
     None,
 }
 
@@ -104,6 +103,18 @@ pub struct Ieee1905LocalInterface {
     pub data: Ieee1905InterfaceData,
 }
 
+impl Default for Ieee1905LocalInterface {
+    fn default() -> Self {
+        Self {
+            name: "".to_string(),
+            index: 0,
+            flags: Iff::empty(),
+            link_stats: None,
+            data: Default::default(),
+        }
+    }
+}
+
 impl Deref for Ieee1905LocalInterface {
     type Target = Ieee1905InterfaceData;
 
@@ -112,7 +123,7 @@ impl Deref for Ieee1905LocalInterface {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Ieee1905InterfaceData {
     pub mac: MacAddr,
     pub media_type: MediaType,
@@ -267,11 +278,6 @@ impl Ieee1905NodeInfo {
 
         self.last_seen = Instant::now();
     }
-
-    pub fn has_converged(&self) -> bool {
-        self.node_state_local == StateLocal::ConvergedLocal
-            && self.node_state_remote == StateRemote::ConvergedRemote
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,7 +286,7 @@ pub enum Role {
     Enrollee,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Ieee1905DeviceData {
     pub al_mac: MacAddr,
     pub destination_frame_mac: MacAddr,
@@ -366,12 +372,29 @@ pub struct Ieee1905Node {
     pub device_data: Ieee1905DeviceData, // Device-related information
 }
 
-impl Ieee1905Node {
+impl From<&Ieee1905NodeInternal> for Ieee1905Node {
+    fn from(value: &Ieee1905NodeInternal) -> Self {
+        Self {
+            metadata: value.metadata.clone(),
+            device_data: value.device_data.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Ieee1905NodeInternal {
+    pub metadata: Ieee1905NodeInfo,
+    pub device_data: Ieee1905DeviceData,
+    link_metrics_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
+}
+
+impl Ieee1905NodeInternal {
     /// **Create a new `Ieee1905Node` instance**
     pub fn new(metadata: Ieee1905NodeInfo, device_data: Ieee1905DeviceData) -> Self {
         Self {
             metadata,
             device_data,
+            link_metrics_query_cancellation_token: None,
         }
     }
 
@@ -388,39 +411,51 @@ impl Ieee1905Node {
             self.device_data = device_data;
         }
     }
+
+    fn prepare_link_metrics_query_transmission_event_if_needed(&mut self) -> TransmissionEvent {
+        if self.link_metrics_query_cancellation_token.is_some() {
+            return TransmissionEvent::None;
+        }
+
+        let cancellation_token = CancellationToken::new();
+        let drop_guard = cancellation_token.clone().drop_guard();
+        self.link_metrics_query_cancellation_token = Some(drop_guard);
+
+        TransmissionEvent::StartLinkMetricQueryWorker((
+            self.device_data.destination_frame_mac,
+            cancellation_token,
+        ))
+    }
 }
 
-pub static TOPOLOGY_DATABASE: OnceCell<Arc<TopologyDatabase>> = OnceCell::const_new();
+static TOPOLOGY_DATABASE: OnceLock<Arc<TopologyDatabase>> = OnceLock::new();
 
 #[derive(Debug)]
 pub struct TopologyDatabase {
-    pub al_mac_address: Arc<RwLock<MacAddr>>,
+    pub al_mac_address: MacAddr,
+    pub interface_name: String,
     pub local_mac: Arc<RwLock<MacAddr>>,
     pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905LocalInterface>>>>,
-    pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905Node>>>,
-    pub interface_name: Arc<RwLock<Option<String>>>,
+    pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905NodeInternal>>>,
     pub local_role: Arc<RwLock<Option<Role>>>,
 }
 
 impl TopologyDatabase {
     /// **Creates a new `TopologyDatabase` instance**
-    pub async fn new(al_mac_address: MacAddr, interface_name: String) -> Arc<Self> {
+    pub fn new(al_mac_address: MacAddr, interface_name: String) -> Arc<Self> {
         debug!(al_mac = %al_mac_address, "Database initialized");
 
-        // TODO singletons initialization must not be failable. this db should be
-        //  initialized eagerly from main, and propagated as a dependency
+        // TODO this db should be initialized eagerly from main, and propagated as a dependency
 
         // Get local MAC address from forwarding interface
-        let local_mac = Arc::new(RwLock::new(
-            get_forwarding_interface_mac(interface_name.clone()).unwrap(),
-        ));
+        let local_mac = get_forwarding_interface_mac(&interface_name);
 
-        Arc::new(TopologyDatabase {
-            al_mac_address: Arc::new(RwLock::new(al_mac_address)), // Wrapped in Arc<RwLock<T>>
-            local_mac,
+        Arc::new(Self {
+            al_mac_address,
+            interface_name,
+            local_mac: Arc::new(RwLock::new(local_mac)),
             local_interface_list: Arc::new(RwLock::new(None)),
             nodes: Arc::new(RwLock::new(IndexMap::new())),
-            interface_name: Arc::new(RwLock::new(Some(interface_name))),
             local_role: Arc::new(RwLock::new(None)),
         })
     }
@@ -448,13 +483,9 @@ impl TopologyDatabase {
     }
 
     /// **Returns a globally shared `TopologyDatabase` instance (async)**
-    pub async fn get_instance(
-        al_mac_address: MacAddr,
-        interface_name: String,
-    ) -> Arc<TopologyDatabase> {
+    pub fn get_instance(al_mac_address: MacAddr, interface_name: &str) -> Arc<TopologyDatabase> {
         TOPOLOGY_DATABASE
-            .get_or_init(|| TopologyDatabase::new(al_mac_address, interface_name))
-            .await
+            .get_or_init(|| TopologyDatabase::new(al_mac_address, interface_name.to_owned()))
             .clone()
     }
 
@@ -465,34 +496,37 @@ impl TopologyDatabase {
 
     /// **Retrieves a device node from the database**
     pub async fn get_device(&self, al_mac: MacAddr) -> Option<Ieee1905Node> {
-        let nodes = self.nodes.read().await; // Read lock
-        nodes.get(&al_mac).cloned() // Clone to return the device node
+        let nodes = self.nodes.read().await;
+        Some(nodes.get(&al_mac)?.into())
     }
 
     /// **Retrieves a device node from the database**
     pub async fn find_device_by_port(&self, mac: MacAddr) -> Option<Ieee1905Node> {
         let nodes = self.nodes.read().await;
-        Self::find_node_by_port(nodes.values(), mac).cloned()
+        Some(Self::find_node_by_port(nodes.values(), mac)?.into())
     }
 
     pub async fn lock_node_by_port_mut(
         &self,
         mac: MacAddr,
-    ) -> Option<RwLockMappedWriteGuard<'_, Ieee1905Node>> {
+    ) -> Option<RwLockMappedWriteGuard<'_, Ieee1905NodeInternal>> {
         let nodes = self.nodes.write().await;
         RwLockWriteGuard::try_map(nodes, |e| Self::find_node_by_port_mut(e.values_mut(), mac)).ok()
     }
 
-    fn find_node_by_port<'a, I>(mut iter: I, mac: MacAddr) -> Option<&'a Ieee1905Node>
+    fn find_node_by_port<'a, I>(mut iter: I, mac: MacAddr) -> Option<&'a Ieee1905NodeInternal>
     where
-        I: Iterator<Item = &'a Ieee1905Node>,
+        I: Iterator<Item = &'a Ieee1905NodeInternal>,
     {
         iter.find(|node| node.device_data.has_port(mac))
     }
 
-    fn find_node_by_port_mut<'a, I>(mut iter: I, mac: MacAddr) -> Option<&'a mut Ieee1905Node>
+    fn find_node_by_port_mut<'a, I>(
+        mut iter: I,
+        mac: MacAddr,
+    ) -> Option<&'a mut Ieee1905NodeInternal>
     where
-        I: Iterator<Item = &'a mut Ieee1905Node>,
+        I: Iterator<Item = &'a mut Ieee1905NodeInternal>,
     {
         iter.find(|node| node.device_data.has_port(mac))
     }
@@ -524,7 +558,7 @@ impl TopologyDatabase {
 
     fn update_local_neighbours_ieee1905_compatibility(
         interfaces: &mut [Ieee1905LocalInterface],
-        ieee1905_nodes: &IndexMap<MacAddr, Ieee1905Node>,
+        ieee1905_nodes: &IndexMap<MacAddr, Ieee1905NodeInternal>,
     ) {
         for interface in interfaces {
             let Some(neighbors) = interface.data.non_ieee1905_neighbors.as_mut() else {
@@ -629,18 +663,13 @@ impl TopologyDatabase {
                 }
             }
 
-            if let Some(int_name) = self.interface_name.read().await.clone() {
-                match get_forwarding_interface_mac(int_name) {
-                    Some(e) => *self.local_mac.write().await = e,
-                    None => warn!("Failed to fetch forwarding mac address"),
-                }
-            }
+            *self.local_mac.write().await = get_forwarding_interface_mac(&self.interface_name);
         }
     }
 
     /// Tie breaker function in case we need to give priority in case of collision
     pub async fn tiebreaker(&self, remote_al_mac: MacAddr) -> bool {
-        let local_mac = *self.al_mac_address.read().await;
+        let local_mac = self.al_mac_address;
         let local_last = local_mac.5;
         let remote_last = remote_al_mac.5;
 
@@ -654,9 +683,8 @@ impl TopologyDatabase {
         local_msg_id: Option<u16>,
         remote_msg_id: Option<u16>,
         lldp_neighbor: Option<PortId>,
-    ) -> UpdateTopologyResult {
+    ) -> TransmissionEvent {
         let al_mac = device_data.al_mac;
-        let converged;
         let transmission_event;
 
         //TODO: use new update types.
@@ -760,9 +788,7 @@ impl TopologyDatabase {
                                     TransmissionEvent::None
                                 }
                             } else {
-                                tracing::debug!(
-                                    "Ignoring ResponseReceived — Node not in ConvergingLocal state"
-                                );
+                                debug!("Ignoring ResponseReceived — not in ConvergingLocal state");
                                 TransmissionEvent::None
                             }
                         }
@@ -809,14 +835,15 @@ impl TopologyDatabase {
                             //If needed we can indicate here a notification event to update topology data base in al neighbors but for now it is not needed
                             //initial DB snapshot covers current uses cases for RDK-B but we can update this part if needed in the future
                         }
+                        UpdateType::ApAutoConfigSearch => {
+                            node.prepare_link_metrics_query_transmission_event_if_needed()
+                        }
                     };
-
-                    converged = node.metadata.has_converged();
                 }
                 None => {
                     tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Node not found — inserting");
 
-                    let mut new_node = Ieee1905Node {
+                    let mut new_node = Ieee1905NodeInternal {
                         metadata: Ieee1905NodeInfo {
                             al_mac: device_data.al_mac,
                             last_update: operation,
@@ -828,33 +855,39 @@ impl TopologyDatabase {
                             node_state_remote: StateRemote::Idle,
                         },
                         device_data,
+                        link_metrics_query_cancellation_token: None,
                     };
 
-                    let node_was_crated;
-                    converged = false;
+                    let node_was_created;
                     transmission_event = match operation {
                         UpdateType::DiscoveryReceived => {
                             nodes.insert(al_mac, new_node);
-                            node_was_crated = true;
-                            tracing::debug!(al_mac = ?al_mac, "Inserted node from Discovery");
+                            node_was_created = true;
+                            debug!(al_mac = ?al_mac, "Inserted node from Discovery");
                             TransmissionEvent::SendTopologyQuery(al_mac)
                         }
                         UpdateType::QueryReceived => {
                             new_node.metadata.node_state_remote =
                                 StateRemote::ConvergingRemote(Instant::now());
                             nodes.insert(al_mac, new_node);
-                            node_was_crated = true;
-                            tracing::debug!(al_mac = ?al_mac, "Inserted node from query");
+                            node_was_created = true;
+                            debug!(al_mac = ?al_mac, "Inserted node from query");
                             TransmissionEvent::SendTopologyResponse(al_mac)
                         }
+                        UpdateType::ApAutoConfigSearch => {
+                            let node = nodes.entry(al_mac).insert_entry(new_node).into_mut();
+                            node_was_created = true;
+                            debug!(al_mac = ?al_mac, "Inserted node from ApAutoConfigSearch");
+                            node.prepare_link_metrics_query_transmission_event_if_needed()
+                        }
                         _ => {
-                            tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
-                            node_was_crated = false;
+                            debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
+                            node_was_created = false;
                             TransmissionEvent::None
                         }
                     };
 
-                    if node_was_crated {
+                    if node_was_created {
                         let mut interfaces = self.local_interface_list.write().await;
                         if let Some(vec) = interfaces.as_mut() {
                             Self::update_local_neighbours_ieee1905_compatibility(vec, &nodes);
@@ -865,10 +898,7 @@ impl TopologyDatabase {
         }
 
         debug!("Lock released — function continues safely");
-        UpdateTopologyResult {
-            converged,
-            transmission_event,
-        }
+        transmission_event
     }
 
     pub async fn handle_notification_sent(&self) {
@@ -899,13 +929,9 @@ impl TopologyDatabase {
                     debug!(%source, "link_metric_query — neighbor {e} not found");
                     return None;
                 };
-                vec![neighbor.clone()]
+                vec![neighbor.into()]
             }
-            None => nodes
-                .iter()
-                .filter(|e| *e.0 != node_al_mac)
-                .map(|e| e.1.clone())
-                .collect(),
+            None => nodes.iter().map(|e| e.1.into()).collect(),
         };
 
         Some((node_al_mac, neighbors))
@@ -956,10 +982,14 @@ impl TopologyDatabase {
         let mut terminal = Terminal::new(backend)?;
 
         loop {
-            let local_mac = self.al_mac_address.read().await.to_string();
-
+            let local_mac = self.al_mac_address.to_string();
             let interfaces = self.local_interface_list.read().await.clone();
-            let nodes = self.nodes.read().await.clone();
+            let nodes = {
+                let lock = self.nodes.read().await;
+                lock.iter()
+                    .map(|(k, v)| (*k, Ieee1905Node::from(v)))
+                    .collect::<Vec<_>>()
+            };
 
             terminal.draw(|f| {
                 let chunks = Layout::default()
@@ -1110,7 +1140,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_remote_controller_won() {
-        let db = TopologyDatabase::new(MacAddr::new(0, 0, 0, 0, 0, 0), "en1".to_string()).await;
+        let db = TopologyDatabase::new(MacAddr::new(0, 0, 0, 0, 0, 0), "en1".to_string());
 
         let device_mac = MacAddr::new(0, 0, 0, 0, 0, 1);
         let device_al_mac = MacAddr::new(0, 0, 0, 0, 0, 2);
