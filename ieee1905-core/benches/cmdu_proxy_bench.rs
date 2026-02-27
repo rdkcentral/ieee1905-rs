@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use ieee1905::cmdu::{IEEE1905TLVType, TLV, CMDU};
 use ieee1905::cmdu_codec::{CMDUFragmentation, MessageVersion};
 
@@ -38,8 +38,11 @@ fn build_cmdu() -> CMDU {
 
 fn bench_cmdu_proxy_fragment_serialize(c: &mut Criterion) {
     let cmdu = build_cmdu();
+    let input_bytes = cmdu.serialize().len() as u64;
 
-    c.bench_function("cmdu_proxy/fragment_byte_boundary_serialize", |b| {
+    let mut group = c.benchmark_group("cmdu_proxy_fragment");
+    group.throughput(Throughput::Bytes(input_bytes));
+    group.bench_function("byte_boundary_serialize", |b| {
         b.iter(|| {
             let fragments = cmdu
                 .clone()
@@ -53,12 +56,16 @@ fn bench_cmdu_proxy_fragment_serialize(c: &mut Criterion) {
             black_box(total_bytes);
         });
     });
+    group.finish();
 }
 
 fn bench_cmdu_proxy_parse_fragment_serialize(c: &mut Criterion) {
     let serialized = build_cmdu().serialize();
+    let input_bytes = serialized.len() as u64;
 
-    c.bench_function("cmdu_proxy/parse_fragment_tlv_boundary_serialize", |b| {
+    let mut group = c.benchmark_group("cmdu_proxy_parse_fragment");
+    group.throughput(Throughput::Bytes(input_bytes));
+    group.bench_function("tlv_boundary_serialize", |b| {
         b.iter(|| {
             let (_, parsed) = CMDU::parse(&serialized).expect("parse should succeed");
             let fragments = parsed
@@ -72,6 +79,7 @@ fn bench_cmdu_proxy_parse_fragment_serialize(c: &mut Criterion) {
             black_box(total_bytes);
         });
     });
+    group.finish();
 }
 
 criterion_group!(

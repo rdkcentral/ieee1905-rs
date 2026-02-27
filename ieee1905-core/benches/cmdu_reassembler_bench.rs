@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use ieee1905::cmdu::CMDU;
 use ieee1905::cmdu_reassembler::CmduReassembler;
 use pnet::datalink::MacAddr;
@@ -38,6 +38,9 @@ fn bench_cmdu_reassembler(c: &mut Criterion) {
     let mut group = c.benchmark_group("cmdu_reassembler");
     group.measurement_time(Duration::from_secs(20));
     group.warm_up_time(Duration::from_secs(5));
+    group.throughput(Throughput::Bytes(
+        (packets_per_iteration * fragments_per_packet * fragment_payload_size) as u64,
+    ));
 
     group.bench_function("reassemble_64_packets_x_16_fragments_x_512B", |b| {
         b.to_async(&rt).iter(|| async {
