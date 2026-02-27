@@ -887,6 +887,51 @@ possibly with parameters and arguments.
 
 ---
 
+### Running Cargo Tests and Benches
+
+From the repository root:
+
+Run all tests in the workspace:
+
+```sh
+cargo test
+```
+
+Run tests for a specific package:
+
+```sh
+cargo test -p ieee1905
+cargo test -p ieee1905-tests
+```
+
+Run a specific test target by name filter:
+
+```sh
+cargo test -p ieee1905 cmdu_reassembler
+```
+
+Run all benches for `ieee1905`:
+
+```sh
+cargo bench -p ieee1905
+```
+
+Run a specific bench target:
+
+```sh
+cargo bench -p ieee1905 --bench cmdu_handler_bench
+cargo bench -p ieee1905 --bench cmdu_proxy_bench
+cargo bench -p ieee1905 --bench cmdu_reassembler_bench
+cargo bench -p ieee1905 --bench codec_parse_bench
+```
+
+Run a specific benchmark case inside a bench target:
+
+```sh
+cargo bench -p ieee1905 --bench cmdu_handler_bench -- node_present
+cargo bench -p ieee1905 --bench codec_parse_bench -- codec_parse_cmdu
+```
+
 ## 🛡️ IEEE1905 security layer
 
 ### Security Storage
