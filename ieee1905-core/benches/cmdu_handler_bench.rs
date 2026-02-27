@@ -46,7 +46,7 @@ fn bench_handle_cmdu(c: &mut Criterion) {
     });
 
     rt.block_on(async {
-        let topology_db = TopologyDatabase::get_instance(local_al_mac, "lo".to_string()).await;
+        let topology_db = TopologyDatabase::get_instance(local_al_mac, "lo");
         let seeded_device = Ieee1905DeviceData::new(
             src_present,
             src_present,
