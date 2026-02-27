@@ -26,7 +26,6 @@ use ieee1905::al_sap::AlServiceAccessPoint;
 use ieee1905::cmdu_handler::*;
 use ieee1905::cmdu_message_id_generator::get_message_id_generator;
 use ieee1905::cmdu_proxy::cmdu_topology_discovery_transmission_worker;
-use ieee1905::ethernet_subject_reception::EthernetReceiver;
 use ieee1905::ethernet_subject_transmission::EthernetSender;
 use ieee1905::interface_manager::*;
 use ieee1905::lldpdu_observer::LLDPObserver;
@@ -44,6 +43,7 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::instrument;
 
+use ieee1905::ethernet_receiver::{EthernetReceiver, EthernetReceiverInterface};
 use sd_notify;
 use sd_notify::NotifyState;
 
@@ -129,8 +129,6 @@ fn main() -> anyhow::Result<()> {
 
 #[instrument(skip_all, name = "main", fields(task = next_task_id()))]
 async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
-    let mut join_sets = Vec::new();
-
     //Set AL MAC & test MAC addresses
     let forwarding_interface =
         if let Some(iface) = get_forwarding_interface_name(cli.interface.clone()) {
@@ -213,21 +211,17 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
 
     // Initialize CMDU Observer
     let cmdu_observer = CMDUObserver::new(Arc::clone(&cmdu_handler));
-    // FLAG to enable and disable LLDP
-    // Initialize LLDP Observer with chassis_id assuming al_mac an chassis id have the same value as idicated in IEEE1905
-    let lldp_observer = LLDPObserver::new(chassis_id, cli.interface.clone());
 
     tracing::info!("LLDP and CMDU observers initilized with local MAC: {al_mac}");
 
     // Initialize Ethernet Receiver
     let mut receiver = EthernetReceiver::new();
-
-    // Subscription of observers
-    receiver.subscribe(cmdu_observer);
+    receiver.subscribe(
+        EthernetReceiverInterface::find(&forwarding_interface)?,
+        EthernetReceiver::ETHER_TYPE,
+        cmdu_observer,
+    )?;
     tracing::info!("CMDU observers subscribed with local MAC: {al_mac}");
-
-    // Launch of receiver, take in account logic for Rx is sperated from Logic for Tx, so we clone the forwarding_interface
-    join_sets.push(receiver.run(&forwarding_interface)?);
 
     // Sart of the discovery process
 
@@ -238,9 +232,13 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
             interface.mac
         );
 
-        let mut lldp_receiver = EthernetReceiver::new();
-        lldp_receiver.subscribe(lldp_observer.clone());
-        join_sets.push(lldp_receiver.run(&interface.name)?);
+        let lldp_observer = LLDPObserver::new(chassis_id, &cli.interface);
+        let recv_interface = EthernetReceiverInterface {
+            mac: interface.mac,
+            if_index: interface.index as u32,
+        };
+
+        receiver.subscribe(recv_interface, EthernetReceiver::LLDP_TYPE, lldp_observer)?;
 
         let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx));
         tokio::task::spawn(lldp_discovery_worker(
@@ -251,6 +249,7 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
         ));
     }
 
+    let _receiver_drop_guard = receiver.start();
     let discovery_interface_ieee1905 = forwarding_interface.clone();
 
     tracing::debug!("Starting IEEE1905 Discovery on {}", forwarding_interface);

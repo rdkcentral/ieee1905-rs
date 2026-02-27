@@ -19,9 +19,8 @@
 
 use crate::cmdu::{CMDUType, CMDU};
 use crate::cmdu_handler::CMDUHandler;
-use crate::ethernet_subject_reception::EthernetFrameObserver;
+use crate::ethernet_receiver::EthernetReceiverObserver;
 use crate::next_task_id;
-use async_trait::async_trait;
 use pnet::datalink::MacAddr;
 use std::sync::Arc;
 use tracing::{error, info_span, trace, warn, Instrument};
@@ -37,10 +36,9 @@ impl CMDUObserver {
     }
 }
 
-#[async_trait]
-impl EthernetFrameObserver for CMDUObserver {
-    async fn on_frame(
-        &self,
+impl EthernetReceiverObserver for CMDUObserver {
+    fn on_frame(
+        &mut self,
         interface_mac: MacAddr,
         frame: &[u8],
         source_mac: MacAddr,
@@ -83,9 +81,5 @@ impl EthernetFrameObserver for CMDUObserver {
             }
         }
         tracing::trace!("Processing frame DONE");
-    }
-
-    fn get_ethertype(&self) -> u16 {
-        0x893A // IEEE 1905 CMDU EtherType
     }
 }

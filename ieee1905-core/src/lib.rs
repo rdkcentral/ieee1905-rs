@@ -27,7 +27,7 @@ pub mod cmdu_observer;
 pub mod cmdu_proxy;
 pub mod cmdu_reassembler;
 pub mod crypto_engine;
-pub mod ethernet_subject_reception;
+pub mod ethernet_receiver;
 pub mod ethernet_subject_transmission;
 pub mod interface_manager;
 mod linux;
@@ -63,7 +63,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 // ───── Reexports: commonly used components ─────
 pub use cmdu_message_id_generator::MessageIdGenerator;
 pub use cmdu_observer::CMDUObserver;
-pub use ethernet_subject_reception::EthernetReceiver;
 pub use ethernet_subject_transmission::EthernetSender;
 pub use lldpdu_observer::LLDPObserver;
 pub use sdu_codec::SDU;
