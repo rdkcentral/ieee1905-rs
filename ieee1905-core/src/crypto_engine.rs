@@ -32,6 +32,7 @@ pub struct CryptoContext {
     pub session: Session,
     pub gtk_key: ObjectHandle,
     pub pmk_key: ObjectHandle,
+    pub ptk_key: ObjectHandle,
 }
 
 // Global CryptoContext instance needed for cryptographic operations such as GTK and PMK handling.
@@ -52,14 +53,16 @@ pub static CRYPTO_CONTEXT: Lazy<Arc<Mutex<CryptoContext>>> = Lazy::new(|| {
         .login(UserType::User, Some(&AuthPin::new(pin.into())))
         .expect("Login failed");
 
-    // Retrieve GTK and PMK keys
+    // Retrieve GTK, PMK and PTK keys
     let gtk_key = find_key(&mut session, "1905GTK", 0x01).expect("GTK key not found");
     let pmk_key = find_key(&mut session, "1905PMK", 0x02).expect("PMK key not found");
+    let ptk_key = find_key(&mut session, "1905PTK", 0x03).expect("PTK key not found");
 
     Arc::new(Mutex::new(CryptoContext {
         session,
         gtk_key,
         pmk_key,
+        ptk_key,
     }))
 });
 // Helper function to find a key by label and ID
