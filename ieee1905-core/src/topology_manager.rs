@@ -103,6 +103,18 @@ pub struct Ieee1905LocalInterface {
     pub data: Ieee1905InterfaceData,
 }
 
+impl Default for Ieee1905LocalInterface {
+    fn default() -> Self {
+        Self {
+            name: "".to_string(),
+            index: 0,
+            flags: Iff::empty(),
+            link_stats: None,
+            data: Default::default(),
+        }
+    }
+}
+
 impl Deref for Ieee1905LocalInterface {
     type Target = Ieee1905InterfaceData;
 
@@ -111,7 +123,7 @@ impl Deref for Ieee1905LocalInterface {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Ieee1905InterfaceData {
     pub mac: MacAddr,
     pub media_type: MediaType,
@@ -274,7 +286,7 @@ pub enum Role {
     Enrollee,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Ieee1905DeviceData {
     pub al_mac: MacAddr,
     pub destination_frame_mac: MacAddr,
@@ -430,7 +442,7 @@ pub struct TopologyDatabase {
 
 impl TopologyDatabase {
     /// **Creates a new `TopologyDatabase` instance**
-    fn new(al_mac_address: MacAddr, interface_name: String) -> Arc<Self> {
+    pub fn new(al_mac_address: MacAddr, interface_name: String) -> Arc<Self> {
         debug!(al_mac = %al_mac_address, "Database initialized");
 
         // TODO this db should be initialized eagerly from main, and propagated as a dependency

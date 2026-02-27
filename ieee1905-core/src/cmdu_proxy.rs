@@ -21,6 +21,7 @@ use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
+use crate::tlv_cmdu_codec::TLVTrait;
 use crate::topology_manager::{Ieee1905Node, Role, TopologyDatabase, UpdateType};
 use crate::SDU;
 use crate::{next_task_id, MessageIdGenerator};
@@ -239,84 +240,6 @@ pub fn cmdu_topology_response_transmission(
             let destination_mac = node.device_data.destination_frame_mac;
             let fragmentation = node.device_data.supported_fragmentation;
 
-            // Construct local interfaces
-            let local_interfaces: Vec<LocalInterface> = {
-                let interfaces = topology_db.local_interface_list.read().await;
-                interfaces
-                    .iter()
-                    .flatten()
-                    .map(|iface| LocalInterface {
-                        mac_address: iface.mac,
-                        media_type: iface.media_type,
-                        special_info: iface.media_type_extra.clone(),
-                    })
-                    .collect()
-            };
-
-            // Construct DeviceBridgingCapability TLV
-            let device_bridging_capability_tlv = {
-                let mut tuples_by_bridge = HashMap::<u32, Vec<MacAddr>>::new();
-
-                let interfaces = topology_db.local_interface_list.read().await;
-                for interface in interfaces.iter().flatten() {
-                    if let Some(bridging_tuple) = interface.bridging_tuple {
-                        tuples_by_bridge
-                            .entry(bridging_tuple)
-                            .or_default()
-                            .push(interface.mac);
-                    }
-                }
-
-                let mut tuples = Vec::new();
-                for tuple in tuples_by_bridge.into_values() {
-                    if tuple.len() > 1 {
-                        tuples.push(BridgingTuple {
-                            bridging_mac_count: tuple.len() as u8,
-                            bridging_mac_list: tuple,
-                        });
-                    }
-                }
-
-                if !tuples.is_empty() {
-                    Some(TLV::from(DeviceBridgingCapability {
-                        bridging_tuples_count: tuples.len() as u8,
-                        bridging_tuples_list: tuples,
-                    }))
-                } else {
-                    None
-                }
-            };
-
-            // Construct ieee1905 neighbors
-            let ieee_neighbors_list: Vec<IEEE1905Neighbor> = {
-                let nodes = topology_db.nodes.read().await;
-                let list = nodes.iter().filter_map(|(neighbor_mac, neighbor_node)| {
-                    if *neighbor_mac == local_al_mac_address {
-                        return None; // Don't include your self as a neighbor
-                    }
-                    Some(IEEE1905Neighbor {
-                        neighbor_al_mac: *neighbor_mac,
-                        neighbor_flags: match neighbor_node.metadata.lldp_neighbor.is_some() {
-                            true => 0b1000_0000,
-                            false => 0b0000_0000,
-                        },
-                    })
-                });
-                list.collect()
-            };
-
-            // Construct non-ieee1905 neighbors
-            let non_ieee_neighbors_list_tlv_vec = {
-                let interfaces = topology_db.local_interface_list.read().await;
-                Vec::from_iter(interfaces.iter().flatten().map(|e| {
-                    let interfaces = e.non_ieee1905_neighbors.as_deref();
-                    TLV::from(NonIeee1905NeighborDevices {
-                        local_mac_address: e.mac,
-                        neighborhood_list: interfaces.unwrap_or_default().to_owned(),
-                    })
-                }))
-            };
-
             // Building TLV payload
             let mut payload = vec![
                 TLV::from(AlMacAddress {
@@ -326,18 +249,12 @@ pub fn cmdu_topology_response_transmission(
                     oui: COMCAST_OUI,
                     vendor_data: COMCAST_QUERY_TAG.to_vec(),
                 }),
-                TLV::from(DeviceInformation::new(
-                    local_al_mac_address,
-                    local_interfaces,
-                )),
-                TLV::from(Ieee1905NeighborDevice {
-                    local_mac_address: interface_mac_address,
-                    neighborhood_list: ieee_neighbors_list,
-                }),
+                TLV::from(EndOfMessage),
             ];
-            payload.extend(non_ieee_neighbors_list_tlv_vec);
-            payload.extend(device_bridging_capability_tlv);
-            payload.push(TLV::from(EndOfMessage));
+
+            if let Err(e) = inject_topology_response_tlvs(&mut payload, &topology_db).await {
+                return error!(%e, "failed to inject topo TLVs");
+            }
 
             // Construct the CMDU
             let cmdu_topology_response = CMDU {
@@ -388,6 +305,113 @@ pub fn cmdu_topology_response_transmission(
         }
             .instrument(info_span!(parent: None, "cmdu_response_transmission", task = next_task_id())),
     );
+}
+
+async fn inject_topology_response_tlvs(
+    vec: &mut Vec<TLV>,
+    db: &TopologyDatabase,
+) -> anyhow::Result<()> {
+    let Some(end_of_message_tlv) = vec.pop() else {
+        anyhow::bail!("EndOfMessage TLV was not found");
+    };
+
+    if end_of_message_tlv.tlv_type != EndOfMessage::TYPE.to_u8() {
+        vec.push(end_of_message_tlv);
+        anyhow::bail!("TLV list doesn't end with EndOfMessage");
+    }
+
+    let filtered_types = [
+        DeviceInformation::TYPE.to_u8(),
+        DeviceBridgingCapability::TYPE.to_u8(),
+        Ieee1905NeighborDevice::TYPE.to_u8(),
+        NonIeee1905NeighborDevices::TYPE.to_u8(),
+    ];
+    vec.retain(|e| !filtered_types.contains(&e.tlv_type));
+
+    // injecting DeviceInformation
+    vec.push({
+        let local_interfaces = db.local_interface_list.read().await;
+        let local_interfaces = local_interfaces.iter().flatten().map(|e| LocalInterface {
+            mac_address: e.mac,
+            media_type: e.media_type,
+            special_info: e.media_type_extra.clone(),
+        });
+
+        TLV::from(DeviceInformation::new(
+            db.al_mac_address,
+            local_interfaces.collect(),
+        ))
+    });
+
+    // injecting DeviceBridgingCapability
+    {
+        let mut by_bridge = HashMap::<u32, Vec<MacAddr>>::new();
+
+        let local_interfaces = db.local_interface_list.read().await;
+        for interface in local_interfaces.iter().flatten() {
+            if let Some(tuple) = interface.bridging_tuple {
+                by_bridge.entry(tuple).or_default().push(interface.mac);
+            }
+        }
+
+        let mut tuples = Vec::new();
+        for tuple in by_bridge.into_values() {
+            if tuple.len() > 1 {
+                tuples.push(BridgingTuple {
+                    bridging_mac_count: tuple.len() as u8,
+                    bridging_mac_list: tuple,
+                });
+            }
+        }
+
+        if !tuples.is_empty() {
+            vec.push(TLV::from(DeviceBridgingCapability {
+                bridging_tuples_count: tuples.len() as u8,
+                bridging_tuples_list: tuples,
+            }));
+        }
+    }
+
+    // injecting Ieee1905NeighborDevice
+    {
+        let local_mac_address = db.get_forwarding_interface_mac().await;
+        let nodes = db.nodes.read().await;
+
+        let neighborhood_list = Vec::from_iter(nodes.iter().filter_map(|(mac, node)| {
+            if *mac == db.al_mac_address {
+                return None; // Don't include your self as a neighbor
+            }
+            Some(IEEE1905Neighbor {
+                neighbor_al_mac: *mac,
+                neighbor_flags: match node.metadata.lldp_neighbor.is_some() {
+                    true => 0b1000_0000,
+                    false => 0b0000_0000,
+                },
+            })
+        }));
+
+        if !neighborhood_list.is_empty() {
+            vec.push(TLV::from(Ieee1905NeighborDevice {
+                local_mac_address,
+                neighborhood_list,
+            }));
+        }
+    }
+
+    // injecting NonIeee1905NeighborDevices
+    {
+        let local_interfaces = db.local_interface_list.read().await;
+        vec.extend(local_interfaces.iter().flatten().map(|e| {
+            let interfaces = e.non_ieee1905_neighbors.as_deref();
+            TLV::from(NonIeee1905NeighborDevices {
+                local_mac_address: e.mac,
+                neighborhood_list: interfaces.unwrap_or_default().to_owned(),
+            })
+        }));
+    }
+
+    vec.push(end_of_message_tlv);
+    Ok(())
 }
 
 pub fn cmdu_topology_notification_transmission(
@@ -657,26 +681,19 @@ pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>
         }
 
         trace!(?sdu, "Parsing CMDU from SDU payload");
+        let source_al_mac = sdu.source_al_mac_address;
         let destination_al_mac = sdu.destination_al_mac_address;
         let fragmentation;
+
         match CMDU::parse(&sdu.payload) {
-            Ok((_, cmdu)) => {
-                let destination_mac = if sdu.destination_al_mac_address == IEEE1905_CONTROL_ADDRESS
-                {
+            Ok((_, mut cmdu)) => {
+                let topology_db = TopologyDatabase::get_instance(source_al_mac, &interface);
+                let destination_mac = if sdu.destination_al_mac_address == IEEE1905_CONTROL_ADDRESS {
                     trace!("Parsing CMDU from SDU payload destination mac address is IEEE1905_CONTROL_ADDRESS");
                     fragmentation = CMDUFragmentation::default();
                     IEEE1905_CONTROL_ADDRESS
                 } else {
-                    trace!(
-                        "Acquiry topology database for source al mac address {}",
-                        sdu.source_al_mac_address
-                    );
-
-                    let topology_db = TopologyDatabase::get_instance(
-                        sdu.source_al_mac_address,
-                        &interface,
-                    );
-
+                    trace!("Acquiry topology database for source al mac address {source_al_mac}");
                     trace!("Searching for destination {destination_al_mac} in topology database");
 
                     let Some(node) = topology_db.get_device(sdu.destination_al_mac_address).await else {
@@ -686,12 +703,25 @@ pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>
                     fragmentation = node.device_data.supported_fragmentation;
                     node.device_data.destination_frame_mac
                 };
+
                 let source_mac = match get_mac_address_by_interface(&interface) {
                     Some(mac) => mac,
                     None => {
                         return warn!("Interface {} not found or has no MAC address", interface);
                     }
                 };
+
+                if cmdu.message_type == CMDUType::TopologyResponse.to_u16() {
+                    let Ok(mut tlvs) = cmdu.get_tlvs() else {
+                        return error!("Failed to parse topo response TLVs");
+                    };
+                    if let Err(e) = inject_topology_response_tlvs(&mut tlvs, &topology_db).await {
+                        return error!(%e, "Failed to inject topo response TLVs");
+                    }
+                    debug!("injecting topology response TLVs");
+                    cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
+                    trace!(?cmdu, "injected topology response TLVs");
+                }
 
                 if let Err(e) = enqueue_fragmented_cmdu(&sender, destination_mac, source_mac, cmdu, fragmentation).await {
                     error!("Failed to send CMDU: {e}");
@@ -730,4 +760,127 @@ async fn enqueue_fragmented_cmdu(
         debug!(fragment = fragment.fragment, "CMDU fragment sent")
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::topology_manager::{Ieee1905DeviceData, Ieee1905LocalInterface};
+
+    #[tokio::test]
+    async fn test_inject_topology_response_tlvs_failure() {
+        let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
+        let response = inject_topology_response_tlvs(&mut Vec::new(), &db).await;
+        assert!(response.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_inject_topology_response_tlvs_clear() {
+        let local_interface = LocalInterface::new(
+            MacAddr::zero(),
+            MediaType::default(),
+            MediaTypeSpecialInfo::Other(vec![]),
+        );
+
+        let mut vec = vec![
+            TLV::from(DeviceInformation::new(
+                MacAddr::broadcast(),
+                vec![local_interface.clone(), local_interface.clone()],
+            )),
+            TLV::from(DeviceBridgingCapability {
+                bridging_tuples_count: 0,
+                bridging_tuples_list: vec![],
+            }),
+            TLV::from(Ieee1905NeighborDevice {
+                local_mac_address: Default::default(),
+                neighborhood_list: vec![],
+            }),
+            TLV::from(NonIeee1905NeighborDevices {
+                local_mac_address: Default::default(),
+                neighborhood_list: vec![],
+            }),
+            TLV::from(EndOfMessage),
+        ];
+
+        let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
+        let response = inject_topology_response_tlvs(&mut vec, &db).await;
+        assert!(response.is_ok());
+        assert_eq!(vec.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_inject_topology_response_tlvs() {
+        let mut if1 = Ieee1905LocalInterface::default();
+        if1.data.mac = MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x01);
+        if1.data.bridging_flag = true;
+        if1.data.bridging_tuple = Some(1);
+        if1.data.non_ieee1905_neighbors = Some(vec![
+            MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x02, 0x01),
+            MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x02, 0x02),
+            MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x02, 0x03),
+        ]);
+
+        let mut if2 = Ieee1905LocalInterface::default();
+        if2.data.mac = MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x02);
+        if2.data.bridging_flag = true;
+        if2.data.bridging_tuple = Some(1);
+
+        let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
+        *db.local_interface_list.write().await = Some(vec![if1.clone(), if2.clone()]);
+
+        let mut device = Ieee1905DeviceData::default();
+        device.al_mac = MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x01, 0x01);
+        db.update_ieee1905_topology(
+            device.clone(),
+            UpdateType::DiscoveryReceived,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        let mut vec = vec![TLV::from(EndOfMessage)];
+        let response = inject_topology_response_tlvs(&mut vec, &db).await;
+        assert!(response.is_ok());
+
+        let Some(device_info) = DeviceInformation::find(&vec) else {
+            panic!();
+        };
+        assert_eq!(device_info.al_mac_address, db.al_mac_address);
+        assert_eq!(device_info.local_interface_count, 2);
+
+        let Some(bridging_capability) = DeviceBridgingCapability::find(&vec) else {
+            panic!();
+        };
+        assert_eq!(bridging_capability.bridging_tuples_list.len(), 1);
+        assert_eq!(
+            bridging_capability.bridging_tuples_list[0].bridging_mac_list,
+            vec![if1.mac, if2.mac],
+        );
+
+        let Some(ieee1905_list) = Ieee1905NeighborDevice::find(&vec) else {
+            panic!();
+        };
+        assert_eq!(ieee1905_list.local_mac_address, *db.local_mac.read().await);
+        assert_eq!(ieee1905_list.neighborhood_list.len(), 1);
+        assert_eq!(
+            ieee1905_list.neighborhood_list[0].neighbor_al_mac,
+            device.al_mac
+        );
+
+        let Some(non_ieee1905_list) = NonIeee1905NeighborDevices::find(&vec) else {
+            panic!();
+        };
+        assert_eq!(non_ieee1905_list.local_mac_address, if1.mac);
+        assert_eq!(non_ieee1905_list.neighborhood_list.len(), 3);
+        assert_eq!(
+            non_ieee1905_list.neighborhood_list,
+            if1.non_ieee1905_neighbors.as_deref().unwrap_or_default()
+        );
+
+        let Some(last) = vec.last() else {
+            panic!();
+        };
+        assert_eq!(last.tlv_type, EndOfMessage::TYPE.to_u8());
+    }
 }
