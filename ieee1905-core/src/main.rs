@@ -89,6 +89,14 @@ fn main() -> anyhow::Result<()> {
     // Start the Tokio console subscriber
     std::env::set_var("RUST_CONSOLE_BIND", "0.0.0.0:6669");
 
+    // tokio creates {available_parallelism} workers
+    // we change it to half of that (but at least 4) unless overridden from the outside
+    if std::env::var_os("TOKIO_WORKER_THREADS").is_none() {
+        let max_threads = std::thread::available_parallelism();
+        let threads = (max_threads.map_or(8, NonZeroUsize::get) / 2).max(4);
+        std::env::set_var("TOKIO_WORKER_THREADS", threads.to_string());
+    }
+
     let _guard = logger::init_logger(&cli);
     tracing::info!("Tracing initialized!");
 
