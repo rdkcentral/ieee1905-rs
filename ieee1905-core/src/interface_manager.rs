@@ -396,11 +396,9 @@ async fn call_nl80211_get_interfaces(
         let Ok(if_name) = handle.get_attr_payload_as_with_len(Nl80211Attribute::IfName) else {
             continue;
         };
-        let Ok(frequency) = handle.get_attr_payload_as(Nl80211Attribute::WiphyFreq) else {
-            continue;
-        };
 
         let if_type = handle.get_attr_payload_as(Nl80211Attribute::IfType).ok();
+        let frequency = handle.get_attr_payload_as(Nl80211Attribute::WiphyFreq).ok();
         let channel_width = handle
             .get_attr_payload_as(Nl80211Attribute::ChannelWidth)
             .ok();
@@ -418,7 +416,7 @@ async fn call_nl80211_get_interfaces(
             if_name,
             if_type,
             phy_rate: 1_000_000,
-            frequency,
+            frequency: frequency.unwrap_or_default(),
             channel_width,
             center_freq_index1: center_freq1.and_then(get_wifi_center_frequency_index),
             center_freq_index2: center_freq2.and_then(get_wifi_center_frequency_index),
