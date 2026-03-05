@@ -611,6 +611,14 @@ In order to analyze service with tokio-console use:
 /usr/bin/ieee1905 -c
 ```
 
+#### Disable LLDP revivers
+
+In order to disable LLDP receiver workers use:
+
+```shell
+/usr/bin/ieee1905 --no-lldp-receivers
+```
+
 #### Change unix socket
 
 Change unix sockets to ```ctrl.sock``` and ```data.sock```

@@ -29,8 +29,9 @@ use crate::linux::eth_tool::{
 };
 use crate::linux::if_link::{RtnlLinkStats, RtnlLinkStats64};
 use crate::linux::nl80211::{
-    Nl80211Attribute, Nl80211ChannelWidth, Nl80211Command, Nl80211IfType, Nl80211RateInfo,
-    Nl80211StaInfo, Nl80211SurveyInfoAttr, NL80211_GENL_NAME,
+    Nl80211Attribute, Nl80211Band, Nl80211BandAttr, Nl80211BandIfTypeAttr, Nl80211BitrateAttr,
+    Nl80211ChannelWidth, Nl80211Command, Nl80211IfType, Nl80211RateInfo, Nl80211StaInfo,
+    Nl80211SurveyInfoAttr, NL80211_GENL_NAME,
 };
 use crate::topology_manager::{Ieee1905InterfaceData, Ieee1905LocalInterface};
 use indexmap::IndexMap;
@@ -158,7 +159,7 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
         interface.data.signal_strength_dbm = info.signal_strength_dbm;
         interface.data.media_type = info.media_type;
         interface.data.media_type_extra = MediaTypeSpecialInfo::Wifi(MediaTypeSpecialInfoWifi {
-            bssid: info.bssid.unwrap_or_default(),
+            bssid: info.bssid.unwrap_or(info.mac),
             role: convert_if_type_to_role(info.if_type, info.frequency).unwrap_or_default(),
             reserved: 0,
             ap_channel_band: convert_channel_width_to_band(info.channel_width).unwrap_or_default(),
@@ -225,16 +226,12 @@ async fn get_all_interfaces() -> anyhow::Result<Vec<LinkEthernetInfo>> {
         };
 
         fn get_vlan_id(handle: &RtAttrHandle<Ifla>) -> Option<u16> {
-            let link_info = handle
-                .get_nested_attributes::<IflaInfo>(Ifla::Linkinfo)
-                .ok()?;
+            let link_info = handle.get_nested_attributes(Ifla::Linkinfo).ok()?;
             let kind = link_info
                 .get_attr_payload_as_with_len_borrowed::<&[u8]>(IflaInfo::Kind)
                 .ok()?;
             if kind == b"vlan\0" {
-                let data = link_info
-                    .get_nested_attributes::<IflaVlan>(IflaInfo::Data)
-                    .ok()?;
+                let data = link_info.get_nested_attributes(IflaInfo::Data).ok()?;
                 return data.get_attr_payload_as(IflaVlan::Id).ok();
             }
             None
@@ -312,6 +309,7 @@ async fn call_ether_get_neighbors(
 #[derive(Debug)]
 struct WirelessInterfaceInfo {
     mac: MacAddr,
+    phy_index: u32,
     bssid: Option<MacAddr>,
     if_index: i32,
     if_name: String,
@@ -331,7 +329,19 @@ async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>>
     let nl80211_family_id = router.resolve_genl_family(NL80211_GENL_NAME).await?;
 
     let mut interfaces = call_nl80211_get_interfaces(&router, nl80211_family_id).await?;
+    let phy_map = call_nl80211_get_wiphy(&router, nl80211_family_id).await?;
+
     for interface in interfaces.iter_mut() {
+        if let Some(phy) = phy_map.get(&interface.phy_index) {
+            interface.media_type = get_wireless_media_type(interface.frequency, phy);
+        } else {
+            warn!(
+                if_name = interface.if_name,
+                if_index = interface.if_index,
+                phy_index = interface.phy_index,
+                "failed to find phy for interface",
+            );
+        }
         if let Err(e) = call_nl80211_get_station(&router, nl80211_family_id, interface).await {
             warn!(
                 if_name = interface.if_name,
@@ -390,6 +400,9 @@ async fn call_nl80211_get_interfaces(
         let Ok(mac) = handle.get_attr_payload_as::<[u8; 6]>(Nl80211Attribute::Mac) else {
             continue;
         };
+        let Ok(phy_index) = handle.get_attr_payload_as(Nl80211Attribute::Wiphy) else {
+            continue;
+        };
         let Ok(if_index) = handle.get_attr_payload_as(Nl80211Attribute::IfIndex) else {
             continue;
         };
@@ -411,6 +424,7 @@ async fn call_nl80211_get_interfaces(
 
         interfaces.push(WirelessInterfaceInfo {
             mac: MacAddr::from(mac),
+            phy_index,
             bssid: None,
             if_index,
             if_name,
@@ -475,8 +489,6 @@ async fn call_nl80211_get_station(
             if let Ok(rate_info) = sta_info.get_nested_attributes(Nl80211StaInfo::TxBitrate) {
                 let bitrate = get_station_bitrate_bps(&rate_info).unwrap_or_default();
                 interface.phy_rate = bitrate;
-                interface.media_type =
-                    get_wireless_media_type(interface.frequency, interface.phy_rate, &rate_info);
             }
             if let Some(signal) = get_signal_strength(&sta_info) {
                 interface.signal_strength_dbm = Some(signal);
@@ -533,6 +545,94 @@ async fn call_nl80211_get_survey(
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Default)]
+struct WirelessPhyInfo {
+    bands: IndexMap<Nl80211Band, WirelessPhyBand>,
+}
+
+#[derive(Debug, Default)]
+struct WirelessPhyBand {
+    max_bitrate: u64,
+    is_ht: bool,
+    is_vht: bool,
+    is_he: bool,
+    is_eht: bool,
+}
+
+async fn call_nl80211_get_wiphy(
+    router: &NlRouter,
+    family_id: u16,
+) -> anyhow::Result<IndexMap<u32, WirelessPhyInfo>> {
+    let nl_attrs = NlattrBuilder::default()
+        .nla_type(
+            AttrTypeBuilder::default()
+                .nla_type(Nl80211Attribute::SplitWiphyDump)
+                .build()?,
+        )
+        .nla_payload(())
+        .build()?;
+
+    let nl_message = GenlmsghdrBuilder::<_, Nl80211Attribute>::default()
+        .cmd(Nl80211Command::GetWiphy)
+        .attrs(GenlBuffer::from_iter([nl_attrs]))
+        .version(1)
+        .build()?;
+
+    let mut recv = router
+        .send::<_, _, GenlId, Genlmsghdr<Nl80211Command, Nl80211Attribute>>(
+            family_id,
+            NlmF::DUMP | NlmF::REQUEST | NlmF::ACK,
+            NlPayload::Payload(nl_message),
+        )
+        .await?;
+
+    let mut result = IndexMap::new();
+    while let Some(message) = recv.next().await {
+        let message: Nlmsghdr<GenlId, Genlmsghdr<Nl80211Command, Nl80211Attribute>> = message?;
+        let Some(payload) = message.get_payload() else {
+            continue;
+        };
+
+        let handle = payload.attrs().get_attr_handle();
+        let index = handle.get_attr_payload_as::<u32>(Nl80211Attribute::Wiphy)?;
+        let phy = result.entry(index).or_insert_with(WirelessPhyInfo::default);
+
+        let bands = handle.get_nested_attributes::<Nl80211Band>(Nl80211Attribute::WiphyBands);
+        for band in bands.ok().iter().flat_map(|e| e.iter()) {
+            let phy_band = phy.bands.entry(*band.nla_type().nla_type()).or_default();
+            let band_attr = band.get_attr_handle()?;
+
+            phy_band.is_vht |= band_attr.get_attribute(Nl80211BandAttr::VhtCapa).is_some();
+            phy_band.is_ht |= band_attr.get_attribute(Nl80211BandAttr::HtCapa).is_some();
+
+            if let Some(data_list) = band_attr.get_attribute(Nl80211BandAttr::IfTypeData) {
+                let data_list = data_list.get_attr_handle::<u16>()?;
+                for data in data_list.iter() {
+                    let data = data.get_attr_handle()?;
+                    phy_band.is_eht |= data
+                        .get_attribute(Nl80211BandIfTypeAttr::EhtCapPhy)
+                        .is_some();
+
+                    phy_band.is_he |= data
+                        .get_attribute(Nl80211BandIfTypeAttr::HeCapPhy)
+                        .is_some();
+                }
+            }
+
+            if let Some(rates_list) = band_attr.get_attribute(Nl80211BandAttr::Rates) {
+                let rates_list = rates_list.get_attr_handle::<u16>()?;
+                for rates in rates_list.iter() {
+                    let rates = rates.get_attr_handle()?;
+                    if let Ok(rate) = rates.get_attr_payload_as::<u32>(Nl80211BitrateAttr::Rate) {
+                        phy_band.max_bitrate = phy_band.max_bitrate.max(rate as u64 * 100_000);
+                    }
+                }
+            }
+        }
+    }
+    Ok(result)
 }
 
 #[derive(Debug)]
@@ -637,14 +737,6 @@ fn get_link_stats(handle: &RtAttrHandle<Ifla>) -> Option<RtnlLinkStats64> {
         }
     }
     if let Ok(stats) = handle.get_attr_payload_as_with_len_borrowed::<&[u8]>(Ifla::Stats) {
-        if stats.len() != size_of::<RtnlLinkStats>() {
-            warn!(
-                expected = size_of::<RtnlLinkStats>(),
-                actual = stats.len(),
-                "unusual {} size",
-                std::any::type_name::<RtnlLinkStats>(),
-            );
-        }
         unsafe {
             return Some(std::ptr::read_unaligned(stats.as_ptr().cast::<RtnlLinkStats>()).into());
         }
@@ -662,48 +754,47 @@ fn get_station_bitrate_bps(handle: &GenlAttrHandle<Nl80211RateInfo>) -> Option<u
     None
 }
 
-fn get_wireless_media_type(
-    frequency: u32,
-    bitrate: u64,
-    rate_info: &GenlAttrHandle<Nl80211RateInfo>,
-) -> MediaType {
-    let is_2_4 = frequency < 3000;
-
+fn get_wireless_media_type(frequency: u32, phy: &WirelessPhyInfo) -> MediaType {
     if frequency > 57_000 {
         // 802.11ad
         return MediaType::WIRELESS_802_11ad_60;
     }
 
-    if rate_info.get_attribute(Nl80211RateInfo::EhtMcs).is_some() {
+    let band = get_band_from_frequency(frequency).unwrap_or(Nl80211Band::Band2GHz);
+    let Some(phy_band) = phy.bands.get(&band) else {
+        return MediaType::default();
+    };
+
+    if phy_band.is_eht {
         // 802.11be
         return MediaType::WIRELESS_802_11be;
     }
 
-    if rate_info.get_attribute(Nl80211RateInfo::HeMcs).is_some() {
+    if phy_band.is_he {
         // 802.11ax
         return MediaType::WIRELESS_802_11ax;
     }
 
-    if rate_info.get_attribute(Nl80211RateInfo::VhtMcs).is_some() {
+    if phy_band.is_vht {
         // 802.11ac
         return MediaType::WIRELESS_802_11ac_5;
     }
 
-    if rate_info.get_attribute(Nl80211RateInfo::Mcs).is_some() {
+    if phy_band.is_ht {
         // 802.11n
-        return if is_2_4 {
+        return if band == Nl80211Band::Band2GHz {
             MediaType::WIRELESS_802_11n_2_4
         } else {
             MediaType::WIRELESS_802_11n_5
         };
     }
 
-    // 802.11a
-    if !is_2_4 {
+    if band != Nl80211Band::Band2GHz {
+        // 802.11a
         return MediaType::WIRELESS_802_11a_5;
     }
 
-    if bitrate > 11_000_000 {
+    if phy_band.max_bitrate > 11_000_000 {
         // 802.11b
         MediaType::WIRELESS_802_11b_2_4
     } else {
@@ -732,14 +823,23 @@ fn get_signal_strength(handle: &GenlAttrHandle<Nl80211StaInfo>) -> Option<i8> {
     None
 }
 
+fn get_band_from_frequency(frequency: u32) -> Option<Nl80211Band> {
+    Some(match frequency {
+        2_400..2_500 => Nl80211Band::Band2GHz,
+        5_150..5_900 => Nl80211Band::Band5GHz,
+        5_925..7_125 => Nl80211Band::Band6GHz,
+        _ => return None,
+    })
+}
+
 ///
 /// https://schupen.net/lib/wifi/802.11ac-2013.pdf
 ///
 fn get_wifi_center_frequency_index(center_frequency: u32) -> Option<u8> {
-    let starting_frequency = match center_frequency {
-        2_400..2_500 => Some(2407),
-        5_150..5_900 => Some(5000),
-        5_925..7_125 => Some(5950),
+    let starting_frequency = match get_band_from_frequency(center_frequency)? {
+        Nl80211Band::Band2GHz => Some(2407),
+        Nl80211Band::Band5GHz => Some(5000),
+        Nl80211Band::Band6GHz => Some(5950),
         _ => None,
     };
     starting_frequency.map(|e| center_frequency.saturating_sub(e).div(5) as u8)
@@ -748,20 +848,15 @@ fn get_wifi_center_frequency_index(center_frequency: u32) -> Option<u8> {
 ///
 /// https://schupen.net/lib/wifi/802.11ac-2013.pdf
 ///
-/// Set to 0 for 20 MHz or 40 MHz operating channel width.
-/// Set to 1 for 80 MHz operating channel width.
-/// Set to 2 for 160 MHz operating channel width.
-/// Set to 3 for 80+80 MHz operating channel width.
-/// Values in the range 4 to 255 are reserved.
-///
 fn convert_channel_width_to_band(width: Option<Nl80211ChannelWidth>) -> Option<u8> {
     Some(match width? {
         Nl80211ChannelWidth::Width20NoHt => 0,
         Nl80211ChannelWidth::Width20 => 0,
-        Nl80211ChannelWidth::Width40 => 0,
-        Nl80211ChannelWidth::Width80 => 1,
-        Nl80211ChannelWidth::Width80p80 => 3,
-        Nl80211ChannelWidth::Width160 => 2,
+        Nl80211ChannelWidth::Width40 => 1,
+        Nl80211ChannelWidth::Width80 => 2,
+        Nl80211ChannelWidth::Width160 => 3,
+        Nl80211ChannelWidth::Width80p80 => 4,
+        Nl80211ChannelWidth::Width320 => 5,
         _ => return None,
     })
 }
