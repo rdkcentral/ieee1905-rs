@@ -108,8 +108,17 @@ pub fn get_mac_address_by_interface(interface_name: &str) -> Option<MacAddr> {
 }
 
 pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
+    let links = call_rt_get_links().await?;
+
+    let mut interfaces = Vec::new();
+    interfaces.extend(get_wireless_interfaces(&links).await);
+    interfaces.extend(get_ethernet_interfaces(&links).await);
+    Ok(interfaces)
+}
+
+pub async fn get_interfaces_old() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
     let mut interfaces = IndexMap::new();
-    for ethernet in get_all_interfaces().await? {
+    for ethernet in call_rt_get_links().await? {
         let data = Ieee1905InterfaceData {
             mac: ethernet.mac,
             media_type: MediaType::ETHERNET_802_3ab,
@@ -133,7 +142,7 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
         };
         interfaces.insert(ethernet.if_index, (interface, ethernet));
     }
-    for info in get_wireless_interfaces().await.unwrap_or_default() {
+    for info in get_wireless_interfaces_old().await.unwrap_or_default() {
         let Some((interface, ethernet)) = interfaces.get_mut(&info.if_index) else {
             warn!(
                 if_index = info.if_index,
@@ -182,7 +191,7 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
 }
 
 #[derive(Debug)]
-struct LinkEthernetInfo {
+struct LinkInterfaceInfo {
     mac: MacAddr,
     if_index: i32,
     if_name: String,
@@ -193,7 +202,7 @@ struct LinkEthernetInfo {
     neighbours: Vec<MacAddr>,
 }
 
-async fn get_all_interfaces() -> anyhow::Result<Vec<LinkEthernetInfo>> {
+async fn call_rt_get_links() -> anyhow::Result<Vec<LinkInterfaceInfo>> {
     let (router, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).await?;
     let if_info_msg = IfinfomsgBuilder::default()
         .ifi_family(RtAddrFamily::Unspecified)
@@ -247,7 +256,7 @@ async fn get_all_interfaces() -> anyhow::Result<Vec<LinkEthernetInfo>> {
             .await
             .inspect_err(|e| warn!(%e, "call_ether_get_neighbors failed"));
 
-        interfaces.push(LinkEthernetInfo {
+        interfaces.push(LinkInterfaceInfo {
             mac: MacAddr::from(mac),
             if_index,
             if_name,
@@ -324,7 +333,13 @@ struct WirelessInterfaceInfo {
     media_type: MediaType,
 }
 
-async fn get_wireless_interfaces() -> anyhow::Result<Vec<WirelessInterfaceInfo>> {
+async fn get_wireless_interfaces(links: &[LinkInterfaceInfo]) -> Vec<Ieee1905LocalInterface> {
+    // reference impl -> get_wireless_interfaces
+    let _ = links;
+    vec!()
+}
+
+async fn get_wireless_interfaces_old() -> anyhow::Result<Vec<WirelessInterfaceInfo>> {
     let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
     let nl80211_family_id = router.resolve_genl_family(NL80211_GENL_NAME).await?;
 
@@ -642,6 +657,12 @@ struct EthernetInterfaceInfo {
     if_index: i32,
     if_name: String,
     link_speed: Option<u64>,
+}
+
+async fn get_ethernet_interfaces(links: &[LinkInterfaceInfo]) -> Vec<Ieee1905LocalInterface> {
+    // reference impl -> get_lan_interfaces
+    let _ = links;
+    vec!()
 }
 
 async fn get_lan_interfaces() -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
