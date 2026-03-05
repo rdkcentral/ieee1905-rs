@@ -116,7 +116,10 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
         Err(e) => error!(%e, "get_wireless_interfaces failed"),
     }
 
-    interfaces.extend(get_ethernet_interfaces(&links).await);
+    match get_ethernet_interfaces(&links).await {
+        Ok(e) => interfaces.extend(e),
+        Err(e) => error!(%e, "get_ethernet_interfaces failed"),
+    }
 
     trace!("get_interfaces => {interfaces:#?}");
     Ok(interfaces)
@@ -641,10 +644,62 @@ struct EthernetInterfaceInfo {
     link_speed: Option<u64>,
 }
 
-async fn get_ethernet_interfaces(links: &[LinkInterfaceInfo]) -> Vec<Ieee1905LocalInterface> {
-    // reference impl -> get_lan_interfaces
-    let _ = links;
-    vec![]
+fn get_ethernet_media_type(speed: Option<u64>) -> MediaType {
+    match speed {
+        Some(rate) if rate >= 1_000_000_000 => MediaType::ETHERNET_802_3ab,
+        Some(_) => MediaType::ETHERNET_802_3u,
+        None => MediaType::ETHERNET_802_3u,
+    }
+}
+
+async fn get_ethernet_interfaces(
+    links: &[LinkInterfaceInfo],
+) -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
+    let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
+    let eth_tool_family_id = router.resolve_genl_family(ETH_TOOL_GENL_NAME).await?;
+
+    let ethtool_interfaces = call_eth_tool_get_link_modes(&router, eth_tool_family_id).await?;
+    let speed_map: IndexMap<i32, Option<u64>> = ethtool_interfaces
+        .into_iter()
+        .map(|i| (i.if_index, i.link_speed))
+        .collect();
+
+    let mut result = Vec::new();
+
+    for link in links {
+        if !link.if_name.starts_with("eth") {
+            continue;
+        }
+
+        let phy_rate = speed_map.get(&link.if_index).copied().flatten();
+
+        let local_interface_data = Ieee1905InterfaceData {
+            mac: link.mac,
+            media_type: get_ethernet_media_type(phy_rate),
+            media_type_extra: Default::default(),
+            bridging_flag: link.bridge_if_index.is_some(),
+            bridging_tuple: link.bridge_if_index,
+            vlan: link.vlan_id,
+            metric: None,
+            phy_rate,
+            link_availability: None,
+            signal_strength_dbm: None,
+            non_ieee1905_neighbors: Some(link.neighbours.clone()),
+            ieee1905_neighbors: None,
+        };
+
+        let local_interface = Ieee1905LocalInterface {
+            name: link.if_name.clone(),
+            index: link.if_index,
+            flags: link.if_flags,
+            link_stats: link.link_stats,
+            data: local_interface_data,
+        };
+
+        result.push(local_interface);
+    }
+
+    Ok(result)
 }
 
 async fn get_lan_interfaces() -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
