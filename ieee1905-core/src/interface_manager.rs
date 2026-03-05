@@ -660,9 +660,40 @@ struct EthernetInterfaceInfo {
 }
 
 async fn get_ethernet_interfaces(links: &[LinkInterfaceInfo]) -> Vec<Ieee1905LocalInterface> {
-    // reference impl -> get_lan_interfaces
-    let _ = links;
-    vec!()
+    let mut interfaces = Vec::new();
+
+    for link in links {
+        if !link.if_name.starts_with("eth") {
+            continue;
+        }
+
+        let data = Ieee1905InterfaceData {
+            mac: link.mac,
+            media_type: MediaType::ETHERNET_802_3ab,
+            media_type_extra: Default::default(),
+            bridging_flag: link.bridge_if_index.is_some(),
+            bridging_tuple: link.bridge_if_index,
+            vlan: link.vlan_id,
+            metric: None,
+            phy_rate: None,
+            link_availability: None,
+            signal_strength_dbm: None,
+            non_ieee1905_neighbors: Some(link.neighbours.clone()),
+            ieee1905_neighbors: None,
+        };
+
+        interfaces.push(Ieee1905LocalInterface {
+            name: link.if_name.clone(),
+            index: link.if_index,
+            flags: link.if_flags,
+            link_stats: link.link_stats,
+            data,
+        });
+    }
+
+    tracing::debug!(?interfaces, "ethernet interfaces:");
+
+    interfaces
 }
 
 async fn get_lan_interfaces() -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
