@@ -401,12 +401,15 @@ async fn inject_topology_response_tlvs(
     // injecting NonIeee1905NeighborDevices
     {
         let local_interfaces = db.local_interface_list.read().await;
-        vec.extend(local_interfaces.iter().flatten().map(|e| {
-            let interfaces = e.non_ieee1905_neighbors.as_deref();
-            TLV::from(NonIeee1905NeighborDevices {
+        vec.extend(local_interfaces.iter().flatten().filter_map(|e| {
+            let neighbors = e.non_ieee1905_neighbors.as_deref()?;
+            if neighbors.is_empty() {
+                return None;
+            }
+            Some(TLV::from(NonIeee1905NeighborDevices {
                 local_mac_address: e.mac,
-                neighborhood_list: interfaces.unwrap_or_default().to_owned(),
-            })
+                neighborhood_list: neighbors.to_owned(),
+            }))
         }));
     }
 
