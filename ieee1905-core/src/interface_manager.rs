@@ -48,7 +48,7 @@ use neli::rtnl::{Ifinfomsg, IfinfomsgBuilder, Ndmsg, NdmsgBuilder, RtAttrHandle}
 use neli::types::GenlBuffer;
 use neli::utils::Groups;
 use std::ops::Div;
-use tracing::warn;
+use tracing::{error, trace, warn};
 
 pub fn get_local_al_mac(interface_name: String) -> Option<MacAddr> {
     // Fetch all network interfaces
@@ -108,11 +108,17 @@ pub fn get_mac_address_by_interface(interface_name: &str) -> Option<MacAddr> {
 }
 
 pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
+    let mut interfaces = Vec::new();
     let links = call_rt_get_links().await?;
 
-    let mut interfaces = Vec::new();
-    interfaces.extend(get_wireless_interfaces(&links).await);
+    match get_wireless_interfaces(&links).await {
+        Ok(e) => interfaces.extend(e),
+        Err(e) => error!(%e, "get_wireless_interfaces failed"),
+    }
+
     interfaces.extend(get_ethernet_interfaces(&links).await);
+
+    trace!("get_interfaces => {interfaces:#?}");
     Ok(interfaces)
 }
 
@@ -141,40 +147,6 @@ pub async fn get_interfaces_old() -> anyhow::Result<Vec<Ieee1905LocalInterface>>
             data,
         };
         interfaces.insert(ethernet.if_index, (interface, ethernet));
-    }
-    for info in get_wireless_interfaces_old().await.unwrap_or_default() {
-        let Some((interface, ethernet)) = interfaces.get_mut(&info.if_index) else {
-            warn!(
-                if_index = info.if_index,
-                if_name = info.if_name,
-                mac_addr = %info.mac,
-                "interface not found (wireless)",
-            );
-            continue;
-        };
-        if info.mac != ethernet.mac {
-            warn!(
-                if_index = ethernet.if_index,
-                if_name_w = info.if_name,
-                if_name_e = ethernet.if_name,
-                addr_w = %info.mac,
-                addr_e = %ethernet.mac,
-                "wireless and ethernet interfaces have different mac",
-            );
-            continue;
-        }
-        interface.data.phy_rate = Some(info.phy_rate);
-        interface.data.link_availability = info.link_availability;
-        interface.data.signal_strength_dbm = info.signal_strength_dbm;
-        interface.data.media_type = info.media_type;
-        interface.data.media_type_extra = MediaTypeSpecialInfo::Wifi(MediaTypeSpecialInfoWifi {
-            bssid: info.bssid.unwrap_or(info.mac),
-            role: convert_if_type_to_role(info.if_type, info.frequency).unwrap_or_default(),
-            reserved: 0,
-            ap_channel_band: convert_channel_width_to_band(info.channel_width).unwrap_or_default(),
-            ap_channel_center_frequency_index1: info.center_freq_index1.unwrap_or_default(),
-            ap_channel_center_frequency_index2: info.center_freq_index2.unwrap_or_default(),
-        });
     }
     for info in get_lan_interfaces().await.unwrap_or_default() {
         let Some((interface, _)) = interfaces.get_mut(&info.if_index) else {
@@ -315,66 +287,88 @@ async fn call_ether_get_neighbors(
     Ok(neighbours)
 }
 
+async fn get_wireless_interfaces(
+    links: &[LinkInterfaceInfo],
+) -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
+    let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
+    let nl80211_family = router.resolve_genl_family(NL80211_GENL_NAME).await?;
+
+    let interfaces = call_nl80211_get_interfaces(&router, nl80211_family).await?;
+    let phy_map = call_nl80211_get_wiphy(&router, nl80211_family).await?;
+    let links: IndexMap<_, _> = links.iter().map(|e| (e.if_index, e)).collect();
+
+    let mut result = Vec::new();
+    for interface in interfaces {
+        let if_name = interface.if_name;
+        let if_index = interface.if_index;
+        let phy_index = interface.phy_index;
+
+        let Some(link) = links.get(&if_index) else {
+            warn!(if_name, if_index, "failed to find link info");
+            continue;
+        };
+        let Some(phy) = phy_map.get(&phy_index) else {
+            warn!(if_name, if_index, phy_index, "failed to find phy into");
+            continue;
+        };
+
+        let station_info = call_nl80211_get_station(&router, nl80211_family, if_index)
+            .await
+            .inspect_err(|e| warn!(if_name, if_index, %e, "failed to get wireless station"))
+            .unwrap_or_default();
+
+        let survey_info = call_nl80211_get_survey(&router, nl80211_family, if_index)
+            .await
+            .inspect_err(|e| warn!(if_name, if_index, %e, "failed to get wireless survey"))
+            .unwrap_or_default();
+
+        let media_type_extra = MediaTypeSpecialInfoWifi {
+            bssid: station_info.bssid.unwrap_or(interface.mac),
+            role: convert_if_type_to_role(interface.if_type, interface.frequency).unwrap_or(0),
+            reserved: 0,
+            ap_channel_band: convert_channel_width_to_band(interface.channel_width).unwrap_or(0),
+            ap_channel_center_frequency_index1: interface.center_freq_index1.unwrap_or(0),
+            ap_channel_center_frequency_index2: interface.center_freq_index2.unwrap_or(0),
+        };
+
+        let local_interface_data = Ieee1905InterfaceData {
+            mac: interface.mac,
+            media_type: get_wireless_media_type(interface.frequency, phy),
+            media_type_extra: MediaTypeSpecialInfo::Wifi(media_type_extra),
+            bridging_flag: link.bridge_if_index.is_some(),
+            bridging_tuple: link.bridge_if_index,
+            vlan: link.vlan_id,
+            metric: None,
+            phy_rate: station_info.phy_rate,
+            link_availability: survey_info.link_availability,
+            signal_strength_dbm: station_info.signal_strength_dbm,
+            ieee1905_neighbors: None,
+            non_ieee1905_neighbors: Some(link.neighbours.clone()),
+        };
+
+        let local_interface = Ieee1905LocalInterface {
+            name: link.if_name.clone(),
+            index: link.if_index,
+            flags: link.if_flags,
+            link_stats: link.link_stats,
+            data: local_interface_data,
+        };
+        result.push(local_interface);
+    }
+    Ok(result)
+}
+
 #[derive(Debug)]
 struct WirelessInterfaceInfo {
     mac: MacAddr,
     phy_index: u32,
-    bssid: Option<MacAddr>,
     if_index: i32,
     if_name: String,
     if_type: Option<Nl80211IfType>,
-    phy_rate: u64,
     frequency: u32,
     channel_width: Option<Nl80211ChannelWidth>,
     center_freq_index1: Option<u8>,
     center_freq_index2: Option<u8>,
-    link_availability: Option<u8>,
-    signal_strength_dbm: Option<i8>,
-    media_type: MediaType,
-}
-
-async fn get_wireless_interfaces(links: &[LinkInterfaceInfo]) -> Vec<Ieee1905LocalInterface> {
-    // reference impl -> get_wireless_interfaces
-    let _ = links;
-    vec!()
-}
-
-async fn get_wireless_interfaces_old() -> anyhow::Result<Vec<WirelessInterfaceInfo>> {
-    let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
-    let nl80211_family_id = router.resolve_genl_family(NL80211_GENL_NAME).await?;
-
-    let mut interfaces = call_nl80211_get_interfaces(&router, nl80211_family_id).await?;
-    let phy_map = call_nl80211_get_wiphy(&router, nl80211_family_id).await?;
-
-    for interface in interfaces.iter_mut() {
-        if let Some(phy) = phy_map.get(&interface.phy_index) {
-            interface.media_type = get_wireless_media_type(interface.frequency, phy);
-        } else {
-            warn!(
-                if_name = interface.if_name,
-                if_index = interface.if_index,
-                phy_index = interface.phy_index,
-                "failed to find phy for interface",
-            );
-        }
-        if let Err(e) = call_nl80211_get_station(&router, nl80211_family_id, interface).await {
-            warn!(
-                if_name = interface.if_name,
-                if_index = interface.if_index,
-                %e,
-                "failed to get wireless station",
-            );
-        }
-        if let Err(e) = call_nl80211_get_survey(&router, nl80211_family_id, interface).await {
-            warn!(
-                if_name = interface.if_name,
-                if_index = interface.if_index,
-                %e,
-                "failed to get wireless survey",
-            );
-        }
-    }
-    Ok(interfaces)
 }
 
 async fn call_nl80211_get_interfaces(
@@ -424,53 +418,47 @@ async fn call_nl80211_get_interfaces(
         let Ok(if_name) = handle.get_attr_payload_as_with_len(Nl80211Attribute::IfName) else {
             continue;
         };
-        let Ok(frequency) = handle.get_attr_payload_as(Nl80211Attribute::WiphyFreq) else {
-            continue;
-        };
 
         let if_type = handle.get_attr_payload_as(Nl80211Attribute::IfType).ok();
-        let channel_width = handle
-            .get_attr_payload_as(Nl80211Attribute::ChannelWidth)
-            .ok();
-        let center_freq1 = handle
-            .get_attr_payload_as(Nl80211Attribute::CenterFreq1)
-            .ok();
-        let center_freq2 = handle
-            .get_attr_payload_as(Nl80211Attribute::CenterFreq2)
-            .ok();
+        let frequency = handle.get_attr_payload_as(Nl80211Attribute::WiphyFreq);
+        let channel_width = handle.get_attr_payload_as(Nl80211Attribute::ChannelWidth);
+        let center_freq1 = handle.get_attr_payload_as(Nl80211Attribute::CenterFreq1);
+        let center_freq2 = handle.get_attr_payload_as(Nl80211Attribute::CenterFreq2);
 
         interfaces.push(WirelessInterfaceInfo {
             mac: MacAddr::from(mac),
             phy_index,
-            bssid: None,
             if_index,
             if_name,
             if_type,
-            phy_rate: 1_000_000,
-            frequency,
-            channel_width,
-            center_freq_index1: center_freq1.and_then(get_wifi_center_frequency_index),
-            center_freq_index2: center_freq2.and_then(get_wifi_center_frequency_index),
-            link_availability: None,
-            signal_strength_dbm: None,
-            media_type: MediaType::WIRELESS_802_11b_2_4,
+            frequency: frequency.unwrap_or(0),
+            channel_width: channel_width.ok(),
+            center_freq_index1: center_freq1.ok().and_then(get_wifi_center_frequency_index),
+            center_freq_index2: center_freq2.ok().and_then(get_wifi_center_frequency_index),
         });
     }
     Ok(interfaces)
 }
 
+#[derive(Default)]
+struct WirelessStationInfo {
+    bssid: Option<MacAddr>,
+    phy_rate: Option<u64>,
+    signal_strength_dbm: Option<i8>,
+}
+
 async fn call_nl80211_get_station(
     router: &NlRouter,
     family_id: u16,
-    interface: &mut WirelessInterfaceInfo,
-) -> anyhow::Result<()> {
+    if_index: i32,
+) -> anyhow::Result<WirelessStationInfo> {
     let nl_attrs = NlattrBuilder::default()
         .nla_type(
             AttrTypeBuilder::default()
                 .nla_type(Nl80211Attribute::IfIndex)
                 .build()?,
         )
-        .nla_payload(interface.if_index)
+        .nla_payload(if_index)
         .build()?;
 
     let nl_message = GenlmsghdrBuilder::default()
@@ -487,46 +475,46 @@ async fn call_nl80211_get_station(
         )
         .await?;
 
-    while let Some(message) = recv
-        .next::<GenlId, Genlmsghdr<Nl80211Command, Nl80211Attribute>>()
-        .await
-    {
-        let message = message?;
+    let mut result = WirelessStationInfo::default();
+    while let Some(message) = recv.next().await {
+        let message: Nlmsghdr<GenlId, Genlmsghdr<Nl80211Command, Nl80211Attribute>> = message?;
         let Some(payload) = message.get_payload() else {
             continue;
         };
 
         let handle = payload.attrs().get_attr_handle();
-        interface.bssid = handle
+        result.bssid = handle
             .get_attr_payload_as::<[u8; 6]>(Nl80211Attribute::Mac)
             .ok()
             .map(MacAddr::from);
 
         if let Ok(sta_info) = handle.get_nested_attributes(Nl80211Attribute::StaInfo) {
             if let Ok(rate_info) = sta_info.get_nested_attributes(Nl80211StaInfo::TxBitrate) {
-                let bitrate = get_station_bitrate_bps(&rate_info).unwrap_or_default();
-                interface.phy_rate = bitrate;
+                result.phy_rate = get_station_bitrate_bps(&rate_info);
             }
-            if let Some(signal) = get_signal_strength(&sta_info) {
-                interface.signal_strength_dbm = Some(signal);
-            }
+            result.signal_strength_dbm = get_signal_strength(&sta_info);
         }
     }
-    Ok(())
+    Ok(result)
+}
+
+#[derive(Default)]
+struct WirelessSurveyInfo {
+    link_availability: Option<u8>,
 }
 
 async fn call_nl80211_get_survey(
     router: &NlRouter,
     family_id: u16,
-    interface: &mut WirelessInterfaceInfo,
-) -> anyhow::Result<()> {
+    if_index: i32,
+) -> anyhow::Result<WirelessSurveyInfo> {
     let nl_attrs = NlattrBuilder::default()
         .nla_type(
             AttrTypeBuilder::default()
                 .nla_type(Nl80211Attribute::IfIndex)
                 .build()?,
         )
-        .nla_payload(interface.if_index)
+        .nla_payload(if_index)
         .build()?;
 
     let nl_message = GenlmsghdrBuilder::default()
@@ -543,25 +531,19 @@ async fn call_nl80211_get_survey(
         )
         .await?;
 
-    while let Some(message) = recv
-        .next::<GenlId, Genlmsghdr<Nl80211Command, Nl80211Attribute>>()
-        .await
-    {
-        let message = message?;
+    let mut result = WirelessSurveyInfo::default();
+    while let Some(message) = recv.next().await {
+        let message: Nlmsghdr<GenlId, Genlmsghdr<Nl80211Command, Nl80211Attribute>> = message?;
         let Some(payload) = message.get_payload() else {
             continue;
         };
 
         let handle = payload.attrs().get_attr_handle();
-        let Ok(info) = handle.get_nested_attributes(Nl80211Attribute::SurveyInfo) else {
-            continue;
-        };
-
-        if let Some(link_availability) = get_link_availability(&info) {
-            interface.link_availability = Some(link_availability);
+        if let Ok(info) = handle.get_nested_attributes(Nl80211Attribute::SurveyInfo) {
+            result.link_availability = get_link_availability(&info);
         }
     }
-    Ok(())
+    Ok(result)
 }
 
 #[derive(Debug, Default)]
@@ -662,7 +644,7 @@ struct EthernetInterfaceInfo {
 async fn get_ethernet_interfaces(links: &[LinkInterfaceInfo]) -> Vec<Ieee1905LocalInterface> {
     // reference impl -> get_lan_interfaces
     let _ = links;
-    vec!()
+    vec![]
 }
 
 async fn get_lan_interfaces() -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
@@ -747,14 +729,6 @@ async fn call_eth_tool_get_link_modes(
 
 fn get_link_stats(handle: &RtAttrHandle<Ifla>) -> Option<RtnlLinkStats64> {
     if let Ok(stats) = handle.get_attr_payload_as_with_len_borrowed::<&[u8]>(Ifla::Stats64) {
-        if stats.len() != size_of::<RtnlLinkStats64>() {
-            warn!(
-                expected = size_of::<RtnlLinkStats64>(),
-                actual = stats.len(),
-                "unusual {} size",
-                std::any::type_name::<RtnlLinkStats64>(),
-            );
-        }
         unsafe {
             return Some(std::ptr::read_unaligned(stats.as_ptr().cast()));
         }
