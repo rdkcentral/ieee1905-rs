@@ -25,7 +25,8 @@ use pnet::datalink::{self, MacAddr};
 // Standard library
 use crate::cmdu_codec::{MediaType, MediaTypeSpecialInfo, MediaTypeSpecialInfoWifi};
 use crate::linux::eth_tool::{
-    EthToolHeaderAttribute, EthToolLinkModesAttribute, EthToolMessage, ETH_TOOL_GENL_NAME,
+    EthToolBitsetAttr, EthToolBitsetBitAttr, EthToolHeaderAttribute, EthToolLinkMode,
+    EthToolLinkModesAttribute, EthToolMessage, ETH_TOOL_GENL_NAME,
 };
 use crate::linux::if_link::{RtnlLinkStats, RtnlLinkStats64};
 use crate::linux::nl80211::{
@@ -35,7 +36,6 @@ use crate::linux::nl80211::{
 };
 use crate::topology_manager::{Ieee1905InterfaceData, Ieee1905LocalInterface};
 use indexmap::IndexMap;
-use neli::attr::Attribute;
 use neli::consts::nl::{GenlId, NlmF};
 use neli::consts::rtnl::{
     Arphrd, Iff, Ifla, IflaInfo, IflaVlan, Nda, Ntf, Nud, RtAddrFamily, Rtm, Rtn,
@@ -47,7 +47,7 @@ use neli::router::asynchronous::{NlRouter, NlRouterReceiverHandle};
 use neli::rtnl::{Ifinfomsg, IfinfomsgBuilder, Ndmsg, NdmsgBuilder, RtAttrHandle};
 use neli::types::GenlBuffer;
 use neli::utils::Groups;
-use std::ops::Div;
+use std::ops::{BitAnd, Div};
 use tracing::{error, trace, warn};
 
 pub fn get_local_al_mac(interface_name: String) -> Option<MacAddr> {
@@ -123,46 +123,6 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
 
     trace!("get_interfaces => {interfaces:#?}");
     Ok(interfaces)
-}
-
-pub async fn get_interfaces_old() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
-    let mut interfaces = IndexMap::new();
-    for ethernet in call_rt_get_links().await? {
-        let data = Ieee1905InterfaceData {
-            mac: ethernet.mac,
-            media_type: MediaType::ETHERNET_802_3ab,
-            media_type_extra: Default::default(),
-            bridging_flag: ethernet.bridge_if_index.is_some(),
-            bridging_tuple: ethernet.bridge_if_index,
-            vlan: ethernet.vlan_id,
-            metric: None,
-            phy_rate: Some(1_000_000),
-            link_availability: None,
-            signal_strength_dbm: None,
-            non_ieee1905_neighbors: Some(ethernet.neighbours.clone()),
-            ieee1905_neighbors: None,
-        };
-        let interface = Ieee1905LocalInterface {
-            name: ethernet.if_name.clone(),
-            index: ethernet.if_index,
-            flags: ethernet.if_flags,
-            link_stats: ethernet.link_stats,
-            data,
-        };
-        interfaces.insert(ethernet.if_index, (interface, ethernet));
-    }
-    for info in get_lan_interfaces().await.unwrap_or_default() {
-        let Some((interface, _)) = interfaces.get_mut(&info.if_index) else {
-            warn!(
-                if_index = info.if_index,
-                if_name = info.if_name,
-                "interface not found (ethernet)",
-            );
-            continue;
-        };
-        interface.data.phy_rate = info.link_speed;
-    }
-    Ok(interfaces.into_values().map(|e| e.0).collect())
 }
 
 #[derive(Debug)]
@@ -637,45 +597,40 @@ async fn call_nl80211_get_wiphy(
     Ok(result)
 }
 
-#[derive(Debug)]
-struct EthernetInterfaceInfo {
-    if_index: i32,
-    if_name: String,
-    link_speed: Option<u64>,
-}
-
-fn get_ethernet_media_type(speed: Option<u64>) -> MediaType {
-    match speed {
-        Some(rate) if rate >= 1_000_000_000 => MediaType::ETHERNET_802_3ab,
-        Some(_) => MediaType::ETHERNET_802_3u,
-        None => MediaType::ETHERNET_802_3u,
-    }
-}
-
 async fn get_ethernet_interfaces(
     links: &[LinkInterfaceInfo],
 ) -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
     let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
     let eth_tool_family_id = router.resolve_genl_family(ETH_TOOL_GENL_NAME).await?;
 
-    let ethtool_interfaces = call_eth_tool_get_link_modes(&router, eth_tool_family_id).await?;
-    let speed_map: IndexMap<i32, Option<u64>> = ethtool_interfaces
-        .into_iter()
-        .map(|i| (i.if_index, i.link_speed))
-        .collect();
+    let interfaces = call_eth_tool_get_link_modes(&router, eth_tool_family_id).await?;
+    let if_map: IndexMap<_, _> = interfaces.into_iter().map(|e| (e.if_index, e)).collect();
 
     let mut result = Vec::new();
-
     for link in links {
-        if !link.if_name.starts_with("eth") {
+        if !is_physical_ethernet_interface(&link) {
             continue;
         }
 
-        let phy_rate = speed_map.get(&link.if_index).copied().flatten();
+        let if_index = link.if_index;
+        let if_name = link.if_name.as_str();
+
+        let Some(interface) = if_map.get(&if_index) else {
+            warn!(if_name, if_index, "failed to find ethernet info");
+            continue;
+        };
+
+        let phy_rate = interface.link_speed;
+        let media_type =
+            if interface.is_802_3ab_supported || phy_rate.is_some_and(|e| e >= 1_000_000_000) {
+                MediaType::ETHERNET_802_3ab
+            } else {
+                MediaType::ETHERNET_802_3u
+            };
 
         let local_interface_data = Ieee1905InterfaceData {
             mac: link.mac,
-            media_type: get_ethernet_media_type(phy_rate),
+            media_type,
             media_type_extra: Default::default(),
             bridging_flag: link.bridge_if_index.is_some(),
             bridging_tuple: link.bridge_if_index,
@@ -698,15 +653,14 @@ async fn get_ethernet_interfaces(
 
         result.push(local_interface);
     }
-
     Ok(result)
 }
 
-async fn get_lan_interfaces() -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
-    let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
-    let eth_tool_family_id = router.resolve_genl_family(ETH_TOOL_GENL_NAME).await?;
-
-    call_eth_tool_get_link_modes(&router, eth_tool_family_id).await
+#[derive(Debug)]
+struct EthernetInterfaceInfo {
+    if_index: i32,
+    link_speed: Option<u64>,
+    is_802_3ab_supported: bool,
 }
 
 async fn call_eth_tool_get_link_modes(
@@ -738,32 +692,17 @@ async fn call_eth_tool_get_link_modes(
         .await?;
 
     let mut interfaces = Vec::new();
-    while let Some(message) = recv
-        .next::<GenlId, Genlmsghdr<EthToolMessage, EthToolLinkModesAttribute>>()
-        .await
-    {
-        let message = message?;
+    while let Some(message) = recv.next().await {
+        let message: Nlmsghdr<GenlId, Genlmsghdr<EthToolMessage, _>> = message?;
         let Some(payload) = message.get_payload() else {
             continue;
         };
 
         let handle = payload.attrs().get_attr_handle();
-        let Some(header) = handle.get_attribute(EthToolLinkModesAttribute::Header) else {
+        let Ok(header) = handle.get_nested_attributes(EthToolLinkModesAttribute::Header) else {
             continue;
         };
-        let Ok(header_handle) = header.get_attr_handle() else {
-            continue;
-        };
-        let Some(if_index) = header_handle.get_attribute(EthToolHeaderAttribute::DevIndex) else {
-            continue;
-        };
-        let Ok(if_index) = if_index.get_payload_as::<i32>() else {
-            continue;
-        };
-        let Some(if_name) = header_handle.get_attribute(EthToolHeaderAttribute::DevName) else {
-            continue;
-        };
-        let Ok(if_name) = if_name.get_payload_as_with_len::<String>() else {
+        let Ok(if_index) = header.get_attr_payload_as(EthToolHeaderAttribute::DevIndex) else {
             continue;
         };
 
@@ -773,13 +712,58 @@ async fn call_eth_tool_get_link_modes(
             .filter(|e| *e < u32::MAX) // returns u32::MAX when speed is not available
             .map(|e| u64::from(e) * 1_000_000);
 
+        let mut is_802_3ab_supported = false;
+        if let Ok(bitset_handle) = handle.get_nested_attributes(EthToolLinkModesAttribute::Ours) {
+            let flags_802_3ab = [
+                EthToolLinkMode::Mode1000baseT_Half_BIT as u32,
+                EthToolLinkMode::Mode1000baseT_Full_BIT as u32,
+            ];
+
+            if let Ok(bits) = bitset_handle.get_nested_attributes::<u16>(EthToolBitsetAttr::Bits) {
+                for bit in bits.iter() {
+                    let bit = bit.get_attr_handle::<EthToolBitsetBitAttr>()?;
+                    if let Ok(index) = bit.get_attr_payload_as(EthToolBitsetBitAttr::Index) {
+                        if flags_802_3ab.contains(&index) {
+                            is_802_3ab_supported = true;
+                        }
+                    }
+                }
+            }
+
+            if let Ok(raw_bits) = bitset_handle
+                .get_attr_payload_as_with_len_borrowed::<&[u8]>(EthToolBitsetAttr::Value)
+            {
+                let check_bitset = |mode: EthToolLinkMode| {
+                    let value = mode as usize;
+                    let bit_index = value / 8;
+                    let bit_mask = 1 << (value % 8);
+                    raw_bits.get(bit_index).unwrap_or(&0).bitand(bit_mask) != 0
+                };
+
+                is_802_3ab_supported |= check_bitset(EthToolLinkMode::Mode1000baseT_Half_BIT);
+                is_802_3ab_supported |= check_bitset(EthToolLinkMode::Mode1000baseT_Full_BIT);
+            }
+        }
+
         interfaces.push(EthernetInterfaceInfo {
             if_index,
-            if_name,
             link_speed,
+            is_802_3ab_supported,
         });
     }
     Ok(interfaces)
+}
+
+fn is_physical_ethernet_interface(link: &LinkInterfaceInfo) -> bool {
+    for prefix in ["eth", "eno"] {
+        let Some(number) = link.if_name.strip_prefix(prefix) else {
+            continue;
+        };
+        if number.parse::<u32>().is_ok() {
+            return true;
+        }
+    }
+    false
 }
 
 fn get_link_stats(handle: &RtAttrHandle<Ifla>) -> Option<RtnlLinkStats64> {
