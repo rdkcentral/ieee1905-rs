@@ -850,20 +850,15 @@ fn get_wifi_center_frequency_index(center_frequency: u32) -> Option<u8> {
 ///
 /// https://schupen.net/lib/wifi/802.11ac-2013.pdf
 ///
-/// Set to 0 for 20 MHz or 40 MHz operating channel width.
-/// Set to 1 for 80 MHz operating channel width.
-/// Set to 2 for 160 MHz operating channel width.
-/// Set to 3 for 80+80 MHz operating channel width.
-/// Values in the range 4 to 255 are reserved.
-///
 fn convert_channel_width_to_band(width: Option<Nl80211ChannelWidth>) -> Option<u8> {
     Some(match width? {
         Nl80211ChannelWidth::Width20NoHt => 0,
         Nl80211ChannelWidth::Width20 => 0,
-        Nl80211ChannelWidth::Width40 => 0,
-        Nl80211ChannelWidth::Width80 => 1,
-        Nl80211ChannelWidth::Width80p80 => 3,
-        Nl80211ChannelWidth::Width160 => 2,
+        Nl80211ChannelWidth::Width40 => 1,
+        Nl80211ChannelWidth::Width80 => 2,
+        Nl80211ChannelWidth::Width160 => 3,
+        Nl80211ChannelWidth::Width80p80 => 4,
+        Nl80211ChannelWidth::Width320 => 5,
         _ => return None,
     })
 }

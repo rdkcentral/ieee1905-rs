@@ -81,6 +81,9 @@ struct CliArgs {
     /// Disable stdout appender for logs
     #[arg(long)]
     no_stdout_appender: bool,
+    /// Disable LLDP receivers
+    #[arg(long)]
+    no_lldp_receivers: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -233,14 +236,17 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
 
     for interface in get_lldp_compatible_interfaces().await {
         tracing::info!(
+            no_receiver = cli.no_lldp_receivers,
             "Starting LLDP Discovery on {}/{}",
             interface.name,
             interface.mac
         );
 
-        let mut lldp_receiver = EthernetReceiver::new();
-        lldp_receiver.subscribe(lldp_observer.clone());
-        join_sets.push(lldp_receiver.run(&interface.name)?);
+        if !cli.no_lldp_receivers {
+            let mut lldp_receiver = EthernetReceiver::new();
+            lldp_receiver.subscribe(lldp_observer.clone());
+            join_sets.push(lldp_receiver.run(&interface.name)?);
+        }
 
         let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx));
         tokio::task::spawn(lldp_discovery_worker(
