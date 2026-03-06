@@ -625,7 +625,6 @@ async fn get_ethernet_interfaces(
         let if_name = link.if_name.as_str();
 
         let Some(interface) = if_map.get(&if_index) else {
-            warn!(if_name, if_index, "failed to find ethernet info");
             continue;
         };
 
