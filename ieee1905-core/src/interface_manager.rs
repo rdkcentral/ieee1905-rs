@@ -131,6 +131,7 @@ struct LinkInterfaceInfo {
     if_index: i32,
     if_name: String,
     if_flags: Iff,
+    kind: Option<String>,
     bridge_if_index: Option<u32>,
     vlan_id: Option<u16>,
     link_stats: Option<RtnlLinkStats64>,
@@ -184,6 +185,8 @@ async fn call_rt_get_links() -> anyhow::Result<Vec<LinkInterfaceInfo>> {
         let if_flags = *payload.ifi_flags();
         let if_index = i32::from(*payload.ifi_index());
         let vlan_id = get_vlan_id(&attr_handle);
+        let kind = attr_handle.get_nested_attributes(Ifla::Linkinfo).ok()
+            .and_then(|info| info.get_attr_payload_as_with_len::<String>(IflaInfo::Kind).ok());
         let bridge_if_index = attr_handle.get_attr_payload_as(Ifla::Master).ok();
         let link_stats = get_link_stats(&attr_handle);
 
@@ -196,6 +199,7 @@ async fn call_rt_get_links() -> anyhow::Result<Vec<LinkInterfaceInfo>> {
             if_index,
             if_name,
             if_flags,
+            kind,
             bridge_if_index,
             vlan_id,
             link_stats,
@@ -608,7 +612,7 @@ async fn get_ethernet_interfaces(
 
     let mut result = Vec::new();
     for link in links {
-        if !is_physical_ethernet_interface(&link) {
+        if link.kind.is_some() {
             continue;
         }
 
@@ -616,7 +620,7 @@ async fn get_ethernet_interfaces(
         let if_name = link.if_name.as_str();
 
         let Some(interface) = if_map.get(&if_index) else {
-            warn!(if_name, if_index, "failed to find ethernet info");
+            warn!(if_name, if_index, "failed to find ethernet info; interface might not be Ethernet");
             continue;
         };
 
@@ -752,18 +756,6 @@ async fn call_eth_tool_get_link_modes(
         });
     }
     Ok(interfaces)
-}
-
-fn is_physical_ethernet_interface(link: &LinkInterfaceInfo) -> bool {
-    for prefix in ["eth", "eno"] {
-        let Some(number) = link.if_name.strip_prefix(prefix) else {
-            continue;
-        };
-        if number.parse::<u32>().is_ok() {
-            return true;
-        }
-    }
-    false
 }
 
 fn get_link_stats(handle: &RtAttrHandle<Ifla>) -> Option<RtnlLinkStats64> {
