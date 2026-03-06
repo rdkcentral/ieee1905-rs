@@ -182,11 +182,16 @@ async fn call_rt_get_links() -> anyhow::Result<Vec<LinkInterfaceInfo>> {
             None
         }
 
+        fn get_link_kind(attrs: &RtAttrHandle<Ifla>) -> Option<String> {
+            let info = attrs.get_nested_attributes(Ifla::Linkinfo).ok()?;
+            info.get_attr_payload_as_with_len::<String>(IflaInfo::Kind)
+                .ok()
+        }
+
         let if_flags = *payload.ifi_flags();
         let if_index = i32::from(*payload.ifi_index());
         let vlan_id = get_vlan_id(&attr_handle);
-        let kind = attr_handle.get_nested_attributes(Ifla::Linkinfo).ok()
-            .and_then(|info| info.get_attr_payload_as_with_len::<String>(IflaInfo::Kind).ok());
+        let kind = get_link_kind(&attr_handle);
         let bridge_if_index = attr_handle.get_attr_payload_as(Ifla::Master).ok();
         let link_stats = get_link_stats(&attr_handle);
 
@@ -620,7 +625,7 @@ async fn get_ethernet_interfaces(
         let if_name = link.if_name.as_str();
 
         let Some(interface) = if_map.get(&if_index) else {
-            warn!(if_name, if_index, "failed to find ethernet info; interface might not be Ethernet");
+            warn!(if_name, if_index, "failed to find ethernet info");
             continue;
         };
 
