@@ -622,7 +622,6 @@ async fn get_ethernet_interfaces(
         }
 
         let if_index = link.if_index;
-        let if_name = link.if_name.as_str();
 
         let Some(interface) = if_map.get(&if_index) else {
             continue;
