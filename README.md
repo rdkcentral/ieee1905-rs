@@ -23,8 +23,9 @@ A short, high-level plan:
 - [x] Link Metric management and topology inegration.
 - [ ] Interoperability.
 - [ ] IEEE1905 CMDU parsing and serialization (version 2024)
-- [ ] Controller backup.
-- [ ] File Transfers between Controller and agents.
+- [ ] Controller Redundancy.
+- [ ] Log transfers between Controller and Agents.
+- [ ] Binary transfer for upgrade from Controller to Agents.
 - [ ] IEEE1905 security.
 
 ## Architecture Decisions (ADRs)
