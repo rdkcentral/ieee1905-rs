@@ -33,9 +33,11 @@ use nom::combinator::{all_consuming, cond};
 use nom::multi::{count, length_count, many0};
 use pnet::datalink::MacAddr;
 use std::fmt::{Debug, Display, Formatter};
+use std::net::Ipv6Addr;
 // Internal modules
 use crate::cmdu_reassembler::CmduReassemblyError;
 use crate::tlv_cmdu_codec::{TLVTrait, TLV};
+
 
 ///////////////////////////////////////////////////////////////////////////
 //DEFINITION OF CMDU TYPES and IEEE1905 TLVs
@@ -150,6 +152,7 @@ pub enum IEEE1905TLVType {
     SupportedRole,
     GenericPhyDeviceInformation,
     SupportedFreqBand,
+    Ipv6,
     DeviceIdentificationType,
     Ieee1905ProfileVersion,
     ClientAssociation,
@@ -178,6 +181,7 @@ impl IEEE1905TLVType {
             0x0f => IEEE1905TLVType::SupportedRole,
             0x14 => IEEE1905TLVType::GenericPhyDeviceInformation,
             0x10 => IEEE1905TLVType::SupportedFreqBand,
+            0x18 => IEEE1905TLVType::Ipv6,
             0x15 => IEEE1905TLVType::DeviceIdentificationType,
             0x1a => IEEE1905TLVType::Ieee1905ProfileVersion,
             0x92 => IEEE1905TLVType::ClientAssociation,
@@ -205,6 +209,7 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::SearchedRole => 0x0d,
             IEEE1905TLVType::SupportedRole => 0x0f,
             IEEE1905TLVType::GenericPhyDeviceInformation => 0x14,
+            IEEE1905TLVType::Ipv6 => 0x18,
             IEEE1905TLVType::SupportedFreqBand => 0x10,
             IEEE1905TLVType::DeviceIdentificationType => 0x15,
             IEEE1905TLVType::Ieee1905ProfileVersion => 0x1a,
@@ -271,7 +276,41 @@ impl TLVTrait for MacAddress {
         self.mac_address.octets().to_vec()
     }
 }
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct Ipv6 {
+    pub al_mac_address: MacAddr,
+    pub link_local_ipv6_address: Ipv6Addr,
+}
 
+impl TLVTrait for Ipv6 {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::Ipv6;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, al_mac_address) = take_mac_addr(input)?;
+        let (input, link_local_ipv6_address) = take_ipv6_addr(input)?;
+        let (input, _num_ipv6_addresses) = be_u8(input)?; // currently ignored
+
+        Ok((
+            input,
+            Self {
+                al_mac_address,
+                link_local_ipv6_address,
+            },
+        ))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(23);
+
+        out.extend_from_slice(&self.al_mac_address.octets());
+        out.extend_from_slice(&self.link_local_ipv6_address.octets());
+
+        out.push(0); // number of additional IPv6 addresses
+
+        out
+    }
+}
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct LocalInterface {
@@ -1947,6 +1986,11 @@ fn take_mac_addr(input: &[u8]) -> IResult<&[u8], MacAddr> {
     Ok((input, mac))
 }
 
+fn take_ipv6_addr(input: &[u8]) -> IResult<&[u8], Ipv6Addr> {
+    let (input, bytes) = take_n_bytes::<16>(input)?;
+    Ok((input, Ipv6Addr::from(*bytes)))
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -3144,6 +3188,36 @@ pub mod tests {
 
         // Expect success comparing parsed and then serialized MAC address with original one
         assert_eq!(parsed.serialize(), mac);
+    }
+
+    // Verify parsing and serializing IPv6 TLV payload (AL MAC + link-local IPv6 + count)
+    #[test]
+    fn test_ipv6_parse_and_serialize() {
+        let al_mac = MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02);
+        let ipv6 = Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0042, 0xc0ff, 0xfea8, 0x6402);
+
+        let ipv6_tlv = Ipv6 {
+            al_mac_address: al_mac,
+            link_local_ipv6_address: ipv6,
+        };
+
+        let serialized = ipv6_tlv.serialize();
+        let parsed = Ipv6::parse(&serialized).unwrap().1;
+
+        assert_eq!(parsed, ipv6_tlv);
+        assert_eq!(parsed.serialize(), serialized);
+    }
+
+    // Verify parsing IPv6 TLV payload fails when trailing count byte is missing
+    #[test]
+    fn test_ipv6_parse_not_enough_data() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02).octets());
+        data.extend_from_slice(
+            &Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0042, 0xc0ff, 0xfea8, 0x6402).octets(),
+        );
+        // Missing 1 byte: number of additional IPv6 addresses
+        assert!(Ipv6::parse(&data).is_err());
     }
 
     // Verify parsing incomplete data (only 5 bytes from 6 required for MAC address) as AlMacAddress
