@@ -42,6 +42,7 @@ neli = { version = "0.7.3", features = ["async"] }
 chrono = "0.4.43"
 sd-notify = "0.4.5"
 either = "1.15.0"
+libc = "0.2"
 
 # RUSTSEC transitive dependency overrides
 time = ">=0.3.47"

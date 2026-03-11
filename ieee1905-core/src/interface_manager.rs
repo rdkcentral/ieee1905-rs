@@ -111,15 +111,67 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
     let mut interfaces = Vec::new();
     let links = call_rt_get_links().await?;
 
-    match get_wireless_interfaces(&links).await {
-        Ok(e) => interfaces.extend(e),
-        Err(e) => error!(%e, "get_wireless_interfaces failed"),
-    }
+    error!(
+        "XXXXX links => {:?}",
+        links.iter()
+            .map(|l| format!(
+                "{}({}) mac={} master={:?}",
+                l.if_name, l.if_index, l.mac, l.bridge_if_index
+            ))
+            .collect::<Vec<_>>()
+    );
 
-    match get_ethernet_interfaces(&links).await {
-        Ok(e) => interfaces.extend(e),
-        Err(e) => error!(%e, "get_ethernet_interfaces failed"),
-    }
+    let rt_neighbors = call_rt_get_neighbors().await?;
+    let bridge_fdb = call_rt_get_bridge_fdb_entries().await?;
+    let resolved_neighbors = resolve_neighbors_by_port(&links, &rt_neighbors, &bridge_fdb);
+
+    let wireless_interfaces = match get_wireless_interfaces(&links, &resolved_neighbors).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!(%e, "get_wireless_interfaces failed");
+            Vec::new()
+        }
+    };
+
+    error!(
+        "XXXXX wifi interfaces => {:?}",
+        wireless_interfaces
+            .iter()
+            .map(|e| format!("{}({})", e.name, e.index))
+            .collect::<Vec<_>>()
+    );
+
+    let ethernet_interfaces = match get_ethernet_interfaces(&links, &resolved_neighbors).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!(%e, "get_ethernet_interfaces failed");
+            Vec::new()
+        }
+    };
+
+    error!(
+        "XXXXX ethernet interfaces => {:?}",
+        ethernet_interfaces
+            .iter()
+            .map(|e| format!("{}({})", e.name, e.index))
+            .collect::<Vec<_>>()
+    );
+
+    interfaces.extend(wireless_interfaces);
+    interfaces.extend(ethernet_interfaces);
+
+    error!(
+        "XXXXX final neighbors => {:?}",
+        interfaces
+            .iter()
+            .map(|e| format!(
+                "{}({}) => {:?}",
+                e.name,
+                e.index,
+                e.data.non_ieee1905_neighbors.clone().unwrap_or_default()
+            ))
+            .collect::<Vec<_>>()
+    );
 
     trace!("get_interfaces => {interfaces:#?}");
     Ok(interfaces)
@@ -134,7 +186,18 @@ struct LinkInterfaceInfo {
     bridge_if_index: Option<u32>,
     vlan_id: Option<u16>,
     link_stats: Option<RtnlLinkStats64>,
-    neighbours: Vec<MacAddr>,
+}
+
+#[derive(Debug, Clone)]
+struct NeighborEntry {
+    mac: MacAddr,
+    learned_on_if_index: i32,
+}
+
+#[derive(Debug, Clone)]
+struct BridgeFdbEntry {
+    mac: MacAddr,
+    port_if_index: i32,
 }
 
 async fn call_rt_get_links() -> anyhow::Result<Vec<LinkInterfaceInfo>> {
@@ -187,10 +250,6 @@ async fn call_rt_get_links() -> anyhow::Result<Vec<LinkInterfaceInfo>> {
         let bridge_if_index = attr_handle.get_attr_payload_as(Ifla::Master).ok();
         let link_stats = get_link_stats(&attr_handle);
 
-        let neighbours = call_ether_get_neighbors(&router, if_index)
-            .await
-            .inspect_err(|e| warn!(%e, "call_ether_get_neighbors failed"));
-
         interfaces.push(LinkInterfaceInfo {
             mac: MacAddr::from(mac),
             if_index,
@@ -199,20 +258,18 @@ async fn call_rt_get_links() -> anyhow::Result<Vec<LinkInterfaceInfo>> {
             bridge_if_index,
             vlan_id,
             link_stats,
-            neighbours: neighbours.unwrap_or_default(),
         });
     }
 
     Ok(interfaces)
 }
 
-async fn call_ether_get_neighbors(
-    router: &NlRouter,
-    if_index: i32,
-) -> anyhow::Result<Vec<MacAddr>> {
+async fn call_rt_get_neighbors() -> anyhow::Result<Vec<NeighborEntry>> {
+    let (router, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).await?;
+
     let if_info_msg = NdmsgBuilder::default()
         .ndm_family(RtAddrFamily::Unspecified)
-        .ndm_index(if_index)
+        .ndm_index(0)
         .ndm_state(Nud::empty())
         .ndm_flags(Ntf::empty())
         .ndm_type(Rtn::Unicast)
@@ -233,9 +290,6 @@ async fn call_ether_get_neighbors(
             continue;
         };
 
-        if *payload.ndm_index() != if_index {
-            continue;
-        }
         if *payload.ndm_type() != Rtn::Unicast {
             continue;
         }
@@ -245,13 +299,189 @@ async fn call_ether_get_neighbors(
             continue;
         };
 
-        neighbours.push(MacAddr::from(bytes));
+        let mac = MacAddr::from(bytes);
+
+        if !is_unicast_mac(&mac) {
+            error!("XXXXX skip rt neighbor non-unicast => {:?}", mac);
+            continue;
+        }
+
+        let entry = NeighborEntry {
+            mac,
+            learned_on_if_index: *payload.ndm_index(),
+        };
+
+        error!("XXXXX rt neighbor entry => {:?}", entry);
+        neighbours.push(entry);
     }
+
+    error!("XXXXX rt neighbors => {:?}", neighbours);
+
     Ok(neighbours)
+}
+
+fn rt_addr_family_bridge() -> RtAddrFamily {
+    RtAddrFamily::from(libc::AF_BRIDGE as u8)
+}
+
+fn is_bridge_interface(links: &[LinkInterfaceInfo], if_index: i32) -> bool {
+    links.iter()
+        .any(|e| e.bridge_if_index == Some(if_index as u32))
+}
+
+fn resolve_bridge_port_for_mac(
+    bridge_if_index: i32,
+    mac: MacAddr,
+    links_by_ifindex: &IndexMap<i32, &LinkInterfaceInfo>,
+    fdb_entries: &[BridgeFdbEntry],
+) -> Option<i32> {
+    for entry in fdb_entries {
+        if entry.mac != mac {
+            continue;
+        }
+
+        let Some(port_link) = links_by_ifindex.get(&entry.port_if_index).copied() else {
+            continue;
+        };
+
+        if port_link.if_index == bridge_if_index {
+            continue;
+        }
+
+        if port_link.bridge_if_index != Some(bridge_if_index as u32) {
+            error!(
+                "XXXXX skip fdb entry not attached to bridge bridge_if_index={} port={}({}) mac={:?}",
+                bridge_if_index,
+                port_link.if_name,
+                port_link.if_index,
+                mac
+            );
+            continue;
+        }
+
+        return Some(port_link.if_index);
+    }
+
+    None
+}
+
+fn resolve_neighbors_by_port(
+    links: &[LinkInterfaceInfo],
+    neighbors: &[NeighborEntry],
+    fdb_entries: &[BridgeFdbEntry],
+) -> IndexMap<i32, Vec<MacAddr>> {
+    let links_by_ifindex: IndexMap<i32, &LinkInterfaceInfo> =
+        links.iter().map(|e| (e.if_index, e)).collect();
+
+    let mut result: IndexMap<i32, Vec<MacAddr>> = IndexMap::new();
+
+    for neighbor in neighbors {
+
+        if is_local_interface_mac(links, &neighbor.mac) {
+            error!("XXXXX skip local mac from neighbors => {:?}", neighbor.mac);
+            continue;
+        }
+
+        let mut resolved_if_index = neighbor.learned_on_if_index;
+
+        if is_bridge_interface(links, neighbor.learned_on_if_index) {
+            if let Some(port_if_index) = resolve_bridge_port_for_mac(
+                neighbor.learned_on_if_index,
+                neighbor.mac,
+                &links_by_ifindex,
+                fdb_entries,
+            ) {
+                error!(
+                    "XXXXX resolved bridge neighbor mac={:?} learned_on_if_index={} -> port_if_index={}",
+                    neighbor.mac,
+                    neighbor.learned_on_if_index,
+                    port_if_index
+                );
+                resolved_if_index = port_if_index;
+            } else {
+                error!(
+                    "XXXXX no fdb mapping for bridge neighbor mac={:?} learned_on_if_index={}",
+                    neighbor.mac,
+                    neighbor.learned_on_if_index
+                );
+            }
+        }
+
+        let entry = result.entry(resolved_if_index).or_default();
+        if !entry.contains(&neighbor.mac) {
+            entry.push(neighbor.mac);
+        }
+    }
+
+    error!("XXXXX resolved neighbors => {:?}", result);
+
+    result
+}
+
+fn is_unicast_mac(mac: &MacAddr) -> bool {
+    let first_octet = mac.octets()[0];
+    (first_octet & 0x01) == 0 && *mac != MacAddr::broadcast()
+}
+
+fn is_local_interface_mac(links: &[LinkInterfaceInfo], mac: &MacAddr) -> bool {
+    links.iter().any(|link| link.mac == *mac)
+}
+
+async fn call_rt_get_bridge_fdb_entries() -> anyhow::Result<Vec<BridgeFdbEntry>> {
+    let (router, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).await?;
+
+    let if_info_msg = NdmsgBuilder::default()
+        .ndm_family(rt_addr_family_bridge())
+        .ndm_index(0)
+        .ndm_state(Nud::empty())
+        .ndm_flags(Ntf::empty())
+        .ndm_type(Rtn::Unicast)
+        .build()?;
+
+    let mut recv: NlRouterReceiverHandle<Rtm, Ndmsg> = router
+        .send(
+            Rtm::Getneigh,
+            NlmF::DUMP | NlmF::REQUEST | NlmF::ACK,
+            NlPayload::Payload(if_info_msg),
+        )
+        .await?;
+
+    let mut entries = Vec::new();
+    while let Some(message) = recv.next().await {
+        let message: Nlmsghdr<Rtm, Ndmsg> = message?;
+        let Some(payload) = message.get_payload() else {
+            continue;
+        };
+
+        let attr_handle = payload.rtattrs().get_attr_handle();
+        let Ok(bytes) = attr_handle.get_attr_payload_as::<[u8; 6]>(Nda::Lladdr) else {
+            continue;
+        };
+
+        let mac = MacAddr::from(bytes);
+
+        if !is_unicast_mac(&mac) {
+            error!("XXXXX skip bridge fdb non-unicast => {:?}", mac);
+            continue;
+        }
+
+        let entry = BridgeFdbEntry {
+            mac,
+            port_if_index: *payload.ndm_index(),
+        };
+
+        error!("XXXXX bridge fdb entry => {:?}", entry);
+        entries.push(entry);
+    }
+
+    error!("XXXXX bridge fdb entries => {:?}", entries);
+
+    Ok(entries)
 }
 
 async fn get_wireless_interfaces(
     links: &[LinkInterfaceInfo],
+    resolved_neighbors: &IndexMap<i32, Vec<MacAddr>>,
 ) -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
     let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
     let nl80211_family = router.resolve_genl_family(NL80211_GENL_NAME).await?;
@@ -285,6 +515,11 @@ async fn get_wireless_interfaces(
             .inspect_err(|e| warn!(if_name, if_index, %e, "failed to get wireless survey"))
             .unwrap_or_default();
 
+        let resolved_port_neighbors = resolved_neighbors
+            .get(&if_index)
+            .cloned()
+            .unwrap_or_default();
+
         let media_type_extra = MediaTypeSpecialInfoWifi {
             bssid: station_info.bssid.unwrap_or(interface.mac),
             role: convert_if_type_to_role(interface.if_type, interface.frequency).unwrap_or(0),
@@ -306,7 +541,7 @@ async fn get_wireless_interfaces(
             link_availability: survey_info.link_availability,
             signal_strength_dbm: station_info.signal_strength_dbm,
             ieee1905_neighbors: None,
-            non_ieee1905_neighbors: Some(link.neighbours.clone()),
+            non_ieee1905_neighbors: Some(resolved_port_neighbors),
         };
 
         let local_interface = Ieee1905LocalInterface {
@@ -599,6 +834,7 @@ async fn call_nl80211_get_wiphy(
 
 async fn get_ethernet_interfaces(
     links: &[LinkInterfaceInfo],
+    resolved_neighbors: &IndexMap<i32, Vec<MacAddr>>,
 ) -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
     let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
     let eth_tool_family_id = router.resolve_genl_family(ETH_TOOL_GENL_NAME).await?;
@@ -639,7 +875,12 @@ async fn get_ethernet_interfaces(
             phy_rate,
             link_availability: None,
             signal_strength_dbm: None,
-            non_ieee1905_neighbors: Some(link.neighbours.clone()),
+            non_ieee1905_neighbors: Some(
+                resolved_neighbors
+                    .get(&if_index)
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
             ieee1905_neighbors: None,
         };
 
@@ -755,7 +996,7 @@ async fn call_eth_tool_get_link_modes(
 }
 
 fn is_physical_ethernet_interface(link: &LinkInterfaceInfo) -> bool {
-    for prefix in ["eth", "eno"] {
+    for prefix in ["eth", "eno", "lan"] {
         let Some(number) = link.if_name.strip_prefix(prefix) else {
             continue;
         };
