@@ -590,8 +590,14 @@ pub async fn cmdu_link_metric_response_transmission(
     for neighbor in neighbors {
         let local_interfaces = topology_db.local_interface_list.read().await;
         let local_interfaces = local_interfaces.as_deref().unwrap_or_default();
-        let Some(interface) = local_interfaces.iter().find(|e| e.mac == source_mac) else {
-            warn!("Could not find local interface with mac {source_mac}");
+
+        let Some(interface) = local_interfaces.iter().find(|e| {
+            e.ieee1905_neighbors
+                .iter()
+                .flatten()
+                .any(|e| e.neighbor_al_mac == neighbor.device_data.destination_frame_mac)
+        }) else {
+            warn!("Could not find local interface with mac {}", neighbor.device_data.destination_frame_mac);
             continue;
         };
 
