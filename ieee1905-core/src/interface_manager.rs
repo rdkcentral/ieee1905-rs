@@ -127,46 +127,25 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
 
 async fn get_link_interfaces() -> anyhow::Result<Vec<LinkInterfaceInfo>> {
     let mut links = call_rt_get_links().await?;
-    let mut neighbors = call_rt_get_neighbors().await?;
-    let bridge_fdb = call_rt_get_bridge_fdb().await?;
+    let mut bridge_fdb_neighbors = call_rt_get_bridge_fdb().await?;
 
-    // add neighbors to bridged interfaces if they appear in bridge fdb
-    for neighbor in neighbors.clone().values().flatten() {
-        for if_index in bridge_fdb.get(neighbor).into_iter().flatten() {
-            neighbors.entry(*if_index).or_default().insert(*neighbor);
+    // remove all local interfaces from bridge fdb
+    for link in links.iter() {
+        bridge_fdb_neighbors.swap_remove(&link.1.mac);
+    }
+
+    // add neighbors to link interfaces
+    for (neighbor, if_indexes) in bridge_fdb_neighbors {
+        for if_index in if_indexes {
+            if let Some(link) = links.get_mut(&if_index) {
+                link.neighbours.insert(neighbor);
+            }
         }
     }
 
-    // insert neighbors to related link interfaces
-    let mut dirty_links = Vec::new();
-    for (if_index, neighbors) in neighbors {
-        let Some(link) = links.get_mut(&if_index) else {
-            continue;
-        };
-        if let Some(link_if_index) = link.link_if_index {
-            dirty_links.push([if_index, link_if_index]);
-        }
-        link.neighbours.extend(neighbors);
-    }
-
-    // propagate neighbors through interface links
-    while !dirty_links.is_empty() {
-        for pair in std::mem::take(&mut dirty_links) {
-            let [Some(source), Some(target)] = links.get_disjoint_mut(pair.each_ref()) else {
-                continue;
-            };
-
-            let mut changed = false;
-            for neighbor in source.neighbours.iter() {
-                changed |= target.neighbours.insert(*neighbor);
-            }
-
-            if changed {
-                if let Some(link_if_index) = target.link_if_index {
-                    dirty_links.push([target.if_index, link_if_index]);
-                }
-            }
-        }
+    // remove interfaces that are not part of the bridge
+    if links.iter().any(|e| e.1.bridge_if_index.is_some()) {
+        links.retain(|_, e| e.bridge_if_index.is_some());
     }
     Ok(links.into_values().collect())
 }
@@ -177,7 +156,6 @@ struct LinkInterfaceInfo {
     if_index: i32,
     if_name: String,
     if_flags: Iff,
-    link_if_index: Option<i32>,
     bridge_if_index: Option<u32>,
     vlan_id: Option<u16>,
     link_stats: Option<RtnlLinkStats64>,
@@ -231,7 +209,6 @@ async fn call_rt_get_links() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo>>
         let if_flags = *payload.ifi_flags();
         let if_index = i32::from(*payload.ifi_index());
         let vlan_id = get_vlan_id(&attr_handle);
-        let link_if_index = attr_handle.get_attr_payload_as(Ifla::Link).ok();
         let bridge_if_index = attr_handle.get_attr_payload_as(Ifla::Master).ok();
         let link_stats = get_link_stats(&attr_handle);
 
@@ -240,7 +217,6 @@ async fn call_rt_get_links() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo>>
             if_index,
             if_name,
             if_flags,
-            link_if_index,
             bridge_if_index,
             vlan_id,
             link_stats,
@@ -250,52 +226,6 @@ async fn call_rt_get_links() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo>>
     }
 
     Ok(interfaces)
-}
-
-async fn call_rt_get_neighbors() -> anyhow::Result<IndexMap<i32, IndexSet<MacAddr>>> {
-    let (router, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).await?;
-
-    let if_info_msg = NdmsgBuilder::default()
-        .ndm_family(RtAddrFamily::Unspecified)
-        .ndm_index(0)
-        .ndm_state(Nud::empty())
-        .ndm_flags(Ntf::empty())
-        .ndm_type(Rtn::Unicast)
-        .build()?;
-
-    let mut recv: NlRouterReceiverHandle<Rtm, Ndmsg> = router
-        .send(
-            Rtm::Getneigh,
-            NlmF::DUMP | NlmF::REQUEST | NlmF::ACK,
-            NlPayload::Payload(if_info_msg),
-        )
-        .await?;
-
-    let mut neighbours = IndexMap::new();
-    while let Some(message) = recv.next().await {
-        let message: Nlmsghdr<Rtm, Ndmsg> = message?;
-        let Some(payload) = message.get_payload() else {
-            continue;
-        };
-
-        if *payload.ndm_type() != Rtn::Unicast {
-            continue;
-        }
-
-        let attr_handle = payload.rtattrs().get_attr_handle();
-        let Ok(mac) = attr_handle.get_attr_payload_as::<[u8; 6]>(Nda::Lladdr) else {
-            continue;
-        };
-
-        let mac = MacAddr::from(mac);
-        let if_index = i32::from(*payload.ndm_index());
-
-        neighbours
-            .entry(if_index)
-            .or_insert_with(IndexSet::new)
-            .insert(mac);
-    }
-    Ok(neighbours)
 }
 
 async fn call_rt_get_bridge_fdb() -> anyhow::Result<IndexMap<MacAddr, IndexSet<i32>>> {
@@ -323,6 +253,11 @@ async fn call_rt_get_bridge_fdb() -> anyhow::Result<IndexMap<MacAddr, IndexSet<i
         let Some(payload) = message.get_payload() else {
             continue;
         };
+
+        // we need only learned records, not locally assigned
+        if *payload.ndm_state() == Nud::PERMANENT {
+            continue;
+        }
 
         let attr_handle = payload.rtattrs().get_attr_handle();
         let Ok(mac) = attr_handle.get_attr_payload_as::<[u8; 6]>(Nda::Lladdr) else {
