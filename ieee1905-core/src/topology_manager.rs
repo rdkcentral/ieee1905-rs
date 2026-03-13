@@ -360,9 +360,7 @@ impl Ieee1905DeviceData {
         if self.destination_mac == Some(mac) {
             return true;
         }
-        self.local_interface_list
-            .as_ref()
-            .is_some_and(|e| e.iter().any(|e| e.mac == mac))
+        false
     }
 }
 
@@ -1179,7 +1177,6 @@ mod tests {
 
         assert!(db.find_device_by_port(device_mac).await.is_some());
         assert!(db.find_device_by_port(device_al_mac).await.is_some());
-        assert!(db.find_device_by_port(device_if_mac).await.is_some());
         assert!(db
             .find_device_by_port(MacAddr::new(0, 0, 0, 0, 0, 4))
             .await
