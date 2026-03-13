@@ -53,6 +53,12 @@ pub enum Nl80211Attribute {
     StaInfo = 21,
     /// Information about an operating bands, consisting of a nested array.
     WiphyBands = 22,
+    /// HT Capability information element (from association request when used with NL80211_CMD_NEW_STATION)
+    HtCapability = 31,
+    /// nested attribute containing all
+    /// supported interface types, each a flag attribute with the number
+    /// of the interface mode.
+    SupportedIftypes = 32,
     /// frequency of the selected channel in MHz, defines the channel together
     /// with the (deprecated) %NL80211_ATTR_WIPHY_CHANNEL_TYPE attribute or
     /// the attributes %NL80211_ATTR_CHANNEL_WIDTH and if needed %NL80211_ATTR_CENTER_FREQ1
@@ -66,6 +72,8 @@ pub enum Nl80211Attribute {
     /// NL80211_CHAN_HT40PLUS = secondary channel is above the primary channel
     /// This attribute is now deprecated.
     WiphyChannelType = 39,
+    /// number of SSIDs you can scan with a single scan request, a wiphy attribute.
+    MaxNumScanSsids = 43,
     /// Used to indicate consistent snapshots for dumps. This number increases
     /// whenever the object list being dumped changes, and as such userspace
     /// can verify that it has obtained a complete and consistent snapshot
@@ -73,19 +81,140 @@ pub enum Nl80211Attribute {
     /// If it changed then the list changed and the dump should be repeated
     /// completely from scratch.
     Generation = 46,
+    /// wiphy attribute that specifies
+    /// an array of command numbers (i.e. a mapping index to command number)
+    /// that the driver for the given wiphy supports.
+    SupportedCommands = 50,
     /// SSID (binary attribute, 0..32 octets)
     Ssid = 52,
+    /// maximum length of information elements that can be added to a scan request
+    MaxScanIeLen = 56,
+    /// a set of u32 values indicating the supported cipher suites
+    CipherSuites = 57,
+    /// TX retry limit for frames whose length is less than
+    /// or equal to the RTS threshold; allowed range: 1..255;
+    /// dot11ShortRetryLimit; u8
+    WiphyRetryShort = 61,
+    /// TX retry limit for frames whose length is
+    /// greater than the RTS threshold; allowed range: 1..255;
+    /// dot11ShortLongLimit; u8
+    WiphyRetryLong = 62,
+    /// fragmentation threshold, i.e., maximum
+    /// length in octets for frames; allowed range: 256..8000, disable
+    /// fragmentation with (u32)-1; dot11FragmentationThreshold; u32
+    WiphyFragThreshold = 63,
+    /// RTS threshold (TX frames with length
+    /// larger than or equal to this use RTS/CTS handshake); allowed range:
+    /// 0..65536, disable with (u32)-1; dot11RTSThreshold; u32
+    WiphyRtsThreshold = 64,
     /// Use 4-address frames on a virtual interface
     Addr4 = 83,
     /// survey information about a channel, part of the survey response for
     /// %NL80211_CMD_GET_SURVEY, nested attribute containing info as possible, see &enum survey_info.
     SurveyInfo = 84,
+    /// maximum number of PMKIDs a firmware can cache, a wiphy attribute.
+    MaxNumPmkids = 86,
+    /// Coverage Class as defined by IEEE 802.11
+    /// section 7.3.2.9; dot11CoverageClass; u8
+    WiphyCoverageClass = 89,
     /// Transmit power level in signed mBm units.
     /// This is used in association with @NL80211_ATTR_WIPHY_TX_POWER_SETTING
     /// for non-automatic settings.
     WiphyTxPowerLevel = 98,
+    /// A 16-bit value indicating the
+    /// ethertype that will be used for key negotiation. It can be
+    /// specified with the associate and connect commands. If it is not
+    /// specified, the value defaults to 0x888E (PAE, 802.1X). This
+    /// attribute is also used as a flag in the wiphy information to
+    /// indicate that protocols other than PAE are supported.
+    ControlPortEthertype = 102,
+    /// The device supports IBSS RSN, which mostly means support for per-station GTKs.
+    SupportIbssRsn = 104,
+    /// Bitmap of allowed antennas for transmitting.
+    /// This can be used to mask out antennas which are not attached or should
+    /// not be used for transmitting. If an antenna is not selected in this
+    /// bitmap the hardware is not allowed to transmit on this antenna.
+    ///
+    /// Each bit represents one antenna, starting with antenna 1 at the first
+    /// bit. Depending on which antennas are selected in the bitmap, 802.11n
+    /// drivers can derive which chainmasks to use (if all antennas belonging to
+    /// a particular chain are disabled this chain should be disabled) and if
+    /// a chain has diversity antennas whether diversity should be used or not.
+    /// HT capabilities (STBC, TX Beamforming, Antenna selection) can be
+    /// derived from the available chains after applying the antenna mask.
+    /// Non-802.11n drivers can derive whether to use diversity or not.
+    /// Drivers may reject configurations or RX/TX mask combinations they cannot
+    /// support by returning -EINVAL.
+    WiphyAntennaTx = 105,
+    /// Bitmap of allowed antennas for receiving.
+    /// This can be used to mask out antennas which are not attached or should
+    /// not be used for receiving. If an antenna is not selected in this bitmap
+    /// the hardware should not be configured to receive on this antenna.
+    /// For a more detailed description see @NL80211_ATTR_WIPHY_ANTENNA_TX.
+    WiphyAntennaRx = 106,
+    /// For management frame TX, the frame may be
+    /// transmitted on another channel when the channel given doesn't match
+    /// the current channel. If the current channel doesn't match and this
+    /// flag isn't set, the frame will be rejected. This is also used as an
+    /// nl80211 capability flag.
+    OffchannelTxOk = 108,
+    /// Device attribute that
+    /// specifies the maximum duration that can be requested with the
+    /// remain-on-channel operation, in milliseconds, u32.
+    MaxRemainOnChannelDuration = 111,
+    /// Bitmap of antennas which are available for configuration as TX antennas via the above parameters.
+    WiphyAntennaAvailTx = 113,
+    /// Bitmap of antennas which are available for configuration as RX antennas via the above parameters.
+    WiphyAntennaAvailRx = 114,
+    /// Currently, this means the underlying driver
+    /// allows auth frames in a mesh to be passed to userspace for processing via
+    /// the @NL80211_MESH_SETUP_USERSPACE_AUTH flag.
+    SupportMeshAuth = 115,
+    /// Nested attribute listing the supported
+    /// interface combinations. In each nested item, it contains attributes
+    /// defined in &enum nl80211_if_combination_attrs.
+    /// If the wiphy uses multiple radios (@NL80211_ATTR_WIPHY_RADIOS is set),
+    /// this attribute contains the interface combinations of the first radio.
+    /// See @NL80211_ATTR_WIPHY_INTERFACE_COMBINATIONS for the global wiphy
+    /// combinations for the sum of all radios.
+    InterfaceCombinations = 120,
+    /// Nested attribute (just like
+    /// %NL80211_ATTR_SUPPORTED_IFTYPES) containing the interface types that
+    /// are managed in software: interfaces of these types aren't subject to
+    /// any restrictions in their number or combinations.
+    SoftwareIftypes = 121,
+    /// number of SSIDs you can scan with a single scheduled scan request, a wiphy attribute.
+    MaxNumSchedScanSsids = 123,
+    /// maximum length of information elements that can be added to a scheduled scan request
+    MaxSchedScanIeLen = 124,
+    /// the device supports uapsd when working as AP.
+    SupportApUapsd = 130,
+    /// maximum number of sets that can be used with @NL80211_ATTR_SCHED_SCAN_MATCH, a wiphy attribute.
+    MaxMatchSets = 133,
+    /// A flag indicating the device can operate as a TDLS peer sta.
+    TdlsSupport = 139,
+    /// The TDLS discovery/setup and teardown
+    /// procedures should be performed by sending TDLS packets via
+    /// %NL80211_CMD_TDLS_MGMT. Otherwise %NL80211_CMD_TDLS_OPER should be
+    /// used for asking the driver to perform a TDLS operation.
+    TdlsExternalSetup = 140,
+    /// This u32 attribute contains flags from
+    /// &enum nl80211_feature_flags and is advertised in wiphy information.
+    FeatureFlags = 143,
+    /// Specify which bits of the
+    /// ATTR_HT_CAPABILITY to which attention should be paid.
+    /// Currently, only mac80211 NICs support this feature.
+    /// The values that may be configured are:
+    ///  - MCS rates, MAX-AMSDU, HT-20-40 and HT_CAP_SGI_40
+    ///  - AMPDU density and AMPDU factor.
+    /// All values are treated as suggestions and may be ignored
+    /// by the driver as required.  The actual values may be seen in
+    /// the station debugfs ht_caps file.
+    HtCapabilityMask = 148,
     /// wireless device identifier, used for pseudo-devices that don't have a netdev (u64)
     Wdev = 153,
+    /// VHT Capability information element (from association request when used with NL80211_CMD_NEW_STATION)
+    VhtCapability = 157,
     /// u32 attribute containing one of the values of &enum nl80211_chan_width,
     /// describing the channel width. See the documentation of the enum for more information.
     ChannelWidth = 159,
@@ -94,6 +223,18 @@ pub enum Nl80211Attribute {
     CenterFreq1 = 160,
     /// Center frequency of the second part of the channel, used only for 80+80 MHz bandwidth
     CenterFreq2 = 161,
+    /// flag attribute, userspace supports
+    /// receiving the data for a single wiphy split across multiple
+    /// messages, given with wiphy dump message
+    SplitWiphyDump = 174,
+    /// HE Capability information element (from
+    /// association request when used with NL80211_CMD_NEW_STATION). Can be set
+    /// only if %NL80211_STA_FLAG_WME is set.
+    HeCapability = 269,
+    /// EHT Capability information element (from
+    /// association request when used with NL80211_CMD_NEW_STATION). Can be set
+    /// only if %NL80211_STA_FLAG_WME is set.
+    EhtCapability = 310,
 }
 impl NlAttrType for Nl80211Attribute {}
 
@@ -454,6 +595,7 @@ pub enum Nl80211Band {
     /// light communication band (placeholder)
     LC = 5,
 }
+impl NlAttrType for Nl80211Band {}
 
 ///
 /// enum nl80211_chan_width - channel width definitions
@@ -528,3 +670,53 @@ pub enum Nl80211SurveyInfoAttr {
     FrequencyOffset = 12,
 }
 impl NlAttrType for Nl80211SurveyInfoAttr {}
+
+///
+/// enum nl80211_band_iftype_attr - Interface type data attributes
+///
+#[neli_enum(serialized_type = "u16")]
+#[non_exhaustive]
+pub enum Nl80211BandIfTypeAttr {
+    /// attribute number 0 is reserved
+    Invalid = 0,
+    /// nested attribute containing a flag attribute for each interface type that supports the band data
+    IfTypes = 1,
+    /// HE MAC capabilities as in HE capabilities IE
+    HeCapMac = 2,
+    /// HE PHY capabilities as in HE capabilities IE
+    HeCapPhy = 3,
+    /// HE supported NSS/MCS as in HE capabilities IE
+    HeCapMcsSet = 4,
+    /// HE PPE thresholds information as defined in HE capabilities IE
+    HeCapPpe = 5,
+    /// HE 6GHz band capabilities (__le16), given for all 6 GHz band channels
+    He6GHzCapa = 6,
+    /// vendor element capabilities that are advertised on this band/for this iftype (binary)
+    VendorElems = 7,
+    /// EHT MAC capabilities as in EHT capabilities element
+    EhtCapMac = 8,
+    /// EHT PHY capabilities as in EHT capabilities element
+    EhtCapPhy = 9,
+    /// EHT supported NSS/MCS as in EHT capabilities element
+    EhtCapMcsSet = 10,
+    /// EHT PPE thresholds information as defined in EHT capabilities element
+    EhtCapPpe = 11,
+    /// center frequency offset in KHz
+    FrequencyOffset = 12,
+}
+impl NlAttrType for Nl80211BandIfTypeAttr {}
+
+///
+/// enum nl80211_bitrate_attr - bitrate attributes
+///
+#[neli_enum(serialized_type = "u16")]
+#[non_exhaustive]
+pub enum Nl80211BitrateAttr {
+    /// attribute number 0 is reserved
+    Invalid = 0,
+    /// Bitrate in units of 100 kbps
+    Rate = 1,
+    /// Short preamble supported in 2.4 GHz band.
+    ShortPreamble2GHz = 2,
+}
+impl NlAttrType for Nl80211BitrateAttr {}

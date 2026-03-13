@@ -51,3 +51,41 @@ pub enum EthToolLinkModesAttribute {
     RateMatching = 10,
 }
 impl NlAttrType for EthToolLinkModesAttribute {}
+
+///
+/// ETHTOOL_A_BITSET
+///
+#[neli_enum(serialized_type = "u16")]
+#[non_exhaustive]
+pub enum EthToolBitsetAttr {
+    Unspecified = 0,
+    NoMask = 1,
+    Size = 2,
+    Bits = 3,
+    Value = 4,
+    Mask = 5,
+}
+impl NlAttrType for EthToolBitsetAttr {}
+
+///
+/// ETHTOOL_A_BITSET_BIT
+///
+#[neli_enum(serialized_type = "u16")]
+#[non_exhaustive]
+pub enum EthToolBitsetBitAttr {
+    Unspecified = 0,
+    Index = 1,
+    Name = 2,
+    Value = 3,
+}
+impl NlAttrType for EthToolBitsetBitAttr {}
+
+///
+/// ETHTOOL_LINK_MODE
+///
+#[allow(non_camel_case_types)]
+#[non_exhaustive]
+pub enum EthToolLinkMode {
+    Mode1000baseT_Half_BIT = 4,
+    Mode1000baseT_Full_BIT = 5,
+}

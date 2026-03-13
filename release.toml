@@ -14,7 +14,6 @@ push-remote = "origin"
 # Commit messages
 consolidate-commits = true
 shared-version = true
-pre-release-hook = ["git-cliff", "--tag", "v{{version}}", "-o", "CHANGELOG.md"]
 pre-release-commit-message = "chore(release): {{version}}"
 
 # Run checks before releasing (set to false if you don’t want tests to run)
