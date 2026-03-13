@@ -109,9 +109,9 @@ pub fn get_mac_address_by_interface(interface_name: &str) -> Option<MacAddr> {
 
 pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
     let mut interfaces = Vec::new();
-    let links = get_link_interfaces().await?;
+    let mut links = get_link_interfaces().await?;
 
-    match get_wireless_interfaces(&links).await {
+    match get_wireless_interfaces(&mut links).await {
         Ok(e) => interfaces.extend(e),
         Err(e) => error!(%e, "get_wireless_interfaces failed"),
     }
@@ -125,7 +125,7 @@ pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
     Ok(interfaces)
 }
 
-async fn get_link_interfaces() -> anyhow::Result<Vec<LinkInterfaceInfo>> {
+async fn get_link_interfaces() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo>> {
     let mut links = call_rt_get_links().await?;
     let mut bridge_fdb_neighbors = call_rt_get_bridge_fdb().await?;
 
@@ -147,7 +147,7 @@ async fn get_link_interfaces() -> anyhow::Result<Vec<LinkInterfaceInfo>> {
     if links.iter().any(|e| e.1.bridge_if_index.is_some()) {
         links.retain(|_, e| e.bridge_if_index.is_some());
     }
-    Ok(links.into_values().collect())
+    Ok(links)
 }
 
 #[derive(Debug)]
@@ -194,21 +194,21 @@ async fn call_rt_get_links() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo>>
             continue;
         };
 
-        fn get_vlan_id(handle: &RtAttrHandle<Ifla>) -> Option<u16> {
-            let link_info = handle.get_nested_attributes(Ifla::Linkinfo).ok()?;
-            let kind = link_info
-                .get_attr_payload_as_with_len_borrowed::<&[u8]>(IflaInfo::Kind)
-                .ok()?;
-            if kind == b"vlan\0" {
-                let data = link_info.get_nested_attributes(IflaInfo::Data).ok()?;
-                return data.get_attr_payload_as(IflaVlan::Id).ok();
+        let mut vlan_id = None;
+        if let Ok(link_info) = attr_handle.get_nested_attributes(Ifla::Linkinfo) {
+            match link_info.get_attr_payload_as_with_len_borrowed::<&[u8]>(IflaInfo::Kind) {
+                Ok(b"veth\0") => continue,
+                Ok(b"vlan\0") => {
+                    if let Ok(data) = link_info.get_nested_attributes(IflaInfo::Data) {
+                        vlan_id = data.get_attr_payload_as(IflaVlan::Id).ok();
+                    }
+                }
+                _ => {}
             }
-            None
         }
 
         let if_flags = *payload.ifi_flags();
         let if_index = i32::from(*payload.ifi_index());
-        let vlan_id = get_vlan_id(&attr_handle);
         let bridge_if_index = attr_handle.get_attr_payload_as(Ifla::Master).ok();
         let link_stats = get_link_stats(&attr_handle);
 
@@ -276,14 +276,13 @@ async fn call_rt_get_bridge_fdb() -> anyhow::Result<IndexMap<MacAddr, IndexSet<i
 }
 
 async fn get_wireless_interfaces(
-    links: &[LinkInterfaceInfo],
+    links: &mut IndexMap<i32, LinkInterfaceInfo>,
 ) -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
     let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
     let nl80211_family = router.resolve_genl_family(NL80211_GENL_NAME).await?;
 
     let interfaces = call_nl80211_get_interfaces(&router, nl80211_family).await?;
     let phy_map = call_nl80211_get_wiphy(&router, nl80211_family).await?;
-    let links: IndexMap<_, _> = links.iter().map(|e| (e.if_index, e)).collect();
 
     let mut result = Vec::new();
     for interface in interfaces {
@@ -291,7 +290,7 @@ async fn get_wireless_interfaces(
         let if_index = interface.if_index;
         let phy_index = interface.phy_index;
 
-        let Some(link) = links.get(&if_index) else {
+        let Some(link) = links.swap_remove(&if_index) else {
             warn!(if_name, if_index, "failed to find link info");
             continue;
         };
@@ -623,7 +622,7 @@ async fn call_nl80211_get_wiphy(
 }
 
 async fn get_ethernet_interfaces(
-    links: &[LinkInterfaceInfo],
+    links: &IndexMap<i32, LinkInterfaceInfo>,
 ) -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
     let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
     let eth_tool_family_id = router.resolve_genl_family(ETH_TOOL_GENL_NAME).await?;
@@ -632,11 +631,7 @@ async fn get_ethernet_interfaces(
     let if_map: IndexMap<_, _> = interfaces.into_iter().map(|e| (e.if_index, e)).collect();
 
     let mut result = Vec::new();
-    for link in links {
-        if !is_physical_ethernet_interface(&link) {
-            continue;
-        }
-
+    for link in links.values() {
         let if_index = link.if_index;
         let if_name = link.if_name.as_str();
 
@@ -777,18 +772,6 @@ async fn call_eth_tool_get_link_modes(
         });
     }
     Ok(interfaces)
-}
-
-fn is_physical_ethernet_interface(link: &LinkInterfaceInfo) -> bool {
-    for prefix in ["eth", "eno"] {
-        let Some(number) = link.if_name.strip_prefix(prefix) else {
-            continue;
-        };
-        if number.parse::<u32>().is_ok() {
-            return true;
-        }
-    }
-    false
 }
 
 fn get_link_stats(handle: &RtAttrHandle<Ifla>) -> Option<RtnlLinkStats64> {
