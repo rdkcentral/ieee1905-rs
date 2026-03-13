@@ -1283,7 +1283,6 @@ dependencies = [
  "futures",
  "indexmap",
  "lazy_static",
- "libc",
  "neli",
  "netdev",
  "nom 8.0.0",

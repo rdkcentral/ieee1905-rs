@@ -144,8 +144,9 @@ async fn get_link_interfaces() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo
     }
 
     // remove interfaces that are not part of the bridge
-    if links.iter().any(|e| e.1.bridge_if_index.is_some()) {
-        links.retain(|_, e| e.bridge_if_index.is_some());
+    if let Some(interface) = links.values().find(|e| e.if_name == "brlan0") {
+        let bridge_if_index = interface.if_index;
+        links.retain(|_, e| e.bridge_if_index == Some(bridge_if_index as u32));
     }
     Ok(links)
 }
@@ -231,8 +232,9 @@ async fn call_rt_get_links() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo>>
 async fn call_rt_get_bridge_fdb() -> anyhow::Result<IndexMap<MacAddr, IndexSet<i32>>> {
     let (router, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).await?;
 
+    const AF_BRIDGE: u8 = 7;
     let if_info_msg = NdmsgBuilder::default()
-        .ndm_family(RtAddrFamily::from(libc::AF_BRIDGE as u8))
+        .ndm_family(RtAddrFamily::from(AF_BRIDGE))
         .ndm_index(0)
         .ndm_state(Nud::empty())
         .ndm_flags(Ntf::empty())
