@@ -595,9 +595,13 @@ pub async fn cmdu_link_metric_response_transmission(
             e.ieee1905_neighbors
                 .iter()
                 .flatten()
-                .any(|e| e.neighbor_al_mac == neighbor.device_data.destination_frame_mac)
+                .any(|e| neighbor.device_data.has_port(e.neighbor_al_mac))
         }) else {
-            warn!("Could not find local interface with mac {}", neighbor.device_data.destination_frame_mac);
+            warn!(
+                al_mac = %neighbor.device_data.al_mac,
+                source = %neighbor.device_data.destination_frame_mac,
+                "Could not find neighbor destination interface",
+            );
             continue;
         };
 
