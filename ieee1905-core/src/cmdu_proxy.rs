@@ -600,7 +600,7 @@ pub async fn cmdu_link_metric_response_transmission(
             warn!(
                 al_mac = %neighbor.device_data.al_mac,
                 source = %neighbor.device_data.destination_frame_mac,
-                "Could not find neighbor interface",
+                "Could not find neighbor destination interface",
             );
             continue;
         };
