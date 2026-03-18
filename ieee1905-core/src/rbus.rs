@@ -13,14 +13,14 @@ use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905D
 use crate::TopologyDatabase;
 use anyhow::bail;
 use pnet::datalink::MacAddr;
-use rbus_core::RBusError;
+use rbus_core::{RBusError, RBusHandle, RBusLogHandler, RBusLogLevel, RBusLogRecord};
 use rbus_provider::element::object::rbus_object;
 use rbus_provider::element::property::rbus_property;
 use rbus_provider::element::table::rbus_table;
 use rbus_provider::element::RBusProviderElement;
 use rbus_provider::provider::{RBusProvider, RBusProviderError};
 use std::sync::Arc;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 mod al_device;
 mod interface;
@@ -42,6 +42,10 @@ pub struct RBusConnection {
 impl RBusConnection {
     #[instrument(name = "rbus_open")]
     pub fn open() -> anyhow::Result<Self> {
+        if let Err(e) = RBusHandle::register_log_handler::<RBusLogger>() {
+            warn!("failed to register log handler: {e}");
+        }
+
         for instance in 0..4 {
             debug!(instance, "registering RBus elements");
 
@@ -149,5 +153,18 @@ fn format_media_type(media_type: MediaType) -> &'static str {
         MediaType::IEEE_1901_FFT => "IEEE 1901 FFT",
         MediaType::MoCA_1_1 => "MoCAv1.1",
         _ => "Generic PHY",
+    }
+}
+
+struct RBusLogger;
+
+impl RBusLogHandler for RBusLogger {
+    fn print_log(record: RBusLogRecord) {
+        match record.level {
+            RBusLogLevel::Debug => debug!("[rbus] {:?}", record.message),
+            RBusLogLevel::Info => info!("[rbus] {:?}", record.message),
+            RBusLogLevel::Warn => warn!("[rbus] {:?}", record.message),
+            _ => error!("[rbus] {:?}", record.message),
+        }
     }
 }

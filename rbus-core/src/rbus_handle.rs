@@ -4,14 +4,13 @@ mod status;
 
 use crate::rbus_value::RBusValue;
 use crate::{RBusValueReadable, RBusValueWritable};
-use rbus_sys::*;
-use std::ffi::CStr;
-use std::mem::ManuallyDrop;
-use std::os::raw::{c_char, c_int};
-
 pub use element::*;
 pub use error::*;
+use rbus_sys::*;
 pub use status::*;
+use std::ffi::{c_uint, CStr};
+use std::mem::ManuallyDrop;
+use std::os::raw::{c_char, c_int};
 
 ///
 /// An RBus handle which identifies an opened component
@@ -57,6 +56,48 @@ impl RBusHandle {
     pub fn check_status() -> RBusStatus {
         let raw = unsafe { rbus_checkStatus() };
         RBusStatus::from_raw(raw)
+    }
+
+    ///
+    /// A callback handler to get the log messages to the application context
+    ///
+    /// Used by: Component that wants to handle the logs in its own way
+    /// must register a callback handler to get the log messages.
+    ///
+    pub fn register_log_handler<T>() -> Result<(), RBusError>
+    where
+        T: RBusLogHandler,
+    {
+        unsafe extern "C" fn log<T: RBusLogHandler>(
+            level: rbusLogLevel_t,
+            file: *const c_char,
+            line: c_int,
+            thread_id: c_int,
+            message: *mut c_char,
+        ) {
+            let file = if file.is_null() {
+                c""
+            } else {
+                unsafe { CStr::from_ptr(file) }
+            };
+
+            let message = if message.is_null() {
+                c""
+            } else {
+                unsafe { CStr::from_ptr(message) }
+            };
+
+            T::print_log(RBusLogRecord {
+                level: level.into(),
+                thread_id: thread_id.cast_unsigned(),
+                file,
+                line: line.cast_unsigned(),
+                message,
+            });
+        }
+
+        let result = unsafe { rbus_registerLogHandler(Some(log::<T>)) };
+        RBusError::map(result, || ())
     }
 
     ///
@@ -318,6 +359,53 @@ impl<'a> Iterator for RBusRowNameIter<'a> {
                 name,
                 alias,
             })
+        }
+    }
+}
+
+///
+/// A callback handler to get the log messages to the application context
+///
+/// A component that wants to handle the logs in its own way must register a callback
+/// handler to get the log messages.
+///
+pub trait RBusLogHandler {
+    fn print_log(record: RBusLogRecord);
+}
+
+#[derive(Debug)]
+pub struct RBusLogRecord<'a> {
+    /// log level
+    pub level: RBusLogLevel,
+    /// file name that it prints
+    pub file: &'a CStr,
+    /// line number in the file
+    pub line: u32,
+    /// threadId
+    pub thread_id: u32,
+    /// log message the library prints
+    pub message: &'a CStr,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RBusLogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Fatal,
+    Unknown(c_uint),
+}
+
+impl From<rbusLogLevel_t> for RBusLogLevel {
+    fn from(value: rbusLogLevel_t) -> Self {
+        match value {
+            rbusLogLevel_t::RBUS_LOG_DEBUG => Self::Debug,
+            rbusLogLevel_t::RBUS_LOG_INFO => Self::Info,
+            rbusLogLevel_t::RBUS_LOG_WARN => Self::Warn,
+            rbusLogLevel_t::RBUS_LOG_ERROR => Self::Error,
+            rbusLogLevel_t::RBUS_LOG_FATAL => Self::Fatal,
+            _ => Self::Unknown(value.0),
         }
     }
 }
