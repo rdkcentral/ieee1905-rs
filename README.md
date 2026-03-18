@@ -657,10 +657,18 @@ cargo build --package ieee1905 --release --features=rbus
 ```
 
 In case RBUS binaries are not available on the host machine,
-ieee1905 can be built with the bundled binaries: 
+ieee1905 can be built with the bundled binaries:
 
 ```shell
 cargo build --package ieee1905 --release --features=rbus-bundled
+```
+
+RBUS-enabled builds require a GNU toolchain.
+It will be selected by default when building on the target machine.
+In case it was not selected by default or the binary is cross-compiled, it should be provided manually:
+
+```shell
+cargo build --package ieee1905 --release --features=rbus --target aarch64-unknown-linux-gnu
 ```
 
 By default, tokio-console is not included in the binary.
