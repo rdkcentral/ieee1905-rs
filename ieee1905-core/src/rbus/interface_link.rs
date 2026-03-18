@@ -43,7 +43,13 @@ impl RBus_InterfaceLink {
         nodes: impl Iterator<Item = &'a Ieee1905NodeInternal>,
         interface: &'a Ieee1905InterfaceData,
     ) -> impl Iterator<Item = &'a Ieee1905NodeInternal> {
-        nodes.filter(|e| e.device_data.local_interface_mac == interface.mac)
+        nodes.filter(|node| {
+            interface
+                .ieee1905_neighbors
+                .iter()
+                .flatten()
+                .any(|neighbor| node.device_data.has_port(neighbor.neighbor_al_mac))
+        })
     }
 }
 
