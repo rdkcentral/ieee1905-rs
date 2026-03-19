@@ -152,6 +152,7 @@ pub enum IEEE1905TLVType {
     SupportedFreqBand,
     DeviceIdentificationType,
     Ieee1905ProfileVersion,
+    SupportedService,
     ClientAssociation,
     MultiApProfile,
     Profile2ApCapability,
@@ -180,6 +181,7 @@ impl IEEE1905TLVType {
             0x10 => IEEE1905TLVType::SupportedFreqBand,
             0x15 => IEEE1905TLVType::DeviceIdentificationType,
             0x1a => IEEE1905TLVType::Ieee1905ProfileVersion,
+            0x80 => IEEE1905TLVType::SupportedService,
             0x92 => IEEE1905TLVType::ClientAssociation,
             0xb3 => IEEE1905TLVType::MultiApProfile,
             0xb4 => IEEE1905TLVType::Profile2ApCapability,
@@ -208,6 +210,7 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::SupportedFreqBand => 0x10,
             IEEE1905TLVType::DeviceIdentificationType => 0x15,
             IEEE1905TLVType::Ieee1905ProfileVersion => 0x1a,
+            IEEE1905TLVType::SupportedService => 0x80,
             IEEE1905TLVType::ClientAssociation => 0x92,
             IEEE1905TLVType::MultiApProfile => 0xb3,
             IEEE1905TLVType::Profile2ApCapability => 0xb4,
@@ -947,6 +950,64 @@ impl TLVTrait for Ieee1905ProfileVersion {
 
     fn serialize(&self) -> Vec<u8> {
         self.to_u8().to_be_bytes().to_vec()
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub enum SupportedServiceType {
+    Controller,
+    Agent,
+    Reserved(u8),
+}
+
+impl SupportedServiceType {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, byte) = be_u8(input)?;
+        Ok((input, Self::from_u8(byte)))
+    }
+
+    pub fn from_u8(input: u8) -> Self {
+        match input {
+            0 => Self::Controller,
+            1 => Self::Agent,
+            _ => Self::Reserved(input),
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            SupportedServiceType::Controller => 0,
+            SupportedServiceType::Agent => 1,
+            SupportedServiceType::Reserved(e) => *e,
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct SupportedService {
+    pub services: Vec<SupportedServiceType>,
+}
+
+impl TLVTrait for SupportedService {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::SupportedService;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, services) = length_count(u8, SupportedServiceType::parse).parse(input)?;
+
+        Ok((input, Self { services }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.push(self.services.len() as u8);
+        for service in self.services.iter() {
+            vec.push(service.to_u8());
+        }
+        vec
     }
 }
 
@@ -2134,6 +2195,10 @@ pub mod tests {
             IEEE1905TLVType::Ieee1905ProfileVersion
         );
         assert_eq!(
+            IEEE1905TLVType::from_u8(0x80),
+            IEEE1905TLVType::SupportedService,
+        );
+        assert_eq!(
             IEEE1905TLVType::from_u8(0x92),
             IEEE1905TLVType::ClientAssociation,
         );
@@ -2179,6 +2244,7 @@ pub mod tests {
         );
         assert_eq!(SearchedRole::TYPE, IEEE1905TLVType::SearchedRole);
         assert_eq!(SupportedRole::TYPE, IEEE1905TLVType::SupportedRole);
+        assert_eq!(SupportedService::TYPE, IEEE1905TLVType::SupportedService);
         assert_eq!(ClientAssociation::TYPE, IEEE1905TLVType::ClientAssociation);
         assert_eq!(MultiApProfile::TYPE, IEEE1905TLVType::MultiApProfile);
         assert_eq!(
@@ -2210,6 +2276,7 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::SupportedFreqBand.to_u8(), 0x10);
         assert_eq!(IEEE1905TLVType::DeviceIdentificationType.to_u8(), 0x15);
         assert_eq!(IEEE1905TLVType::Ieee1905ProfileVersion.to_u8(), 0x1a);
+        assert_eq!(IEEE1905TLVType::SupportedService.to_u8(), 0x80);
         assert_eq!(IEEE1905TLVType::ClientAssociation.to_u8(), 0x92);
         assert_eq!(IEEE1905TLVType::MultiApProfile.to_u8(), 0xb3);
         assert_eq!(IEEE1905TLVType::Profile2ApCapability.to_u8(), 0xb4);
@@ -3240,6 +3307,25 @@ pub mod tests {
             ),
             Err(e) => panic!("Expected Failure(Verify), but got different error: {:?}", e),
         }
+    }
+
+    #[test]
+    fn test_supported_service_parse_and_serialize() {
+        let original = [
+            0x03, // len
+            0x00, // controller
+            0x01, // agent
+            0x80, // reserved
+        ];
+
+        let parsed = SupportedService::parse(&original).unwrap().1;
+        assert_eq!(parsed.services.len(), 3);
+        assert_eq!(parsed.services[0], SupportedServiceType::Controller);
+        assert_eq!(parsed.services[1], SupportedServiceType::Agent);
+        assert_eq!(parsed.services[2], SupportedServiceType::Reserved(0x80));
+
+        let serialized = parsed.serialize();
+        assert_eq!(original.as_slice(), serialized);
     }
 
     #[test]

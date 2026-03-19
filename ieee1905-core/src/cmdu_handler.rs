@@ -114,6 +114,10 @@ impl CMDUHandler {
             cmdu.clone()
         };
 
+        if !self.filter_incoming_cmdu(&cmdu).await {
+            return Ok(());
+        }
+
         self.dispatch_cmdu(
             cmdu_to_process,
             source_mac,
@@ -514,6 +518,16 @@ impl CMDUHandler {
             }
         }
 
+        let registry_role = SupportedService::find(tlvs).and_then(|e| {
+            if e.services.contains(&SupportedServiceType::Controller) {
+                return Some(Role::Registrar);
+            }
+            if e.services.contains(&SupportedServiceType::Agent) {
+                return Some(Role::Enrollee);
+            }
+            None
+        });
+
         let remote_al_mac = node.device_data.al_mac;
         let updated_device_data = Ieee1905DeviceData {
             al_mac: remote_al_mac,
@@ -521,7 +535,7 @@ impl CMDUHandler {
             destination_mac: None,
             local_interface_mac,
             local_interface_list: Some(interfaces.clone()),
-            registry_role: None,
+            registry_role,
             supported_fragmentation: Default::default(),
             supported_freq_band: None,
             ieee1905profile_version: None,
@@ -909,6 +923,28 @@ impl CMDUHandler {
         } else {
             trace!("Cannot find device for {source_mac} topology_db");
         }
+    }
+
+    async fn filter_incoming_cmdu(&self, cmdu: &CMDU) -> bool {
+        let db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
+
+        let message_type = CMDUType::from_u16(cmdu.message_type);
+        match message_type {
+            CMDUType::ApAutoConfigResponse => {
+                if let Some(Role::Registrar) = db.get_actual_local_role().await {
+                    warn!("Registrar cannot receive ApAutoConfigResponse");
+                    return false;
+                }
+            }
+            CMDUType::ApAutoConfigSearch => {
+                if let Some(Role::Enrollee) = db.get_actual_local_role().await {
+                    warn!("Enrollee cannot receive ApAutoConfigSearch");
+                    return false;
+                }
+            }
+            _ => {}
+        }
+        true
     }
 }
 

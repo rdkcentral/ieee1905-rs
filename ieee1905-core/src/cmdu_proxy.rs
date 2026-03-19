@@ -130,7 +130,7 @@ pub async fn cmdu_topology_query_transmission(
 
             // **Retrieve Destination MAC Address**
             let destination_mac = device_data.destination_frame_mac;
-            let local_role = topology_db.get_local_role().await;
+            let local_role = topology_db.get_actual_local_role().await;
 
             // Define TLVs
             let payload = [
@@ -321,12 +321,24 @@ async fn inject_topology_response_tlvs(
     }
 
     let filtered_types = [
+        SupportedService::TYPE.to_u8(),
         DeviceInformation::TYPE.to_u8(),
         DeviceBridgingCapability::TYPE.to_u8(),
         Ieee1905NeighborDevice::TYPE.to_u8(),
         NonIeee1905NeighborDevices::TYPE.to_u8(),
     ];
     vec.retain(|e| !filtered_types.contains(&e.tlv_type));
+
+    // injecting SupportedService
+    if let Some(role) = db.get_actual_local_role().await {
+        let service = match role {
+            Role::Registrar => SupportedServiceType::Controller,
+            Role::Enrollee => SupportedServiceType::Agent,
+        };
+        vec.push(TLV::from(SupportedService {
+            services: vec![service],
+        }))
+    }
 
     // injecting DeviceInformation
     vec.push({
@@ -701,6 +713,11 @@ pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>
         match CMDU::parse(&sdu.payload) {
             Ok((_, mut cmdu)) => {
                 let topology_db = TopologyDatabase::get_instance(source_al_mac, &interface);
+
+                if !filter_outgoing_cmdu(&topology_db, &cmdu).await {
+                    return;
+                }
+
                 let destination_mac = if sdu.destination_al_mac_address == IEEE1905_CONTROL_ADDRESS {
                     trace!("Parsing CMDU from SDU payload destination mac address is IEEE1905_CONTROL_ADDRESS");
                     fragmentation = CMDUFragmentation::default();
@@ -745,6 +762,26 @@ pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>
             }
         }
     }.instrument(info_span!(parent: None, "cmdu_from_sdu_transmission", task = next_task_id())));
+}
+
+async fn filter_outgoing_cmdu(db: &TopologyDatabase, cmdu: &CMDU) -> bool {
+    let message_type = CMDUType::from_u16(cmdu.message_type);
+    match message_type {
+        CMDUType::ApAutoConfigSearch => {
+            if let Some(Role::Registrar) = db.get_actual_local_role().await {
+                warn!("Registrar cannot send ApAutoConfigSearch");
+                return false;
+            }
+        }
+        CMDUType::ApAutoConfigResponse => {
+            if let Some(Role::Enrollee) = db.get_actual_local_role().await {
+                warn!("Enrollee cannot send ApAutoConfigResponse");
+                return false;
+            }
+        }
+        _ => {},
+    }
+    true
 }
 
 async fn enqueue_fragmented_cmdu(
