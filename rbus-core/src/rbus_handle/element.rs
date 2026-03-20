@@ -193,9 +193,15 @@ impl<'a> RBusDataElement<'a> {
                 return rbusError_t::RBUS_ERROR_INVALID_HANDLE;
             }
 
-            let handle = ManuallyDrop::new(RBusHandle(handle));
-            let property = ManuallyDrop::new(RBusProperty(property));
-            match T::get(&handle, &property) {
+            let result = RBusHandle::run_with_raw(handle, |handle| {
+                let property = ManuallyDrop::new(RBusProperty {
+                    handle: property,
+                    library: handle.library().clone(),
+                });
+                T::get(&handle, &property)
+            });
+
+            match result {
                 Ok(_) => rbusError_t::RBUS_ERROR_SUCCESS,
                 Err(e) => e.to_raw(),
             }
@@ -220,9 +226,15 @@ impl<'a> RBusDataElement<'a> {
                 return rbusError_t::RBUS_ERROR_INVALID_HANDLE;
             }
 
-            let handle = ManuallyDrop::new(RBusHandle(handle));
-            let property = ManuallyDrop::new(RBusProperty(property));
-            match T::set(&handle, &property) {
+            let result = RBusHandle::run_with_raw(handle, |handle| {
+                let property = ManuallyDrop::new(RBusProperty {
+                    handle: property,
+                    library: handle.library().clone(),
+                });
+                T::set(&handle, &property)
+            });
+
+            match result {
                 Ok(_) => rbusError_t::RBUS_ERROR_SUCCESS,
                 Err(e) => e.to_raw(),
             }

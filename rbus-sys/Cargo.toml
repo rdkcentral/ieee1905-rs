@@ -4,8 +4,8 @@ version = "0.4.0"
 edition = "2024"
 license = "Apache-2.0"
 
-[features]
-bundled = []
+[dependencies]
+libloading = "0.8.9"
 
 [build-dependencies]
 bindgen = "0.72.1"
