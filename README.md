@@ -474,7 +474,7 @@ The topology map provides all the information collected through Topology CMDUs e
 
 1. Ensure that you have `systemd` installed on your system.
 
-2. Ensure you include in your system Rust and cargo version 1.92.0 (MSRV).
+2. Ensure you include in your system rustc and cargo version 1.91.1 (MSRV).
 
 3. Ensure git is installed in your system.
 
