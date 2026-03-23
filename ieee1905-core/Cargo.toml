@@ -18,7 +18,6 @@ rbus-bundled = [
 [dependencies]
 rbus-core = { path = "../rbus-core", optional = true }
 rbus-provider = { path = "../rbus-provider", optional = true }
-
 pnet = "0.35.0"
 nom = "8.0.0"
 tokio = { version = "1.48.0", features = ["full", "tracing"] }
@@ -46,3 +45,22 @@ either = "1.15.0"
 
 # RUSTSEC transitive dependency overrides
 time = ">=0.3.47"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "cmdu_handler_bench"
+harness = false
+
+[[bench]]
+name = "cmdu_reassembler_bench"
+harness = false
+
+[[bench]]
+name = "cmdu_proxy_bench"
+harness = false
+
+[[bench]]
+name = "codec_parse_bench"
+harness = false

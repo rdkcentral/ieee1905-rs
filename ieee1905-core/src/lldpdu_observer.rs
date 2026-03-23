@@ -170,11 +170,8 @@ impl EthernetFrameObserver for LLDPObserver {
                     neighbor_chassis_id
                 );
 
-                let topology_db = TopologyDatabase::get_instance(
-                    self.local_chassis_id,
-                    self.interface_name.clone(),
-                )
-                .await;
+                let topology_db =
+                    TopologyDatabase::get_instance(self.local_chassis_id, &self.interface_name);
 
                 // If a valid port_id is found, update the topology
                 if let Some(node) = topology_db.get_device(neighbor_chassis_id).await {

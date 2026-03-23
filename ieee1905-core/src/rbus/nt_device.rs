@@ -2,7 +2,9 @@ use crate::cmdu_codec::{DeviceIdentificationType, Ieee1905ProfileVersion, Suppor
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
 use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
 use crate::rbus::{format_mac_address, peek_topology_database};
-use crate::topology_manager::{Ieee1905InterfaceData, Ieee1905LocalInterface, Ieee1905Node};
+use crate::topology_manager::{
+    Ieee1905InterfaceData, Ieee1905LocalInterface, Ieee1905NodeInternal,
+};
 use crate::TopologyDatabase;
 use either::Either;
 use nom::AsBytes;
@@ -128,7 +130,7 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device {
 ///
 pub enum RBus_Ieee1905Device_Node<'a> {
     Local(RwLockReadGuard<'a, [Ieee1905LocalInterface]>),
-    Remote(RwLockReadGuard<'a, Ieee1905Node>),
+    Remote(RwLockReadGuard<'a, Ieee1905NodeInternal>),
 }
 
 impl<'a> RBus_Ieee1905Device_Node<'a> {
