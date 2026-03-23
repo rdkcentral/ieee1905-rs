@@ -113,7 +113,7 @@ where
             return Err(RBusProviderElementError::WrongElement);
         }
 
-        if path.is_empty() || path == &["{i}"] {
+        if path.is_empty() || path == ["{i}"] {
             let table_path = join_path(&[args.path_full]);
 
             let len_new = self.sync.len(RBusProviderTableSyncArgs {

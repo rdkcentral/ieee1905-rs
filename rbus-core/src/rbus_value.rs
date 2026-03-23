@@ -18,6 +18,12 @@ pub use writable::*;
 #[repr(transparent)]
 pub struct RBusValue(pub(super) rbusValue_t);
 
+impl Default for RBusValue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RBusValue {
     ///
     /// Allocate and initialize a value to an empty state with its type set to RBUS_NONE

@@ -445,7 +445,7 @@ pub async fn intercept_wcs_profile2_dpp_compatibility(
         if e.tlv_type != IEEE1905TLVType::Profile2ApCapability.to_u8() {
             return None;
         }
-        Some(Profile2ApCapability::parse(&e.tlv_value.as_ref()?).ok()?.1)
+        Some(Profile2ApCapability::parse(e.tlv_value.as_ref()?).ok()?.1)
     });
 
     let Some(ap_capability) = ap_capability else {

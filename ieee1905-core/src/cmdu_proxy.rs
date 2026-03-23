@@ -558,17 +558,32 @@ pub async fn cmdu_link_metric_query_transmission_worker(
     }
 }
 
+pub struct LinkMetricResponseTransmissionRequest {
+    pub interface: String,
+    pub sender: Arc<EthernetSender>,
+    pub message_id: u16,
+    pub local_al_mac_address: MacAddr,
+    pub remote_al_mac_address: MacAddr,
+    pub include_rx: bool,
+    pub include_tx: bool,
+    pub neighbors: Vec<Ieee1905Node>,
+}
+
 #[instrument(skip_all, name = "cmdu_link_metric_response_transmission", fields(task = next_task_id()))]
 pub async fn cmdu_link_metric_response_transmission(
-    interface: String,
-    sender: Arc<EthernetSender>,
-    message_id: u16,
-    local_al_mac_address: MacAddr,
-    remote_al_mac_address: MacAddr,
-    include_rx: bool,
-    include_tx: bool,
-    neighbors: Vec<Ieee1905Node>,
+    request: LinkMetricResponseTransmissionRequest,
 ) {
+    let LinkMetricResponseTransmissionRequest {
+        interface,
+        sender,
+        message_id,
+        local_al_mac_address,
+        remote_al_mac_address,
+        include_rx,
+        include_tx,
+        neighbors,
+    } = request;
+
     debug!(
         %interface,
         message_id,

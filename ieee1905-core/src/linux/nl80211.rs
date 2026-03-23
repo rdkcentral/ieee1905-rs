@@ -293,9 +293,9 @@ pub enum Nl80211StaInfo {
     /// total transmitted bytes (u32, to this station)
     TxBytes = 3,
     /// the station's mesh LLID
-    LLID = 4,
+    Llid = 4,
     /// the station's mesh PLID
-    PLID = 5,
+    Plid = 5,
     /// peer link state for the station (see %enum nl80211_plink_state)
     PlinkState = 6,
     /// signal strength of last received PPDU (u8, dBm)

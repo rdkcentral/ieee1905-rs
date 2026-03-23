@@ -111,7 +111,7 @@ impl RBusError {
         })
     }
 
-    pub(crate) fn to_raw(&self) -> rbusError_t {
+    pub(crate) fn to_raw(self) -> rbusError_t {
         match self {
             Self::GeneralError => rbusError_t::RBUS_ERROR_BUS_ERROR,
             Self::InvalidInput => rbusError_t::RBUS_ERROR_INVALID_INPUT,
@@ -147,7 +147,7 @@ impl RBusError {
             Self::NotReadable => rbusError_t::RBUS_ERROR_NOT_READABLE,
             Self::InvalidParameterType => rbusError_t::RBUS_ERROR_INVALID_PARAMETER_TYPE,
             Self::InvalidParameterValue => rbusError_t::RBUS_ERROR_INVALID_PARAMETER_VALUE,
-            Self::Unexpected(e) => rbusError_t(*e),
+            Self::Unexpected(e) => rbusError_t(e),
         }
     }
 }

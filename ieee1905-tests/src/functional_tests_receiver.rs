@@ -67,7 +67,7 @@ async fn send_echoed_packet(
                 is_fragment: 0,
                 is_last_fragment: 1,
                 fragment_id: 0,
-                payload: payload,
+                payload,
             };
 
             println!(
