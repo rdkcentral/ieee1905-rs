@@ -198,7 +198,7 @@ impl<'a> RBusDataElement<'a> {
                     handle: property,
                     library: handle.library().clone(),
                 });
-                T::get(&handle, &property)
+                T::get(handle, &property)
             });
 
             match result {
@@ -231,7 +231,7 @@ impl<'a> RBusDataElement<'a> {
                     handle: property,
                     library: handle.library().clone(),
                 });
-                T::set(&handle, &property)
+                T::set(handle, &property)
             });
 
             match result {

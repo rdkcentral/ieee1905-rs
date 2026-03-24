@@ -177,7 +177,7 @@ impl RBusHandle {
 
             let result = RBusHandle::run_with_raw(handle, |handle| {
                 let table_name = unsafe { CStr::from_ptr(table_name) };
-                T::sync_rows(&handle, table_name)
+                T::sync_rows(handle, table_name)
             });
 
             match result {
