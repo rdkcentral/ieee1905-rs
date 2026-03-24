@@ -10,9 +10,6 @@ publish = false
 [features]
 enable_tokio_console = []
 rbus = ["rbus-core", "rbus-provider"]
-rbus-bundled = [
-    "rbus",
-]
 
 [dependencies]
 rbus-core = { path = "../rbus-core", optional = true }
