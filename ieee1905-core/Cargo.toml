@@ -12,7 +12,6 @@ enable_tokio_console = []
 rbus = ["rbus-core", "rbus-provider"]
 rbus-bundled = [
     "rbus",
-    "rbus-core/bundled",
 ]
 
 [dependencies]
