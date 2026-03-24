@@ -2,6 +2,7 @@ mod errors;
 mod readable;
 mod writable;
 
+use crate::rbus_library::RBusLibrary;
 use crate::rbus_utils::write_c_char_ptr_lossy_and_free;
 use rbus_sys::*;
 use std::cmp::Ordering;
@@ -15,8 +16,10 @@ pub use writable::*;
 ///
 /// A handle to an rbus value.
 ///
-#[repr(transparent)]
-pub struct RBusValue(pub(super) rbusValue_t);
+pub struct RBusValue {
+    pub(super) handle: rbusValue_t,
+    pub(crate) library: RBusLibrary,
+}
 
 impl Default for RBusValue {
     fn default() -> Self {
@@ -30,11 +33,24 @@ impl RBusValue {
     /// and data set to NULL. This automatically retains ownership of the value.
     /// It's the caller's responsibility to release ownership by calling rbusValue_Release once it's done with it.
     ///
-    pub fn new() -> Self {
-        unsafe {
-            let handle = rbusValue_Init(std::ptr::null_mut());
-            Self(handle)
+    pub fn new(library: &RBusLibrary) -> Self {
+        let handle = unsafe { library.as_raw().rbusValue_Init(std::ptr::null_mut()) };
+        Self {
+            handle,
+            library: library.clone(),
         }
+    }
+
+    ///
+    /// Allocate and initialize a value to a state
+    ///
+    pub fn from<T>(library: &RBusLibrary, value: &T) -> Self
+    where
+        T: RBusValueWritable + ?Sized,
+    {
+        let this = Self::new(library);
+        this.set(value);
+        this
     }
 
     ///
@@ -44,26 +60,31 @@ impl RBusValue {
     /// Additional owners can be assigned afterward with rbusValue_Retain.
     /// Each owner must call rbusValue_Release once done using the value.
     ///
-    pub(crate) fn retain(handle: rbusValue_t) -> Self {
+    pub(crate) fn retain(library: &RBusLibrary, handle: rbusValue_t) -> Self {
         unsafe {
-            rbusValue_Retain(handle);
+            library.as_raw().rbusValue_Retain(handle);
         }
-        Self(handle)
+        Self {
+            handle,
+            library: library.clone(),
+        }
     }
 
     ///
     /// Get the type of the value
     ///
     pub fn kind(&self) -> rbusValueType_t {
-        unsafe { rbusValue_GetType(self.0) }
+        let library = self.library.as_raw();
+        unsafe { library.rbusValue_GetType(self.handle) }
     }
 
     ///
     /// Copy data from source to dest
     ///
     pub fn copy_from(&self, source: &Self) {
+        let library = self.library.as_raw();
         unsafe {
-            rbusValue_Copy(self.0, source.0);
+            library.rbusValue_Copy(self.handle, source.handle);
         }
     }
 
@@ -71,8 +92,9 @@ impl RBusValue {
     /// Copy data from source to dest
     ///
     pub fn swap(&mut self, other: &mut Self) {
+        let library = self.library.as_raw();
         unsafe {
-            rbusValue_Swap(&mut self.0, &mut other.0);
+            library.rbusValue_Swap(&mut self.handle, &mut other.handle);
         }
     }
 
@@ -104,7 +126,8 @@ impl RBusValue {
     ///
     pub fn get_char(&self) -> Result<c_char, RBusValueGetError> {
         let mut value = 0;
-        let result = unsafe { rbusValue_GetCharEx(self.0, &mut value) };
+        let library = self.library.as_raw();
+        let result = unsafe { library.rbusValue_GetCharEx(self.handle, &mut value) };
         RBusValueGetError::map(result, value)
     }
 
@@ -113,7 +136,8 @@ impl RBusValue {
     ///
     pub fn get_byte(&self) -> Result<c_uchar, RBusValueGetError> {
         let mut value = 0;
-        let result = unsafe { rbusValue_GetByteEx(self.0, &mut value) };
+        let library = self.library.as_raw();
+        let result = unsafe { library.rbusValue_GetByteEx(self.handle, &mut value) };
         RBusValueGetError::map(result, value)
     }
 
@@ -131,31 +155,38 @@ impl RBusValue {
     /// Set char value
     ///
     pub fn set_char(&self, value: c_char) {
-        unsafe { rbusValue_SetChar(self.0, value) };
+        let library = self.library.as_raw();
+        unsafe { library.rbusValue_SetChar(self.handle, value) };
     }
 
     ///
     /// Set byte value
     ///
     pub fn set_byte(&self, value: c_uchar) {
-        unsafe { rbusValue_SetByte(self.0, value) };
+        let library = self.library.as_raw();
+        unsafe { library.rbusValue_SetByte(self.handle, value) };
     }
 }
 
 impl Drop for RBusValue {
     fn drop(&mut self) {
+        let library = self.library.as_raw();
         unsafe {
-            rbusValue_Release(self.0);
+            library.rbusValue_Release(self.handle);
         }
     }
 }
 
 impl Clone for RBusValue {
     fn clone(&self) -> Self {
+        let library = self.library.as_raw();
         unsafe {
-            rbusValue_Retain(self.0);
+            library.rbusValue_Retain(self.handle);
         }
-        Self(self.0)
+        Self {
+            handle: self.handle,
+            library: self.library.clone(),
+        }
     }
 }
 
@@ -169,7 +200,8 @@ impl PartialEq for RBusValue {
 
 impl Ord for RBusValue {
     fn cmp(&self, other: &Self) -> Ordering {
-        let result = unsafe { rbusValue_Compare(self.0, other.0) };
+        let library = self.library.as_raw();
+        let result = unsafe { library.rbusValue_Compare(self.handle, other.handle) };
         if result < 0 {
             return Ordering::Less;
         }
@@ -189,7 +221,8 @@ impl PartialOrd for RBusValue {
 impl Display for RBusValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         unsafe {
-            let ptr = rbusValue_ToString(self.0, std::ptr::null_mut(), 0);
+            let library = self.library.as_raw();
+            let ptr = library.rbusValue_ToString(self.handle, std::ptr::null_mut(), 0);
             write_c_char_ptr_lossy_and_free(f, ptr)?;
         }
         Ok(())
@@ -199,17 +232,10 @@ impl Display for RBusValue {
 impl Debug for RBusValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         unsafe {
-            let ptr = rbusValue_ToDebugString(self.0, std::ptr::null_mut(), 0);
+            let library = self.library.as_raw();
+            let ptr = library.rbusValue_ToDebugString(self.handle, std::ptr::null_mut(), 0);
             write_c_char_ptr_lossy_and_free(f, ptr)?;
         }
         Ok(())
-    }
-}
-
-impl<T: RBusValueWritable + ?Sized> From<&T> for RBusValue {
-    fn from(value: &T) -> Self {
-        let this = Self::new();
-        this.set(value);
-        this
     }
 }
