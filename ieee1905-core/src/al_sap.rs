@@ -38,7 +38,7 @@ use std::sync::Arc;
 use tokio::fs;
 use tokio::net::UnixListener;
 use tokio::net::UnixStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 // Internal modules
@@ -193,6 +193,10 @@ impl AlServiceAccessPoint {
         })
     }
 
+    pub async fn get() -> Option<OwnedMutexGuard<Self>> {
+        Some(get_instance_mut().await?.lock_owned().await)
+    }
+
     pub fn control_socket_path(&self) -> &Path {
         &self.control_socket_path
     }
@@ -206,6 +210,14 @@ impl AlServiceAccessPoint {
             return false;
         };
         instance.lock_owned().await.enabled
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn service_type(&self) -> Option<ServiceType> {
+        self.service_type
     }
 
     pub async fn control_is_connected(&mut self) -> bool {
