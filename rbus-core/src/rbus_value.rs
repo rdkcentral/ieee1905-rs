@@ -21,6 +21,12 @@ pub struct RBusValue {
     pub(crate) library: RBusLibrary,
 }
 
+impl Default for RBusValue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RBusValue {
     ///
     /// Allocate and initialize a value to an empty state with its type set to RBUS_NONE

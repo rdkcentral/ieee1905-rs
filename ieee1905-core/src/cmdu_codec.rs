@@ -223,7 +223,7 @@ impl TLVTrait for EndOfMessage {
     const TYPE: IEEE1905TLVType = IEEE1905TLVType::EndOfMessage;
 
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        if input.len() > 0 {
+        if !input.is_empty() {
             return Err(nom::Err::Error(Error::new(input, ErrorKind::Verify)));
         }
         Ok((input, Self))
