@@ -1,29 +1,36 @@
 use crate::RBusValue;
+use crate::rbus_library::RBusLibrary;
 use crate::rbus_property::RBusProperty;
 use rbus_sys::*;
 use std::ffi::CStr;
 
-#[repr(transparent)]
-pub struct RBusObject(pub(super) rbusObject_t);
+pub struct RBusObject {
+    pub(super) handle: rbusObject_t,
+    pub(crate) library: RBusLibrary,
+}
 
 impl RBusObject {
     ///
     /// Allocate, initialize, and take ownership of an object.
     ///
-    pub fn new(name: &CStr) -> Self {
+    pub fn new(library: &RBusLibrary, name: &CStr) -> Self {
         let mut handle = rbusObject_t::default();
         unsafe {
-            rbusObject_Init(&mut handle, name.as_ptr());
+            library.as_raw().rbusObject_Init(&mut handle, name.as_ptr());
         }
-        Self(handle)
+        Self {
+            handle,
+            library: library.clone(),
+        }
     }
 
     ///
     /// Get the name of the object.
     ///
     pub fn get_name(&self) -> &CStr {
+        let library = self.library.as_raw();
         unsafe {
-            let ptr = rbusObject_GetName(self.0);
+            let ptr = library.rbusObject_GetName(self.handle);
             if ptr.is_null() {
                 return c"";
             }
@@ -35,8 +42,9 @@ impl RBusObject {
     /// Set the name of the object.
     ///
     pub fn set_name(&self, name: &CStr) {
+        let library = self.library.as_raw();
         unsafe {
-            rbusObject_SetName(self.0, name.as_ptr());
+            library.rbusObject_SetName(self.handle, name.as_ptr());
         }
     }
 
@@ -44,8 +52,9 @@ impl RBusObject {
     /// Set the value of the object.
     ///
     pub fn set_value(&self, name: &CStr, value: &RBusValue) {
+        let library = self.library.as_raw();
         unsafe {
-            rbusObject_SetValue(self.0, name.as_ptr(), value.0);
+            library.rbusObject_SetValue(self.handle, name.as_ptr(), value.handle);
         }
     }
 
@@ -53,9 +62,10 @@ impl RBusObject {
     /// Get the property list of an object.
     ///
     pub fn get_properties(&self) -> RBusProperty {
+        let library = self.library.as_raw();
         unsafe {
-            let handle = rbusObject_GetProperties(self.0);
-            RBusProperty::retain(handle)
+            let handle = library.rbusObject_GetProperties(self.handle);
+            RBusProperty::retain(&self.library, handle)
         }
     }
 
@@ -63,8 +73,9 @@ impl RBusObject {
     /// Set the property list of an object.
     ///
     pub fn set_properties(&self, value: &RBusProperty) {
+        let library = self.library.as_raw();
         unsafe {
-            rbusObject_SetProperties(self.0, value.0);
+            library.rbusObject_SetProperties(self.handle, value.handle);
         }
     }
 
@@ -72,12 +83,13 @@ impl RBusObject {
     /// Get a property by name from an object.
     ///
     pub fn get_property(&self, name: &CStr) -> Option<RBusProperty> {
+        let library = self.library.as_raw();
         unsafe {
-            let handle = rbusObject_GetProperty(self.0, name.as_ptr());
+            let handle = library.rbusObject_GetProperty(self.handle, name.as_ptr());
             if handle.is_null() {
                 return None;
             }
-            Some(RBusProperty::retain(handle))
+            Some(RBusProperty::retain(&self.library, handle))
         }
     }
 
@@ -88,8 +100,9 @@ impl RBusObject {
     /// The caller should set the name on this property before calling this method.
     ///
     pub fn set_property(&self, value: &RBusProperty) {
+        let library = self.library.as_raw();
         unsafe {
-            rbusObject_SetProperty(self.0, value.0);
+            library.rbusObject_SetProperty(self.handle, value.handle);
         }
     }
 }
@@ -97,16 +110,20 @@ impl RBusObject {
 impl Drop for RBusObject {
     fn drop(&mut self) {
         unsafe {
-            rbusObject_Release(self.0);
+            self.library.as_raw().rbusObject_Release(self.handle);
         }
     }
 }
 
 impl Clone for RBusObject {
     fn clone(&self) -> Self {
+        let library = self.library.as_raw();
         unsafe {
-            rbusObject_Retain(self.0);
+            library.rbusObject_Retain(self.handle);
         }
-        Self(self.0)
+        Self {
+            handle: self.handle,
+            library: self.library.clone(),
+        }
     }
 }
