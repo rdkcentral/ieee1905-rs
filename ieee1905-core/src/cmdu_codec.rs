@@ -58,6 +58,8 @@ pub enum CMDUType {
     ApAutoConfigWCS,
     GenericPhyQuery,
     GenericPhyResponse,
+    ApCapabilityQuery,
+    ApCapabilityReport,
     Unknown(u16), // To handle unknown or unsupported CMDU types
 }
 
@@ -76,6 +78,8 @@ impl CMDUType {
             0x0009 => CMDUType::ApAutoConfigWCS,
             0x0011 => CMDUType::GenericPhyQuery,
             0x0012 => CMDUType::GenericPhyResponse,
+            0x8001 => CMDUType::ApCapabilityQuery,
+            0x8002 => CMDUType::ApCapabilityReport,
             _ => CMDUType::Unknown(value), // For unrecognized CMDU types
         }
     }
@@ -94,6 +98,8 @@ impl CMDUType {
             CMDUType::ApAutoConfigWCS => 0x0009,
             CMDUType::GenericPhyQuery => 0x0011,
             CMDUType::GenericPhyResponse => 0x0012,
+            CMDUType::ApCapabilityQuery => 0x8001,
+            CMDUType::ApCapabilityReport => 0x8002,
             CMDUType::Unknown(value) => value, // Return the unknown value as-is
         }
     }
@@ -158,6 +164,7 @@ pub enum IEEE1905TLVType {
     ClientAssociation,
     MultiApProfile,
     Profile2ApCapability,
+    DeviceInventory,
     Unknown(u8), // To handle unknown or unsupported TLV types
 }
 
@@ -187,6 +194,7 @@ impl IEEE1905TLVType {
             0x92 => IEEE1905TLVType::ClientAssociation,
             0xb3 => IEEE1905TLVType::MultiApProfile,
             0xb4 => IEEE1905TLVType::Profile2ApCapability,
+            0xd4 => IEEE1905TLVType::DeviceInventory,
             _ => IEEE1905TLVType::Unknown(value), // For unrecognized types
         }
     }
@@ -216,6 +224,7 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::ClientAssociation => 0x92,
             IEEE1905TLVType::MultiApProfile => 0xb3,
             IEEE1905TLVType::Profile2ApCapability => 0xb4,
+            IEEE1905TLVType::DeviceInventory => 0xd4,
             IEEE1905TLVType::Unknown(value) => value, // Return the unknown value as-is
         }
     }
@@ -1242,6 +1251,79 @@ impl ByteCounterUnits {
 
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq)]
+pub struct DeviceInventory {
+    pub serial_number: String,
+    pub software_version: String,
+    pub execution_env: String,
+    pub radios: Vec<DeviceInventoryRadio>,
+}
+
+impl TLVTrait for DeviceInventory {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::DeviceInventory;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, serial_number_len) = be_u8(input)?;
+        let (input, serial_number) = take_utf8(input, serial_number_len as usize)?;
+        let (input, software_version_len) = be_u8(input)?;
+        let (input, software_version) = take_utf8(input, software_version_len as usize)?;
+        let (input, execution_env_len) = be_u8(input)?;
+        let (input, execution_env) = take_utf8(input, execution_env_len as usize)?;
+        let (input, radios) = length_count(be_u8, DeviceInventoryRadio::parse).parse(input)?;
+
+        let this = Self {
+            serial_number,
+            software_version,
+            execution_env,
+            radios,
+        };
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend((self.serial_number.len() as u8).to_be_bytes());
+        vec.extend(self.serial_number.bytes());
+        vec.extend((self.software_version.len() as u8).to_be_bytes());
+        vec.extend(self.software_version.bytes());
+        vec.extend((self.execution_env.len() as u8).to_be_bytes());
+        vec.extend(self.execution_env.bytes());
+        vec.extend((self.radios.len() as u8).to_be_bytes());
+        vec.extend(self.radios.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct DeviceInventoryRadio {
+    pub radio_uid: [u8; 6],
+    pub chipset_vendor: String,
+}
+
+impl DeviceInventoryRadio {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, &radio_uid) = take_n_bytes(input)?;
+        let (input, chipset_vendor_len) = be_u8(input)?;
+        let (input, chipset_vendor) = take_utf8(input, chipset_vendor_len as usize)?;
+
+        let this = Self {
+            radio_uid,
+            chipset_vendor,
+        };
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.radio_uid);
+        vec.extend((self.chipset_vendor.len() as u8).to_be_bytes());
+        vec.extend(self.chipset_vendor.bytes());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
 pub struct LinkMetricQuery {
     pub neighbor_type: u8,
     pub neighbor_mac: Option<MacAddr>,
@@ -2129,6 +2211,8 @@ pub mod tests {
         assert_eq!(CMDUType::from_u16(9), CMDUType::ApAutoConfigWCS);
         assert_eq!(CMDUType::from_u16(0x11), CMDUType::GenericPhyQuery);
         assert_eq!(CMDUType::from_u16(0x12), CMDUType::GenericPhyResponse);
+        assert_eq!(CMDUType::from_u16(0x8001), CMDUType::ApCapabilityQuery);
+        assert_eq!(CMDUType::from_u16(0x8002), CMDUType::ApCapabilityReport);
     }
 
     // Verify function for getting message version of CMDU
@@ -2160,6 +2244,8 @@ pub mod tests {
         assert_eq!(CMDUType::ApAutoConfigWCS.to_u16(), 9);
         assert_eq!(CMDUType::GenericPhyQuery.to_u16(), 0x11);
         assert_eq!(CMDUType::GenericPhyResponse.to_u16(), 0x12);
+        assert_eq!(CMDUType::ApCapabilityQuery.to_u16(), 0x8001);
+        assert_eq!(CMDUType::ApCapabilityReport.to_u16(), 0x8002);
     }
 
     // Verify the correctness of conversion from u8 to IEEE1905TLVType
@@ -2251,6 +2337,10 @@ pub mod tests {
             IEEE1905TLVType::from_u8(0xb4),
             IEEE1905TLVType::Profile2ApCapability,
         );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0xd4),
+            IEEE1905TLVType::DeviceInventory,
+        );
     }
 
     #[test]
@@ -2291,6 +2381,7 @@ pub mod tests {
             Profile2ApCapability::TYPE,
             IEEE1905TLVType::Profile2ApCapability,
         );
+        assert_eq!(DeviceInventory::TYPE, IEEE1905TLVType::DeviceInventory);
     }
 
     // Verify the correctness of conversion from IEEE1905TLVType enum to u8
@@ -2319,6 +2410,7 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::ClientAssociation.to_u8(), 0x92);
         assert_eq!(IEEE1905TLVType::MultiApProfile.to_u8(), 0xb3);
         assert_eq!(IEEE1905TLVType::Profile2ApCapability.to_u8(), 0xb4);
+        assert_eq!(IEEE1905TLVType::DeviceInventory.to_u8(), 0xd4);
     }
 
     // Verify changing version by using set_message_version function
@@ -3446,6 +3538,44 @@ pub mod tests {
         assert_eq!(ByteCounterUnits::KiB.to_u8(), 0x01);
         assert_eq!(ByteCounterUnits::MiB.to_u8(), 0x02);
         assert_eq!(ByteCounterUnits::Reserved.to_u8(), 0x03);
+    }
+
+    #[test]
+    fn test_device_inventory_serialization() {
+        let original = [
+            0x04, // serial_number len
+            b'1', b'2', b'3', b'4', // serial_number
+            0x07, // software_version len
+            b'2', b'0', b'2', b'6', b'.', b'0', b'3', // software_version
+            0x05, // execution_env len
+            b'l', b'i', b'n', b'u', b'x', // execution_env
+            0x02, // radio count
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, // radio 1 uid
+            0x05, // radio 1 chipset vendor len
+            b'm', b'e', b'd', b'i', b'a', // radio 1 chipset vendor
+            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, // radio 2 uid
+            0x03, // radio 2 chipset vendor len
+            b't', b'e', b'k', // radio 2 chipset vendor
+        ];
+
+        let parsed = DeviceInventory::parse(&original).unwrap().1;
+        assert_eq!(parsed.serial_number, "1234");
+        assert_eq!(parsed.software_version, "2026.03");
+        assert_eq!(parsed.execution_env, "linux");
+        assert_eq!(parsed.radios.len(), 2);
+        assert_eq!(
+            parsed.radios[0].radio_uid,
+            [0x01, 0x02, 0x03, 0x04, 0x05, 0x06]
+        );
+        assert_eq!(
+            parsed.radios[1].radio_uid,
+            [0x11, 0x12, 0x13, 0x14, 0x15, 0x16]
+        );
+        assert_eq!(parsed.radios[0].chipset_vendor, "media");
+        assert_eq!(parsed.radios[1].chipset_vendor, "tek");
+
+        let serialized = parsed.serialize();
+        assert_eq!(serialized, original);
     }
 
     #[test]
