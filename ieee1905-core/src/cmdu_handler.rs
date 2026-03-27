@@ -194,8 +194,13 @@ impl CMDUHandler {
                 handled = false;
             }
             CMDUType::ApAutoConfigResponse => {
-                self.handle_ap_auto_config_response(&tlvs, message_id, source_mac)
-                    .await;
+                self.handle_ap_auto_config_response(
+                    &tlvs,
+                    message_id,
+                    source_mac,
+                    local_interface_mac,
+                )
+                .await;
                 handled = false;
             }
             CMDUType::ApAutoConfigWCS => {
@@ -786,6 +791,7 @@ impl CMDUHandler {
         tlvs: &[TLV],
         message_id: u16,
         source_mac: MacAddr,
+        local_interface_mac: MacAddr,
     ) {
         debug!(
             source = %source_mac,
@@ -798,9 +804,44 @@ impl CMDUHandler {
             return error!("ApAutoConfigResponse CMDU missing SupportedFreqBand TLV");
         };
 
-        TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
-            .handle_ap_auto_config_response(source_mac, supported_freq_band)
+        let db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
+        let mut device_data = match db.find_device_by_port(source_mac).await {
+            Some(e) => e.device_data,
+            None => {
+                let Some(al_mac) = AlMacAddress::find(tlvs) else {
+                    return error!("ApAutoConfigResponse CMDU missing AlMacAddress TLV");
+                };
+                Ieee1905DeviceData {
+                    al_mac: al_mac.al_mac_address,
+                    destination_frame_mac: source_mac,
+                    destination_mac: None,
+                    local_interface_mac,
+                    local_interface_list: None,
+                    registry_role: None,
+                    supported_fragmentation: Default::default(),
+                    supported_freq_band: None,
+                    ieee1905profile_version: None,
+                    device_identification_type: None,
+                }
+            }
+        };
+
+        device_data.supported_freq_band = Some(supported_freq_band);
+
+        let transmission_event = db
+            .update_ieee1905_topology(
+                device_data,
+                UpdateType::ApAutoConfigResponse,
+                None,
+                Some(message_id),
+                None,
+            )
             .await;
+
+        match transmission_event {
+            TransmissionEvent::None => {}
+            _ => warn!("Unexpected TransmissionEvent in handle_ap_auto_config_response"),
+        }
 
         info!(source = %source_mac, "ApAutoConfigResponse Processed");
     }

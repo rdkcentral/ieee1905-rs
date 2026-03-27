@@ -84,6 +84,7 @@ pub enum UpdateType {
     ResponseSent,
     ResponseReceived,
     ApAutoConfigSearch,
+    ApAutoConfigResponse,
 }
 
 pub enum TransmissionEvent {
@@ -835,6 +836,21 @@ impl TopologyDatabase {
                         UpdateType::ApAutoConfigSearch => {
                             node.prepare_link_metrics_query_transmission_event_if_needed()
                         }
+                        UpdateType::ApAutoConfigResponse => {
+                            if node.device_data.supported_freq_band
+                                != device_data.supported_freq_band
+                            {
+                                debug!(
+                                    al_mac = ?al_mac,
+                                    new = ?device_data.supported_freq_band,
+                                    old = ?node.device_data.supported_freq_band,
+                                    "node supported_freq_band changed",
+                                );
+                                node.device_data.supported_freq_band =
+                                    device_data.supported_freq_band;
+                            }
+                            TransmissionEvent::None
+                        }
                     };
                 }
                 None => {
@@ -876,6 +892,12 @@ impl TopologyDatabase {
                             node_was_created = true;
                             debug!(al_mac = ?al_mac, "Inserted node from ApAutoConfigSearch");
                             node.prepare_link_metrics_query_transmission_event_if_needed()
+                        }
+                        UpdateType::ApAutoConfigResponse => {
+                            nodes.insert(al_mac, new_node);
+                            node_was_created = true;
+                            debug!(al_mac = ?al_mac, "Inserted node from ApAutoConfigResponse");
+                            TransmissionEvent::None
                         }
                         _ => {
                             debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
@@ -932,19 +954,6 @@ impl TopologyDatabase {
         };
 
         Some((node_al_mac, neighbors))
-    }
-
-    pub async fn handle_ap_auto_config_response(
-        &self,
-        source: MacAddr,
-        supported_freq_band: SupportedFreqBand,
-    ) {
-        let mut nodes = self.nodes.write().await;
-        let Some(node) = Self::find_node_by_port_mut(nodes.values_mut(), source) else {
-            return debug!(%source, "handle_ap_auto_config_response — node not found");
-        };
-
-        node.device_data.supported_freq_band = Some(supported_freq_band);
     }
 
     pub async fn handle_ap_auto_config_wcs(
@@ -1008,10 +1017,7 @@ impl TopologyDatabase {
 
                 let top_chunks = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([
-                        Constraint::Percentage(70),
-                        Constraint::Percentage(30),
-                    ])
+                    .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
                     .split(chunks[0]);
 
                 // ─────────────────────── BLOQUE 1: TOPOLOGY MANAGER
