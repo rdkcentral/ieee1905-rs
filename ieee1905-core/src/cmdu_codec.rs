@@ -896,9 +896,22 @@ impl TLVTrait for DeviceIdentificationType {
     }
 
     fn serialize(&self) -> Vec<u8> {
+        fn floor_char_boundary(str: &str, mut index: usize) -> usize {
+            if index >= str.len() {
+                return str.len();
+            }
+            while index > 0 {
+                if str.is_char_boundary(index) {
+                    break;
+                }
+                index -= 1;
+            }
+            index
+        }
+
         fn push_utf8(buf: &mut Vec<u8>, str: &str) {
             let base_len = buf.len();
-            let push_len = str.floor_char_boundary(64);
+            let push_len = floor_char_boundary(str, 64);
             buf.extend(&str.as_bytes()[..push_len]);
             buf.resize(base_len + 64, 0);
         }

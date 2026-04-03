@@ -9,7 +9,7 @@ fn main() -> anyhow::Result<()> {
     let provider = register_provider()?;
 
     println!("RBus provider registered");
-    std::thread::sleep(std::time::Duration::from_mins(1));
+    std::thread::sleep(std::time::Duration::from_secs(60));
 
     Ok(drop(provider))
 }
