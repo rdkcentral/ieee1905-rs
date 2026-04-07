@@ -27,13 +27,14 @@ jobs:
 
       - name: Formatting Coverage Report
         run: |
-          echo "### Coverage Report" > coverage_report_final.txt
-          echo '```text' >> coverage_report_final.txt
-          cat coverage_report.txt >> coverage_report_final.txt
-          echo '```' >> coverage_report_final.txt
+          echo "### Coverage Report" > coverage_report_formatted.txt
+          echo "```text" >> coverage_report_formatted.txt
+          cat coverage_report.txt >> coverage_report_formatted.txt
+          echo "" >> coverage_report_formatted.txt
+          echo "```" >> coverage_report_formatted.txt
 
       - name: Post Coverage Report Comment
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: coverage-report
-          path: coverage_report_final.txt
+          path: coverage_report_formatted.txt
