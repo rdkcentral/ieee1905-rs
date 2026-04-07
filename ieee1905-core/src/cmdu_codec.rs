@@ -298,14 +298,7 @@ impl LocalInterface {
         let mut bytes = Vec::new();
 
         // Serialize MAC address (6 bytes)
-        bytes.extend_from_slice(&[
-            self.mac_address.0,
-            self.mac_address.1,
-            self.mac_address.2,
-            self.mac_address.3,
-            self.mac_address.4,
-            self.mac_address.5,
-        ]);
+        bytes.extend(self.mac_address.octets());
 
         // Serialize media type (2 bytes)
         bytes.extend(self.media_type.serialize());
@@ -369,15 +362,7 @@ impl TLVTrait for DeviceInformation {
 
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         // Parse AlMacAddress (6 bytes)
-        let (input, al_mac_bytes) = take(6usize)(input)?;
-        let al_mac_address = MacAddr::new(
-            al_mac_bytes[0],
-            al_mac_bytes[1],
-            al_mac_bytes[2],
-            al_mac_bytes[3],
-            al_mac_bytes[4],
-            al_mac_bytes[5],
-        );
+        let (input, al_mac_address) = take_mac_addr(input)?;
 
         // Parse local_interface_count (1 byte)
         let (input, local_interface_count) = be_u8(input)?;
@@ -401,21 +386,14 @@ impl TLVTrait for DeviceInformation {
         let mut bytes = Vec::new();
 
         // Serialize AlMacAddress (6 bytes)
-        bytes.extend_from_slice(&[
-            self.al_mac_address.0,
-            self.al_mac_address.1,
-            self.al_mac_address.2,
-            self.al_mac_address.3,
-            self.al_mac_address.4,
-            self.al_mac_address.5,
-        ]);
+        bytes.extend(self.al_mac_address.octets());
 
         // Serialize local_interface_count (1 byte)
         bytes.push(self.local_interface_count);
 
         // Serialize each LocalInterface
         for local_interface in &self.local_interface_list {
-            bytes.extend_from_slice(&local_interface.serialize());
+            bytes.extend(&local_interface.serialize());
         }
 
         bytes
@@ -432,32 +410,15 @@ pub struct BridgingTuple {
 impl BridgingTuple {
     /// Parses a `BridgingTuple` from a byte slice
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        // Parse the bridging_mac_count (1 byte)
-        let (mut input, bridging_mac_count) = be_u8(input)?;
+        use nom::number::complete::u8;
 
-        let mut bridging_mac_list = Vec::new();
+        let (input, list) = length_count(u8, take_mac_addr).parse(input)?;
 
-        // Parse each MAC address (6 bytes per MAC)
-        for _ in 0..bridging_mac_count {
-            if input.len() < 6 {
-                return Err(NomErr::Failure(Error::new(input, ErrorKind::Eof)));
-            }
-
-            let mac_address =
-                MacAddr::new(input[0], input[1], input[2], input[3], input[4], input[5]);
-            bridging_mac_list.push(mac_address);
-
-            // Advance input
-            input = &input[6..];
-        }
-
-        Ok((
-            input,
-            BridgingTuple {
-                bridging_mac_count,
-                bridging_mac_list,
-            },
-        ))
+        let this = BridgingTuple {
+            bridging_mac_count: list.len() as u8,
+            bridging_mac_list: list,
+        };
+        Ok((input, this))
     }
 
     /// Serializes the `BridgingTuple` into a byte vector
@@ -469,14 +430,7 @@ impl BridgingTuple {
 
         // Serialize each MAC address (6 bytes per MAC)
         for mac_address in &self.bridging_mac_list {
-            bytes.extend_from_slice(&[
-                mac_address.0,
-                mac_address.1,
-                mac_address.2,
-                mac_address.3,
-                mac_address.4,
-                mac_address.5,
-            ]);
+            bytes.extend(mac_address.octets());
         }
 
         bytes
@@ -494,25 +448,15 @@ impl TLVTrait for DeviceBridgingCapability {
     const TYPE: IEEE1905TLVType = IEEE1905TLVType::DeviceBridgingCapability;
 
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        // Parse the bridging_tuples_count (1 byte)
-        let (mut input, bridging_tuples_count) = be_u8(input)?;
+        use nom::number::complete::u8;
 
-        let mut bridging_tuples_list = Vec::new();
+        let (input, list) = length_count(u8, BridgingTuple::parse).parse(input)?;
 
-        // Parse each BridgingTuple
-        for _ in 0..bridging_tuples_count {
-            let (next_input, bridging_tuple) = BridgingTuple::parse(input)?;
-            bridging_tuples_list.push(bridging_tuple);
-            input = next_input;
-        }
-
-        Ok((
-            input,
-            DeviceBridgingCapability {
-                bridging_tuples_count,
-                bridging_tuples_list,
-            },
-        ))
+        let this = DeviceBridgingCapability {
+            bridging_tuples_count: list.len() as u8,
+            bridging_tuples_list: list,
+        };
+        Ok((input, this))
     }
 
     fn serialize(&self) -> Vec<u8> {
@@ -523,7 +467,7 @@ impl TLVTrait for DeviceBridgingCapability {
 
         // Serialize each BridgingTuple
         for bridging_tuple in &self.bridging_tuples_list {
-            bytes.extend_from_slice(&bridging_tuple.serialize());
+            bytes.extend(&bridging_tuple.serialize());
         }
 
         bytes
@@ -537,35 +481,13 @@ pub struct NonIEEE1905Neighbor {
 }
 
 impl NonIEEE1905Neighbor {
-    // Parse function for NonIEEE1905Neighbor
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, mac_bytes) = take(6usize)(input)?;
-
-        let neighbor_mac = MacAddr::new(
-            mac_bytes[0],
-            mac_bytes[1],
-            mac_bytes[2],
-            mac_bytes[3],
-            mac_bytes[4],
-            mac_bytes[5],
-        );
-
+        let (input, neighbor_mac) = take_mac_addr(input)?;
         Ok((input, NonIEEE1905Neighbor { neighbor_mac }))
     }
+
     pub fn serialize(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-
-        // Serialize the MAC address (6 bytes)
-        bytes.extend_from_slice(&[
-            self.neighbor_mac.0,
-            self.neighbor_mac.1,
-            self.neighbor_mac.2,
-            self.neighbor_mac.3,
-            self.neighbor_mac.4,
-            self.neighbor_mac.5,
-        ]);
-
-        bytes
+        self.neighbor_mac.octets().to_vec()
     }
 }
 
@@ -577,52 +499,29 @@ pub struct NonIEEE1905LocalInterfaceNeighborhood {
 }
 
 impl NonIEEE1905LocalInterfaceNeighborhood {
-    pub fn parse(input: &[u8], neighbor_count: u8) -> IResult<&[u8], Self> {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         // Parse the local MAC address (6 bytes)
-        let (input, local_mac_bytes) = take(6usize)(input)?;
-        let local_mac_address = MacAddr::new(
-            local_mac_bytes[0],
-            local_mac_bytes[1],
-            local_mac_bytes[2],
-            local_mac_bytes[3],
-            local_mac_bytes[4],
-            local_mac_bytes[5],
-        );
+        let (input, local_mac_address) = take_mac_addr(input)?;
 
         // Parse the list of neighbors
-        let mut neighbor_list = Vec::new();
-        let mut remaining_input = input;
+        let (input, list) = all_consuming(many0(NonIEEE1905Neighbor::parse)).parse(input)?;
 
-        for _ in 0..neighbor_count {
-            let (next_input, neighbor) = NonIEEE1905Neighbor::parse(remaining_input)?;
-            neighbor_list.push(neighbor);
-            remaining_input = next_input;
-        }
-
-        Ok((
-            remaining_input,
-            NonIEEE1905LocalInterfaceNeighborhood {
-                local_mac_address,
-                neighbor_list,
-            },
-        ))
+        let this = NonIEEE1905LocalInterfaceNeighborhood {
+            local_mac_address,
+            neighbor_list: list,
+        };
+        Ok((input, this))
     }
+
     pub fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
         // Serialize the local MAC address (6 bytes)
-        bytes.extend_from_slice(&[
-            self.local_mac_address.0,
-            self.local_mac_address.1,
-            self.local_mac_address.2,
-            self.local_mac_address.3,
-            self.local_mac_address.4,
-            self.local_mac_address.5,
-        ]);
+        bytes.extend(self.local_mac_address.octets());
 
         // Serialize each neighbor
         for neighbor in &self.neighbor_list {
-            bytes.extend_from_slice(&neighbor.serialize());
+            bytes.extend(&neighbor.serialize());
         }
 
         bytes
@@ -671,15 +570,7 @@ impl IEEE1905Neighbor {
     /// Parse an `IEEE1905Neighbor` from a byte slice
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         // Parse the neighbor_al_mac (6 bytes)
-        let (input, mac_bytes) = take(6usize)(input)?;
-        let neighbor_al_mac = MacAddr::new(
-            mac_bytes[0],
-            mac_bytes[1],
-            mac_bytes[2],
-            mac_bytes[3],
-            mac_bytes[4],
-            mac_bytes[5],
-        );
+        let (input, neighbor_al_mac) = take_mac_addr(input)?;
 
         // Parse the neighbor_flags (1 byte)
         let (input, neighbor_flags) = be_u8(input)?;
@@ -699,17 +590,10 @@ impl IEEE1905Neighbor {
         let mut bytes = Vec::new();
 
         // Serialize the neighbor_al_mac (6 bytes)
-        bytes.extend_from_slice(&[
-            self.neighbor_al_mac.0,
-            self.neighbor_al_mac.1,
-            self.neighbor_al_mac.2,
-            self.neighbor_al_mac.3,
-            self.neighbor_al_mac.4,
-            self.neighbor_al_mac.5,
-        ]);
+        bytes.extend(self.neighbor_al_mac.octets());
 
         // Serialize the neighbor_flags (1 byte)
-        bytes.push(self.neighbor_flags);
+        bytes.extend(self.neighbor_flags.to_be_bytes());
 
         bytes
     }
@@ -768,8 +652,8 @@ impl TLVTrait for VendorSpecificInfo {
 
     fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&self.oui); // Add OUI
-        bytes.extend_from_slice(&self.vendor_data); // Add vendor-specific data
+        bytes.extend(&self.oui); // Add OUI
+        bytes.extend(&self.vendor_data); // Add vendor-specific data
         bytes
     }
 }
@@ -998,8 +882,8 @@ impl TLVTrait for ClientAssociation {
 
     fn serialize(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(13);
-        buf.extend_from_slice(&self.sta_mac.octets());
-        buf.extend_from_slice(&self.ap_mac.octets());
+        buf.extend(self.sta_mac.octets());
+        buf.extend(self.ap_mac.octets());
 
         // we need to check with a real client bit7 = 1 → joined, bit7 = 0 → left
         let assoc_byte = match self.association_state {
@@ -3037,10 +2921,12 @@ pub mod tests {
         let bridging_tuple_data = &[0x01, 0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
 
         // Parse the BridgingTuple data
-        let bridging_tuple = BridgingTuple::parse(bridging_tuple_data).unwrap();
+        let bridging_tuple = BridgingTuple::parse(bridging_tuple_data).unwrap().1;
+        assert_eq!(bridging_tuple.bridging_mac_count, 1);
+        assert_eq!(bridging_tuple.bridging_mac_list[0], [0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02]);
 
         // Serialize just parsed BridgingTuple structure
-        let serialized = bridging_tuple.1.serialize();
+        let serialized = bridging_tuple.serialize();
 
         // Prepare number of bridging tuples (0x01) for DeviceBridgingCapability
         let mut bridging_capability: Vec<u8> = vec![0x01];
@@ -3089,7 +2975,7 @@ pub mod tests {
         neighborhood.append(&mut neighbor_mac.clone());
 
         // Parse vector of raw bytes as NonIEEE1905LocalInterfaceNeighborhood
-        let parsed = NonIEEE1905LocalInterfaceNeighborhood::parse(&neighborhood[..], 1)
+        let parsed = NonIEEE1905LocalInterfaceNeighborhood::parse(&neighborhood)
             .unwrap()
             .1;
 
@@ -3621,11 +3507,9 @@ pub mod tests {
 
         // Expect ErrorKind::Eof error after trying to parse not complete BridgingTuple data
         match bridging_tuple {
-            Err(NomErr::Failure(err)) => {
-                assert_eq!(err.code, ErrorKind::Eof);
-            }
-            Ok(_) | Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => {
-                panic!("ErrorKind::Eof should be returned")
+            Err(nom::Err::Error(e)) if e.code == ErrorKind::Eof => {}
+            _ => {
+                panic!("nom::Err::Incomplete should be returned")
             }
         }
     }
