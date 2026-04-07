@@ -32,12 +32,21 @@ impl RBusDataElementSet for TestProperty {
 
 #[test]
 fn test_properties() -> anyhow::Result<()> {
-    let status = RBusHandle::check_status();
+    let library = match RBusLibrary::load() {
+        Ok(e) => e,
+        Err(RBusOpenError::NotAvailable) => {
+            eprintln!("library is not available, test ignored");
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    let status = library.check_status();
     if status != RBusStatus::Enabled {
         anyhow::bail!("RBus is not enabled: {status:?}");
     }
 
-    let bus = RBusHandle::open(ROOT_NAME)?;
+    let bus = RBusHandle::open(&library, ROOT_NAME)?;
     let property = RBusDataElement::property_rw::<TestProperty>(TEST_VALUE);
 
     bus.register_data_elements(&[property])?;

@@ -44,7 +44,6 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::instrument;
 
-use sd_notify;
 use sd_notify::NotifyState;
 
 #[derive(Parser)]

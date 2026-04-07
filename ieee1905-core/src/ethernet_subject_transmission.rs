@@ -135,7 +135,7 @@ impl EthernetSender {
             destination_mac,
             source_mac,
             ethertype,
-            payload: payload.into(),
+            payload,
             success_channel: Some(tx),
         };
         self.enqueue_frame_internal(frame).await?;

@@ -1046,6 +1046,13 @@ impl TopologyDatabase {
                     .collect::<Vec<_>>()
             };
 
+            let mut al_sap_enabled = None;
+            let mut al_sap_service = None;
+            if let Some(al_sap) = crate::al_sap::AlServiceAccessPoint::get().await {
+                al_sap_enabled = Some(al_sap.is_enabled());
+                al_sap_service = al_sap.service_type();
+            }
+
             terminal.draw(|f| {
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
@@ -1056,6 +1063,14 @@ impl TopologyDatabase {
                         Constraint::Length(3),
                     ])
                     .split(f.area());
+
+                let top_chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(70),
+                        Constraint::Percentage(30),
+                    ])
+                    .split(chunks[0]);
 
                 // ─────────────────────── BLOQUE 1: TOPOLOGY MANAGER
                 let block1 = Block::default()
@@ -1082,7 +1097,22 @@ impl TopologyDatabase {
                     .block(block1)
                     .wrap(ratatui::widgets::Wrap { trim: true });
 
-                f.render_widget(paragraph1, chunks[0]);
+                f.render_widget(paragraph1, top_chunks[0]);
+
+                // ─────────────────────── AL SAP
+                let al_sap_paragraph = {
+                    let block = Block::default().title("AL SAP").borders(Borders::ALL);
+                    let lines = vec![
+                        Line::from(vec![Span::raw(format!("Enabled: {al_sap_enabled:?}"))]),
+                        Line::from(vec![Span::raw(format!("Service Type: {al_sap_service:?}"))]),
+                    ];
+
+                    Paragraph::new(lines)
+                        .block(block)
+                        .wrap(ratatui::widgets::Wrap { trim: true })
+                };
+
+                f.render_widget(al_sap_paragraph, top_chunks[1]);
 
                 //IEEE 1905 Devices
                 let block2 = Block::default()

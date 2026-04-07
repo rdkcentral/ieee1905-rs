@@ -14,7 +14,8 @@ impl RBusValueReadable for String {
         let mut len = 0;
         let mut ptr = std::ptr::null();
         unsafe {
-            let result = rbusValue_GetStringEx(value.0, &mut ptr, &mut len);
+            let library = value.library.as_raw();
+            let result = library.rbusValue_GetStringEx(value.handle, &mut ptr, &mut len);
             if result != rbusValueError_t::RBUS_VALUE_ERROR_SUCCESS {
                 return result;
             }
@@ -41,7 +42,8 @@ impl RBusValueReadable for Vec<u8> {
         let mut len = 0;
         let mut ptr = std::ptr::null();
         unsafe {
-            let result = rbusValue_GetBytesEx(value.0, &mut ptr, &mut len);
+            let library = value.library.as_raw();
+            let result = library.rbusValue_GetBytesEx(value.handle, &mut ptr, &mut len);
             if result != rbusValueError_t::RBUS_VALUE_ERROR_SUCCESS {
                 return result;
             }
@@ -60,7 +62,8 @@ macro_rules! define {
     ($kind:ty, $get_func:ident) => {
         impl RBusValueReadable for $kind {
             fn get(this: &mut Self, value: &RBusValue) -> rbusValueError_t {
-                unsafe { $get_func(value.0, this) }
+                let library = value.library.as_raw();
+                unsafe { library.$get_func(value.handle, this) }
             }
         }
     };
