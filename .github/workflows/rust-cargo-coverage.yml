@@ -25,16 +25,15 @@ jobs:
       - name: Run cargo llvm-cov
         run: cargo llvm-cov --package ieee1905 --summary-only --output-path coverage_report.txt
 
-      - name: Generate Coverage Report
-        id: coverage_report
+      - name: Formatting Coverage Report
         run: |
-          cargo llvm-cov report > coverage_output.txt
-          echo "COVERAGE_DATA<<EOF" >> $GITHUB_ENV
-          cat coverage_output.txt >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          echo "### Coverage Report" > coverage_report_final.txt
+          echo '```text' >> coverage_report_final.txt
+          cat coverage_report.txt >> coverage_report_final.txt
+          echo '```' >> coverage_report_final.txt
 
       - name: Post Coverage Report Comment
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: coverage-report
-          path: coverage_report.txt
+          path: coverage_report_final.txt
