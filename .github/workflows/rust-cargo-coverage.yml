@@ -23,7 +23,7 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Run cargo llvm-cov
-        run: cargo llvm-cov --package ieee1905
+        run: cargo llvm-cov --package ieee1905 --summary-only --output-path coverage_report.txt
 
       - name: Generate Coverage Report
         id: coverage_report
@@ -34,11 +34,7 @@ jobs:
           echo "EOF" >> $GITHUB_ENV
 
       - name: Post Coverage Report Comment
-        uses: mshick/add-pr-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v2
         with:
-          message-id: coverage-report
-          message: |
-            ### Code Coverage
-            ```text
-            ${{ env.COVERAGE_DATA }}
-            ```
+          header: coverage-report
+          path: coverage_report.txt
