@@ -108,6 +108,8 @@ impl AlServiceAccessPoint {
         interface_name: String,
         shutdown_tx: oneshot::Sender<()>,
     ) {
+        SAP_INSTANCE.lock().await.take();
+
         let sap = AlServiceAccessPoint::start_server(
             control_socket_path,
             data_socket_path,
