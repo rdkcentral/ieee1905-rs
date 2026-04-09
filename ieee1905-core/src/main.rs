@@ -33,6 +33,7 @@ use ieee1905::ethernet_subject_transmission::EthernetSender;
 use ieee1905::interface_manager::*;
 use ieee1905::lldpdu_observer::LLDPObserver;
 use ieee1905::lldpdu_proxy::lldp_discovery_worker;
+use ieee1905::local_http_server::LocalHttpServer;
 use ieee1905::topology_manager::*;
 use sd_notify::NotifyState;
 use std::num::NonZeroUsize;
@@ -103,6 +104,9 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let mut join_sets = Vec::new();
+
+    let mut http_server = LocalHttpServer::default();
+    http_server.start(&cli.interface).await?;
 
     //Set AL MAC & test MAC addresses
     let forwarding_interface =
