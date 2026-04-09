@@ -44,6 +44,7 @@ use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::instrument;
 
+use ieee1905::local_http_server::LocalHttpServer;
 use sd_notify::NotifyState;
 
 #[derive(Parser)]
@@ -129,6 +130,9 @@ fn main() -> anyhow::Result<()> {
 #[instrument(skip_all, name = "main", fields(task = next_task_id()))]
 async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     let mut join_sets = Vec::new();
+
+    let mut http_server = LocalHttpServer::default();
+    http_server.start(&cli.interface).await?;
 
     //Set AL MAC & test MAC addresses
     let forwarding_interface =
