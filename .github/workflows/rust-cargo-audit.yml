@@ -1,11 +1,11 @@
-name: Run Rust Tests
+name: Run Rust Audit
 
 on:
   pull_request:
     branches: [ develop ]
 
 jobs:
-  test:
+  audit:
     runs-on: ubuntu-latest
 
     steps:
@@ -15,5 +15,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run cargo test
-        run: cargo test --workspace --exclude rbus-core --exclude rbus-sys --exclude rbus-provider
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Run cargo audit
+        run: cargo audit
