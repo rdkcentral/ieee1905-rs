@@ -54,7 +54,8 @@ pub mod cmdu {
         AlMacAddress, BridgingTuple, CMDUType, DeviceBridgingCapability, DeviceInformation,
         IEEE1905Neighbor, IEEE1905TLVType, Ieee1905NeighborDevice, LocalInterface, MacAddress,
         NonIEEE1905LocalInterfaceNeighborhood, NonIEEE1905Neighbor, NonIeee1905NeighborDevices,
-        VendorSpecificInfo, CMDU,
+        VendorSpecificInfo, VendorSpecificInfoData, VendorSpecificInfoRole, VendorSpecificInfoType,
+        CMDU,
     };
     pub use crate::tlv_cmdu_codec::TLV;
 }
