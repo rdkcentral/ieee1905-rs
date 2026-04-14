@@ -33,9 +33,11 @@ use nom::combinator::{all_consuming, cond};
 use nom::multi::{count, length_count, many0};
 use pnet::datalink::MacAddr;
 use std::fmt::{Debug, Display, Formatter};
+use std::net::Ipv6Addr;
 // Internal modules
 use crate::cmdu_reassembler::CmduReassemblyError;
 use crate::tlv_cmdu_codec::{TLVTrait, TLV};
+
 
 ///////////////////////////////////////////////////////////////////////////
 //DEFINITION OF CMDU TYPES and IEEE1905 TLVs
@@ -56,6 +58,8 @@ pub enum CMDUType {
     ApAutoConfigWCS,
     GenericPhyQuery,
     GenericPhyResponse,
+    ApCapabilityQuery,
+    ApCapabilityReport,
     Unknown(u16), // To handle unknown or unsupported CMDU types
 }
 
@@ -74,6 +78,8 @@ impl CMDUType {
             0x0009 => CMDUType::ApAutoConfigWCS,
             0x0011 => CMDUType::GenericPhyQuery,
             0x0012 => CMDUType::GenericPhyResponse,
+            0x8001 => CMDUType::ApCapabilityQuery,
+            0x8002 => CMDUType::ApCapabilityReport,
             _ => CMDUType::Unknown(value), // For unrecognized CMDU types
         }
     }
@@ -92,6 +98,8 @@ impl CMDUType {
             CMDUType::ApAutoConfigWCS => 0x0009,
             CMDUType::GenericPhyQuery => 0x0011,
             CMDUType::GenericPhyResponse => 0x0012,
+            CMDUType::ApCapabilityQuery => 0x8001,
+            CMDUType::ApCapabilityReport => 0x8002,
             CMDUType::Unknown(value) => value, // Return the unknown value as-is
         }
     }
@@ -150,12 +158,14 @@ pub enum IEEE1905TLVType {
     SupportedRole,
     GenericPhyDeviceInformation,
     SupportedFreqBand,
+    Ipv6,
     DeviceIdentificationType,
     Ieee1905ProfileVersion,
     SupportedService,
     ClientAssociation,
     MultiApProfile,
     Profile2ApCapability,
+    DeviceInventory,
     Unknown(u8), // To handle unknown or unsupported TLV types
 }
 
@@ -179,12 +189,14 @@ impl IEEE1905TLVType {
             0x0f => IEEE1905TLVType::SupportedRole,
             0x14 => IEEE1905TLVType::GenericPhyDeviceInformation,
             0x10 => IEEE1905TLVType::SupportedFreqBand,
+            0x18 => IEEE1905TLVType::Ipv6,
             0x15 => IEEE1905TLVType::DeviceIdentificationType,
             0x1a => IEEE1905TLVType::Ieee1905ProfileVersion,
             0x80 => IEEE1905TLVType::SupportedService,
             0x92 => IEEE1905TLVType::ClientAssociation,
             0xb3 => IEEE1905TLVType::MultiApProfile,
             0xb4 => IEEE1905TLVType::Profile2ApCapability,
+            0xd4 => IEEE1905TLVType::DeviceInventory,
             _ => IEEE1905TLVType::Unknown(value), // For unrecognized types
         }
     }
@@ -207,6 +219,7 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::SearchedRole => 0x0d,
             IEEE1905TLVType::SupportedRole => 0x0f,
             IEEE1905TLVType::GenericPhyDeviceInformation => 0x14,
+            IEEE1905TLVType::Ipv6 => 0x18,
             IEEE1905TLVType::SupportedFreqBand => 0x10,
             IEEE1905TLVType::DeviceIdentificationType => 0x15,
             IEEE1905TLVType::Ieee1905ProfileVersion => 0x1a,
@@ -214,6 +227,7 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::ClientAssociation => 0x92,
             IEEE1905TLVType::MultiApProfile => 0xb3,
             IEEE1905TLVType::Profile2ApCapability => 0xb4,
+            IEEE1905TLVType::DeviceInventory => 0xd4,
             IEEE1905TLVType::Unknown(value) => value, // Return the unknown value as-is
         }
     }
@@ -274,7 +288,103 @@ impl TLVTrait for MacAddress {
         self.mac_address.octets().to_vec()
     }
 }
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum IPv6AddressType {
+    Unknown = 0,
+    DHCP = 1,
+    Static = 2,
+    SLAAC = 3,
+}
 
+impl IPv6AddressType {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Unknown),
+            1 => Some(Self::DHCP),
+            2 => Some(Self::Static),
+            3 => Some(Self::SLAAC),
+            _ => None,
+        }
+    }
+
+    pub fn to_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ipv6AddressEntry {
+    pub address_type: IPv6AddressType,
+    pub ipv6_address: Ipv6Addr,
+    pub ipv6_originator: Ipv6Addr,
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct Ipv6 {
+    pub al_mac_address: MacAddr,
+    pub link_local_ipv6_address: Ipv6Addr,
+    pub additional_ipv6_addresses: Vec<Ipv6AddressEntry>,
+}
+
+impl TLVTrait for Ipv6 {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::Ipv6;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, al_mac_address) = take_mac_addr(input)?;
+        let (input, link_local_ipv6_address) = take_ipv6_addr(input)?;
+        let (input, num_ipv6_addresses) = be_u8(input)?;
+        let (input, additional_ipv6_addresses) = count(
+            |input| {
+                let (input, address_type_raw) = be_u8(input)?;
+                let address_type =
+                    IPv6AddressType::from_u8(address_type_raw).ok_or_else(|| {
+                        NomErr::Failure(Error::new(input, ErrorKind::Alt))
+                    })?;
+                let (input, ipv6_address) = take_ipv6_addr(input)?;
+                let (input, ipv6_originator) = take_ipv6_addr(input)?;
+
+                Ok((
+                    input,
+                    Ipv6AddressEntry {
+                        address_type,
+                        ipv6_address,
+                        ipv6_originator,
+                    },
+                ))
+            },
+            num_ipv6_addresses as usize,
+        )
+        .parse(input)?;
+
+        Ok((
+            input,
+            Self {
+                al_mac_address,
+                link_local_ipv6_address,
+                additional_ipv6_addresses,
+            },
+        ))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(23 + self.additional_ipv6_addresses.len() * 33);
+
+        out.extend_from_slice(&self.al_mac_address.octets());
+        out.extend_from_slice(&self.link_local_ipv6_address.octets());
+        out.push(self.additional_ipv6_addresses.len() as u8);
+        for entry in &self.additional_ipv6_addresses {
+            out.push(entry.address_type.to_u8());
+            out.extend_from_slice(&entry.ipv6_address.octets());
+            out.extend_from_slice(&entry.ipv6_originator.octets());
+        }
+
+        out
+    }
+}
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct LocalInterface {
@@ -1086,6 +1196,79 @@ impl ByteCounterUnits {
 
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq)]
+pub struct DeviceInventory {
+    pub serial_number: String,
+    pub software_version: String,
+    pub execution_env: String,
+    pub radios: Vec<DeviceInventoryRadio>,
+}
+
+impl TLVTrait for DeviceInventory {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::DeviceInventory;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, serial_number_len) = be_u8(input)?;
+        let (input, serial_number) = take_utf8(input, serial_number_len as usize)?;
+        let (input, software_version_len) = be_u8(input)?;
+        let (input, software_version) = take_utf8(input, software_version_len as usize)?;
+        let (input, execution_env_len) = be_u8(input)?;
+        let (input, execution_env) = take_utf8(input, execution_env_len as usize)?;
+        let (input, radios) = length_count(be_u8, DeviceInventoryRadio::parse).parse(input)?;
+
+        let this = Self {
+            serial_number,
+            software_version,
+            execution_env,
+            radios,
+        };
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend((self.serial_number.len() as u8).to_be_bytes());
+        vec.extend(self.serial_number.bytes());
+        vec.extend((self.software_version.len() as u8).to_be_bytes());
+        vec.extend(self.software_version.bytes());
+        vec.extend((self.execution_env.len() as u8).to_be_bytes());
+        vec.extend(self.execution_env.bytes());
+        vec.extend((self.radios.len() as u8).to_be_bytes());
+        vec.extend(self.radios.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct DeviceInventoryRadio {
+    pub radio_uid: [u8; 6],
+    pub chipset_vendor: String,
+}
+
+impl DeviceInventoryRadio {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, &radio_uid) = take_n_bytes(input)?;
+        let (input, chipset_vendor_len) = be_u8(input)?;
+        let (input, chipset_vendor) = take_utf8(input, chipset_vendor_len as usize)?;
+
+        let this = Self {
+            radio_uid,
+            chipset_vendor,
+        };
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.radio_uid);
+        vec.extend((self.chipset_vendor.len() as u8).to_be_bytes());
+        vec.extend(self.chipset_vendor.bytes());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
 pub struct LinkMetricQuery {
     pub neighbor_type: u8,
     pub neighbor_mac: Option<MacAddr>,
@@ -1892,6 +2075,11 @@ fn take_mac_addr(input: &[u8]) -> IResult<&[u8], MacAddr> {
     Ok((input, mac))
 }
 
+fn take_ipv6_addr(input: &[u8]) -> IResult<&[u8], Ipv6Addr> {
+    let (input, bytes) = take_n_bytes::<16>(input)?;
+    Ok((input, Ipv6Addr::from(*bytes)))
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -1968,6 +2156,8 @@ pub mod tests {
         assert_eq!(CMDUType::from_u16(9), CMDUType::ApAutoConfigWCS);
         assert_eq!(CMDUType::from_u16(0x11), CMDUType::GenericPhyQuery);
         assert_eq!(CMDUType::from_u16(0x12), CMDUType::GenericPhyResponse);
+        assert_eq!(CMDUType::from_u16(0x8001), CMDUType::ApCapabilityQuery);
+        assert_eq!(CMDUType::from_u16(0x8002), CMDUType::ApCapabilityReport);
     }
 
     // Verify function for getting message version of CMDU
@@ -1999,6 +2189,8 @@ pub mod tests {
         assert_eq!(CMDUType::ApAutoConfigWCS.to_u16(), 9);
         assert_eq!(CMDUType::GenericPhyQuery.to_u16(), 0x11);
         assert_eq!(CMDUType::GenericPhyResponse.to_u16(), 0x12);
+        assert_eq!(CMDUType::ApCapabilityQuery.to_u16(), 0x8001);
+        assert_eq!(CMDUType::ApCapabilityReport.to_u16(), 0x8002);
     }
 
     // Verify the correctness of conversion from u8 to IEEE1905TLVType
@@ -2094,6 +2286,10 @@ pub mod tests {
             IEEE1905TLVType::from_u8(0xb4),
             IEEE1905TLVType::Profile2ApCapability,
         );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0xd4),
+            IEEE1905TLVType::DeviceInventory,
+        );
     }
 
     #[test]
@@ -2135,6 +2331,7 @@ pub mod tests {
             Profile2ApCapability::TYPE,
             IEEE1905TLVType::Profile2ApCapability,
         );
+        assert_eq!(DeviceInventory::TYPE, IEEE1905TLVType::DeviceInventory);
     }
 
     // Verify the correctness of conversion from IEEE1905TLVType enum to u8
@@ -2164,6 +2361,7 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::ClientAssociation.to_u8(), 0x92);
         assert_eq!(IEEE1905TLVType::MultiApProfile.to_u8(), 0xb3);
         assert_eq!(IEEE1905TLVType::Profile2ApCapability.to_u8(), 0xb4);
+        assert_eq!(IEEE1905TLVType::DeviceInventory.to_u8(), 0xd4);
     }
 
     // Verify changing version by using set_message_version function
@@ -3099,6 +3297,42 @@ pub mod tests {
         assert_eq!(parsed.serialize(), mac);
     }
 
+    // Verify parsing and serializing IPv6 TLV payload (AL MAC + link-local IPv6 + count)
+    #[test]
+    fn test_ipv6_parse_and_serialize() {
+        let al_mac = MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02);
+        let ipv6 = Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0042, 0xc0ff, 0xfea8, 0x6402);
+        let additional_ipv6_addresses = vec![Ipv6AddressEntry {
+            address_type: IPv6AddressType::SLAAC,
+            ipv6_address: Ipv6Addr::new(0x2001, 0x0db8, 0, 1, 0, 0, 0, 1),
+            ipv6_originator: Ipv6Addr::new(0x2001, 0x0db8, 0, 2, 0, 0, 0, 1),
+        }];
+
+        let ipv6_tlv = Ipv6 {
+            al_mac_address: al_mac,
+            link_local_ipv6_address: ipv6,
+            additional_ipv6_addresses,
+        };
+
+        let serialized = ipv6_tlv.serialize();
+        let parsed = Ipv6::parse(&serialized).unwrap().1;
+
+        assert_eq!(parsed, ipv6_tlv);
+        assert_eq!(parsed.serialize(), serialized);
+    }
+
+    // Verify parsing IPv6 TLV payload fails when trailing count byte is missing
+    #[test]
+    fn test_ipv6_parse_not_enough_data() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02).octets());
+        data.extend_from_slice(
+            &Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0042, 0xc0ff, 0xfea8, 0x6402).octets(),
+        );
+        // Missing 1 byte: number of additional IPv6 addresses
+        assert!(Ipv6::parse(&data).is_err());
+    }
+
     // Verify parsing incomplete data (only 5 bytes from 6 required for MAC address) as AlMacAddress
     #[test]
     fn test_mac_address_try_to_parse_not_enough_data() {
@@ -3276,6 +3510,44 @@ pub mod tests {
         assert_eq!(ByteCounterUnits::KiB.to_u8(), 0x01);
         assert_eq!(ByteCounterUnits::MiB.to_u8(), 0x02);
         assert_eq!(ByteCounterUnits::Reserved.to_u8(), 0x03);
+    }
+
+    #[test]
+    fn test_device_inventory_serialization() {
+        let original = [
+            0x04, // serial_number len
+            b'1', b'2', b'3', b'4', // serial_number
+            0x07, // software_version len
+            b'2', b'0', b'2', b'6', b'.', b'0', b'3', // software_version
+            0x05, // execution_env len
+            b'l', b'i', b'n', b'u', b'x', // execution_env
+            0x02, // radio count
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, // radio 1 uid
+            0x05, // radio 1 chipset vendor len
+            b'm', b'e', b'd', b'i', b'a', // radio 1 chipset vendor
+            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, // radio 2 uid
+            0x03, // radio 2 chipset vendor len
+            b't', b'e', b'k', // radio 2 chipset vendor
+        ];
+
+        let parsed = DeviceInventory::parse(&original).unwrap().1;
+        assert_eq!(parsed.serial_number, "1234");
+        assert_eq!(parsed.software_version, "2026.03");
+        assert_eq!(parsed.execution_env, "linux");
+        assert_eq!(parsed.radios.len(), 2);
+        assert_eq!(
+            parsed.radios[0].radio_uid,
+            [0x01, 0x02, 0x03, 0x04, 0x05, 0x06]
+        );
+        assert_eq!(
+            parsed.radios[1].radio_uid,
+            [0x11, 0x12, 0x13, 0x14, 0x15, 0x16]
+        );
+        assert_eq!(parsed.radios[0].chipset_vendor, "media");
+        assert_eq!(parsed.radios[1].chipset_vendor, "tek");
+
+        let serialized = parsed.serialize();
+        assert_eq!(serialized, original);
     }
 
     #[test]
