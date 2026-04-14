@@ -38,7 +38,7 @@ use std::sync::Arc;
 use tokio::fs;
 use tokio::net::UnixListener;
 use tokio::net::UnixStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 // Internal modules
@@ -108,6 +108,8 @@ impl AlServiceAccessPoint {
         interface_name: String,
         shutdown_tx: oneshot::Sender<()>,
     ) {
+        SAP_INSTANCE.lock().await.take();
+
         let sap = AlServiceAccessPoint::start_server(
             control_socket_path,
             data_socket_path,
@@ -193,6 +195,10 @@ impl AlServiceAccessPoint {
         })
     }
 
+    pub async fn get() -> Option<OwnedMutexGuard<Self>> {
+        Some(get_instance_mut().await?.lock_owned().await)
+    }
+
     pub fn control_socket_path(&self) -> &Path {
         &self.control_socket_path
     }
@@ -206,6 +212,14 @@ impl AlServiceAccessPoint {
             return false;
         };
         instance.lock_owned().await.enabled
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn service_type(&self) -> Option<ServiceType> {
+        self.service_type
     }
 
     pub async fn control_is_connected(&mut self) -> bool {
@@ -445,7 +459,7 @@ pub async fn intercept_wcs_profile2_dpp_compatibility(
         if e.tlv_type != IEEE1905TLVType::Profile2ApCapability.to_u8() {
             return None;
         }
-        Some(Profile2ApCapability::parse(&e.tlv_value.as_ref()?).ok()?.1)
+        Some(Profile2ApCapability::parse(e.tlv_value.as_ref()?).ok()?.1)
     });
 
     let Some(ap_capability) = ap_capability else {

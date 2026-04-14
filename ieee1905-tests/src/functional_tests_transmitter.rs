@@ -2078,8 +2078,7 @@ async fn read_data(
 
                                 assembled_payload.extend(&fragment.payload);
                                 if fragment.is_last_fragment == 1 {
-                                    if message.clone().is_some() {
-                                        let mut final_message = message.clone().unwrap();
+                                    if let Some(mut final_message) = message.clone() {
                                         final_message.payload = assembled_payload.clone();
                                         tracing::info!(
                                             "Got reassembled SDU [{:?}] {final_message:?}",
@@ -2141,7 +2140,7 @@ async fn read_and_compare_data(
         }
         Err(err) => {
             println!("Got error");
-            Err(err.into())
+            Err(err)
         }
     }
 }
@@ -2532,7 +2531,7 @@ async fn test4_break_connection_and_receive(
                     try_no = 1;
                     state = State::ReceiveAndCompareData;
                     println!("Transition to ReceiveDataAndCompareData");
-                } else if let None = framed_data_socket.take() {
+                } else if framed_data_socket.is_none() {
                     println!("Data socket not available");
                     sleep(Duration::from_millis(100)).await;
                     return Err(anyhow::anyhow!("Data socket not available"));
@@ -2547,15 +2546,15 @@ async fn test4_break_connection_and_receive(
                             match rd {
                                 Ok(_) => {
                                     println!("read_and_compare_data: ok");
-                                    return Ok(());
+                                    Ok(())
                                 }
                                 Err(e) => {
                                     println!("read_and_compare_data: failed: {e:?}");
-                                    return Err(anyhow::anyhow!("read_and_compare_data: failed: {e:?}"));
+                                    Err(anyhow::anyhow!("read_and_compare_data: failed: {e:?}"))
                                 }
                             }
                         } else {
-                            return Err(anyhow::anyhow!("Data socket not available"));
+                            Err(anyhow::anyhow!("Data socket not available"))
                         }
                     } => {
                         println!("Test finished with result: {res:?}");
@@ -2603,9 +2602,9 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let connect = args.connect.clone();
-    let test = args.test_num.clone();
-    let read = args.read.clone();
+    let connect = args.connect;
+    let test = args.test_num;
+    let read = args.read;
     let sap_control_path: &str = &args.control_path.clone()[..];
     let sap_data_path = &args.data_path.clone()[..];
     let mut t: anyhow::Result<()> = Ok(());

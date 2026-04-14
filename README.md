@@ -719,7 +719,6 @@ Change interface to ```eth1```
 IEEE1905 service can be build with few compile time features:
 
 - `rbus` - enable RBUS provider
-- `rbus-bundled` - same as `rbus` but uses bundled so files for linking
 - `enable_tokio_console` - enable tokio-console
 
 By default, RBUS provider is not included in the binary.
@@ -729,11 +728,12 @@ In order to enable it one has to build with following command:
 cargo build --package ieee1905 --release --features=rbus
 ```
 
-In case RBUS binaries are not available on the host machine,
-ieee1905 can be built with the bundled binaries: 
+RBUS-enabled builds require a GNU toolchain.
+It will be selected by default when building on the target machine.
+In case it was not selected by default or the binary is cross-compiled, it should be provided manually:
 
 ```shell
-cargo build --package ieee1905 --release --features=rbus-bundled
+cargo build --package ieee1905 --release --features=rbus --target aarch64-unknown-linux-gnu
 ```
 
 By default, tokio-console is not included in the binary.

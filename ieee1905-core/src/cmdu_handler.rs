@@ -691,14 +691,16 @@ impl CMDUHandler {
 
         if let Some((remote_al_mac, neighbors)) = result {
             tokio::spawn(cmdu_link_metric_response_transmission(
-                self.interface_name.clone(),
-                self.sender.clone(),
-                message_id,
-                self.local_al_mac,
-                remote_al_mac,
-                query.requested_metrics != LinkMetricQuery::METRIC_TX,
-                query.requested_metrics != LinkMetricQuery::METRIC_RX,
-                neighbors,
+                LinkMetricResponseTransmissionRequest {
+                    interface: self.interface_name.clone(),
+                    sender: self.sender.clone(),
+                    message_id,
+                    local_al_mac_address: self.local_al_mac,
+                    remote_al_mac_address: remote_al_mac,
+                    include_rx: query.requested_metrics != LinkMetricQuery::METRIC_TX,
+                    include_tx: query.requested_metrics != LinkMetricQuery::METRIC_RX,
+                    neighbors,
+                },
             ));
         } else {
             debug!("No transmission event triggered by Link Metric Query");

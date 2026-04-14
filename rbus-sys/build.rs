@@ -9,28 +9,18 @@ const RBUS_DIR: &str = "./c_src";
 /// https://github.com/messense/homebrew-macos-cross-toolchains
 ///
 fn main() -> anyhow::Result<()> {
-    let bundled = std::env::var("CARGO_FEATURE_BUNDLED").is_ok();
     let host_triple = std::env::var("HOST")?;
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS")?;
-    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH")?;
-    let target = format!("{target_os}-{target_arch}");
 
     let base_dir = Path::new(RBUS_DIR).canonicalize();
     let base_dir = base_dir.map_err(|e| anyhow!("path {RBUS_DIR} not found: {e:?}"))?;
 
-    let lib_dir = PathBuf::from(format!("{}/lib/{target}", base_dir.display()));
-    let lib_dir = lib_dir.to_string_lossy();
-
     let include_dir = PathBuf::from(format!("{}/include", base_dir.display()));
     let include_dir = include_dir.to_string_lossy();
 
-    println!("cargo:rustc-link-lib=dylib=rbus");
-    if bundled {
-        println!("cargo:rustc-link-search=native={lib_dir}");
-    }
-
     let bindings = bindgen::Builder::default()
         .clang_arg(format!("--target={host_triple}"))
+        .dynamic_library_name("RBusLibraryRaw")
+        .dynamic_link_require_all(true)
         .headers([
             format!("{include_dir}/rbus.h"),
             format!("{include_dir}/rbus_buffer.h"),

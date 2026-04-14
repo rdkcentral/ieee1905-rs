@@ -1,7 +1,7 @@
 use crate::element::RBusProviderElement;
 use crate::element::elements::RBusProviderElements;
 use crate::registry::{RBusRegistryGlobal, RBusRegistryHandle};
-use rbus_core::{RBusError, RBusHandle};
+use rbus_core::{RBusError, RBusHandle, RBusLibrary, RBusOpenError};
 use std::ffi::CStr;
 use thiserror::Error;
 
@@ -10,6 +10,8 @@ use thiserror::Error;
 ///
 #[derive(Debug, Error)]
 pub enum RBusProviderError {
+    #[error("Library not available: {0}")]
+    LibraryError(#[from] RBusOpenError),
     #[error("Handle already registered")]
     HandleAlreadyRegistered,
     #[error("{0}")]
@@ -37,7 +39,8 @@ impl RBusProvider {
         F: FnOnce() -> T,
         T: RBusProviderElement,
     {
-        let handle = RBusHandle::open(name)?;
+        let library = RBusLibrary::load()?;
+        let handle = RBusHandle::open(&library, name)?;
 
         let mut root_element = builder();
         let mut data_elements = RBusProviderElements::default();

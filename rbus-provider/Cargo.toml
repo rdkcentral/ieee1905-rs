@@ -4,9 +4,6 @@ version = "0.5.0"
 edition = "2024"
 license = "Apache-2.0"
 
-[features]
-bundled = ["rbus-core/bundled"]
-
 [dependencies]
 rbus-core = { path = "../rbus-core" }
 bstr = "1.12.1"

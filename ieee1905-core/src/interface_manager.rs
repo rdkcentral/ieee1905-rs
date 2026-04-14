@@ -209,7 +209,7 @@ async fn call_rt_get_links() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo>>
         }
 
         let if_flags = *payload.ifi_flags();
-        let if_index = i32::from(*payload.ifi_index());
+        let if_index = *payload.ifi_index();
         let bridge_if_index = attr_handle.get_attr_payload_as(Ifla::Master).ok();
         let link_stats = get_link_stats(&attr_handle);
 
@@ -267,7 +267,7 @@ async fn call_rt_get_bridge_fdb() -> anyhow::Result<IndexMap<MacAddr, IndexSet<i
         };
 
         let mac = MacAddr::from(mac);
-        let if_index = i32::from(*payload.ndm_index());
+        let if_index = *payload.ndm_index();
 
         result
             .entry(mac)
