@@ -139,7 +139,7 @@ pub async fn cmdu_topology_query_transmission(
                 })),
                 Some(TLV::from(VendorSpecificInfo {
                     oui: COMCAST_OUI,
-                    vendor_data: COMCAST_QUERY_TAG.to_vec(),
+                    vendor_data: COMCAST_QUERY_TAG,
                 })),
                 if let Some(Role::Registrar) = local_role {
                     Some(TLV::from(MultiApProfile::Profile3))
@@ -247,7 +247,7 @@ pub fn cmdu_topology_response_transmission(
                 }),
                 TLV::from(VendorSpecificInfo {
                     oui: COMCAST_OUI,
-                    vendor_data: COMCAST_QUERY_TAG.to_vec(),
+                    vendor_data: COMCAST_QUERY_TAG,
                 }),
                 TLV::from(EndOfMessage),
             ];
@@ -446,7 +446,7 @@ pub fn cmdu_topology_notification_transmission(
                 }),
                 TLV::from(VendorSpecificInfo {
                     oui: COMCAST_OUI,
-                    vendor_data: COMCAST_QUERY_TAG.to_vec(),
+                    vendor_data: COMCAST_QUERY_TAG,
                 }),
                 TLV::from(EndOfMessage),
             ];

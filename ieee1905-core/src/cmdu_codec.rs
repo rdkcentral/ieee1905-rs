@@ -135,7 +135,11 @@ impl MessageVersion {
 //Comcast selector
 ///////////////////////////////////////////////////////////////////////////
 pub const COMCAST_OUI: [u8; 3] = [0xD8, 0x9C, 0x8E];
-pub const COMCAST_QUERY_TAG: &[u8] = &[0x00, 0x01, 0x00];
+pub const COMCAST_QUERY_TAG: VendorSpecificInfoData = VendorSpecificInfoData {
+    version: 0x00,
+    info_type: VendorSpecificInfoType::ArtifactService,
+    role: VendorSpecificInfoRole::Client,
+};
 ///////////////////////////////////////////////////////////////////////////
 //DEFINITION OF IEEE1905 TLV TYPES
 ///////////////////////////////////////////////////////////////////////////
@@ -745,7 +749,84 @@ impl TLVTrait for Ieee1905NeighborDevice {
 #[derive(Debug, PartialEq, Eq)]
 pub struct VendorSpecificInfo {
     pub oui: [u8; 3],
-    pub vendor_data: Vec<u8>,
+    pub vendor_data: VendorSpecificInfoData,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VendorSpecificInfoType {
+    ArtifactService,
+    Reserved(u8),
+}
+
+impl VendorSpecificInfoType {
+    pub fn from_u8(input: u8) -> Self {
+        match input {
+            0x01 => Self::ArtifactService,
+            x => Self::Reserved(x),
+        }
+    }
+
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::ArtifactService => 0x01,
+            Self::Reserved(value) => value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VendorSpecificInfoRole {
+    Server,
+    Client,
+    Reserved(u8),
+}
+
+impl VendorSpecificInfoRole {
+    pub fn from_u8(input: u8) -> Self {
+        match input {
+            0x00 => Self::Server,
+            0x01 => Self::Client,
+            x => Self::Reserved(x),
+        }
+    }
+
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::Server => 0x00,
+            Self::Client => 0x01,
+            Self::Reserved(value) => value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VendorSpecificInfoData {
+    pub version: u8,
+    pub info_type: VendorSpecificInfoType,
+    pub role: VendorSpecificInfoRole,
+}
+
+impl VendorSpecificInfoData {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, version) = be_u8(input)?;
+        let (input, info_type) =
+            nom::combinator::map(be_u8, VendorSpecificInfoType::from_u8).parse(input)?;
+        let (input, role) =
+            nom::combinator::map(be_u8, VendorSpecificInfoRole::from_u8).parse(input)?;
+
+        Ok((
+            input,
+            Self {
+                version,
+                info_type,
+                role,
+            },
+        ))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        vec![self.version, self.info_type.to_u8(), self.role.to_u8()]
+    }
 }
 
 impl TLVTrait for VendorSpecificInfo {
@@ -753,9 +834,10 @@ impl TLVTrait for VendorSpecificInfo {
 
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, oui) = take_n_bytes::<3>(input)?;
+        let (_, vendor_data) = all_consuming(VendorSpecificInfoData::parse).parse(input)?;
         let this = Self {
             oui: *oui,
-            vendor_data: input.to_vec(),
+            vendor_data,
         };
         Ok((&[], this))
     }
@@ -763,7 +845,7 @@ impl TLVTrait for VendorSpecificInfo {
     fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend(&self.oui); // Add OUI
-        bytes.extend(&self.vendor_data); // Add vendor-specific data
+        bytes.extend(self.vendor_data.serialize()); // Add vendor-specific data
         bytes
     }
 }
@@ -2660,11 +2742,15 @@ pub mod tests {
     fn test_vendor_specific_info_parse_and_serialize() {
         // Simulated binary TLV value: OUI + vendor data
         let original_oui = [0x00, 0x11, 0x22];
-        let vendor_data = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let vendor_data = VendorSpecificInfoData {
+            version: 0xDE,
+            info_type: VendorSpecificInfoType::Reserved(0xAD),
+            role: VendorSpecificInfoRole::Reserved(0xBE),
+        };
         let raw_bytes: Vec<u8> = original_oui
             .iter()
             .cloned()
-            .chain(vendor_data.iter().cloned())
+            .chain(vendor_data.serialize())
             .collect();
 
         // Parse
@@ -3354,6 +3440,28 @@ pub mod tests {
             result.is_err(),
             "Expected parsing to fail due to insufficient length"
         );
+    }
+
+    #[test]
+    fn test_vendor_specific_info_parse_invalid_vendor_data_length() {
+        let input = vec![0xD8, 0x9C, 0x8E, 0x00, 0x01];
+
+        let result = VendorSpecificInfo::parse(&input);
+        assert!(
+            result.is_err(),
+            "Expected parsing to fail due to incomplete vendor data"
+        );
+    }
+
+    #[test]
+    fn test_vendor_specific_info_known_values_serialize_to_expected_bytes() {
+        let vendor_data = VendorSpecificInfoData {
+            version: 0x00,
+            info_type: VendorSpecificInfoType::ArtifactService,
+            role: VendorSpecificInfoRole::Server,
+        };
+
+        assert_eq!(vendor_data.serialize(), vec![0x00, 0x01, 0x00]);
     }
 
     // Try to serialize and parse AP autoconfig search CMDU with invalid role
