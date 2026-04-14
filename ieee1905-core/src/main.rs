@@ -33,7 +33,8 @@ use ieee1905::ethernet_subject_transmission::EthernetSender;
 use ieee1905::interface_manager::*;
 use ieee1905::lldpdu_observer::LLDPObserver;
 use ieee1905::lldpdu_proxy::lldp_discovery_worker;
-use ieee1905::local_http_server::LocalHttpServer;
+use ieee1905::http::artifact_client::ArtifactClient;
+use ieee1905::http::artifact_server::ArtifactServer;
 use ieee1905::topology_manager::*;
 use sd_notify::NotifyState;
 use std::num::NonZeroUsize;
@@ -105,8 +106,12 @@ async fn main() -> anyhow::Result<()> {
 
     let mut join_sets = Vec::new();
 
-    let mut http_server = LocalHttpServer::default();
-    http_server.start(&cli.interface).await?;
+    let mut artifact_server = ArtifactServer::default();
+    let instance = artifact_server.start(&cli.interface).await?;
+
+    let client = ArtifactClient::new(&cli.interface, instance.socket_address())?;
+    client.download_firmware("firmware_downloaded.bin").await?;
+    client.upload_file("firmware.bin").await?;
 
     //Set AL MAC & test MAC addresses
     let forwarding_interface =
