@@ -37,15 +37,15 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 //use ieee1905::crypto_engine::CRYPTO_CONTEXT;
 use anyhow::anyhow;
+use ieee1905::http::artifact_client::ArtifactClient;
+use ieee1905::http::artifact_server::ArtifactServer;
+use sd_notify::NotifyState;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::instrument;
-
-use ieee1905::local_http_server::LocalHttpServer;
-use sd_notify::NotifyState;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -134,8 +134,12 @@ fn main() -> anyhow::Result<()> {
 async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     let mut join_sets = Vec::new();
 
-    let mut http_server = LocalHttpServer::default();
-    http_server.start(&cli.interface).await?;
+    let mut artifact_server = ArtifactServer::default();
+    let instance = artifact_server.start(&cli.interface).await?;
+
+    let client = ArtifactClient::new(&cli.interface, instance.socket_address())?;
+    client.download_firmware("firmware_downloaded.bin").await?;
+    client.upload_file("firmware.bin").await?;
 
     //Set AL MAC & test MAC addresses
     let forwarding_interface =
