@@ -39,7 +39,6 @@ pub mod sdu_codec;
 pub mod tlv_cmdu_codec;
 pub mod tlv_lldpdu_codec;
 pub mod topology_manager;
-pub mod local_http_server;
 
 #[cfg(feature = "rbus")]
 pub mod rbus;
@@ -58,6 +57,11 @@ pub mod cmdu {
         VendorSpecificInfo,
     };
     pub use crate::tlv_cmdu_codec::TLV;
+}
+
+pub mod http {
+    pub mod artifact_client;
+    pub mod artifact_server;
 }
 
 use std::sync::atomic::{AtomicU32, Ordering};
