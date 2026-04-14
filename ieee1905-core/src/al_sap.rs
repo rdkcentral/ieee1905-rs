@@ -268,6 +268,12 @@ impl AlServiceAccessPoint {
                             );
                             db.set_local_role(Some(Role::Registrar)).await;
                         }
+                        ServiceType::ArtifactServiceClient => {
+                            info!("ServiceType ArtifactServiceClient");
+                        }
+                        ServiceType::ArtifactServiceServer => {
+                            info!("ServiceType ArtifactServiceServer");
+                        }
                     };
 
                     // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
