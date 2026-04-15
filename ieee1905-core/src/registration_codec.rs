@@ -85,7 +85,6 @@ impl ServiceType {
 pub enum RegistrationResult {
     Unknown = 0x00,
     Success = 0x01,
-    NoRangesAvailable = 0x02,
     ServiceNotSupported = 0x03,
     OperationNotSupported = 0x04,
 }
@@ -96,7 +95,6 @@ impl RegistrationResult {
         let result = match val {
             0x00 => RegistrationResult::Unknown,
             0x01 => RegistrationResult::Success,
-            0x02 => RegistrationResult::NoRangesAvailable,
             0x03 => RegistrationResult::ServiceNotSupported,
             0x04 => RegistrationResult::OperationNotSupported,
             _ => {
@@ -236,7 +234,6 @@ pub mod tests {
         // Expect successes parsing valid registration result
         assert!(RegistrationResult::parse(&[0]).is_ok());
         assert!(RegistrationResult::parse(&[1]).is_ok());
-        assert!(RegistrationResult::parse(&[2]).is_ok());
         assert!(RegistrationResult::parse(&[3]).is_ok());
         assert!(RegistrationResult::parse(&[4]).is_ok());
         assert_eq!(
@@ -246,10 +243,6 @@ pub mod tests {
         assert_eq!(
             RegistrationResult::parse(&[1]).unwrap().1,
             RegistrationResult::Success
-        );
-        assert_eq!(
-            RegistrationResult::parse(&[2]).unwrap().1,
-            RegistrationResult::NoRangesAvailable
         );
         assert_eq!(
             RegistrationResult::parse(&[3]).unwrap().1,
