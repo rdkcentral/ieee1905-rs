@@ -37,6 +37,7 @@ neli = { version = "0.7.3", features = ["async"] }
 chrono = "0.4.43"
 sd-notify = "0.4.5"
 either = "1.15.0"
+parking_lot = "0.12.5"
 axum = "0.8.8"
 reqwest = { version = "0.13.2", default-features = false, features = ["http2", "stream"] }
 

@@ -1470,6 +1470,7 @@ dependencies = [
  "neli",
  "nom 8.0.0",
  "once_cell",
+ "parking_lot",
  "pnet",
  "rand 0.10.1",
  "ratatui",
