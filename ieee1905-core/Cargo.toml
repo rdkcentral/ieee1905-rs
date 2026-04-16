@@ -40,6 +40,7 @@ either = "1.15.0"
 
 # RUSTSEC transitive dependency overrides
 time = ">=0.3.47"
+rand = ">=0.9.3"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }
