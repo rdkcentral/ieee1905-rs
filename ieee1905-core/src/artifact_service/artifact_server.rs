@@ -1,9 +1,7 @@
 use crate::interface_manager::{
-    call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64, get_interface_info,
-    InterfaceInfo,
+    call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64, InterfaceInfo,
 };
-use crate::next_task_id;
-use anyhow::bail;
+use crate::{next_task_id, TopologyDatabase};
 use axum::body::{Body, BodyDataStream};
 use axum::extract::{DefaultBodyLimit, Request};
 use axum::http::StatusCode;
@@ -12,6 +10,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use futures::StreamExt;
 use std::net::{Ipv6Addr, SocketAddrV6};
+use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
@@ -19,55 +18,81 @@ use tokio::task::JoinSet;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument};
 
-#[derive(Default)]
 pub struct ArtifactServer {
+    topo_db: Arc<TopologyDatabase>,
+    if_info: InterfaceInfo,
+    ip_address: Ipv6Addr,
     instance: Option<ArtifactServerInstance>,
 }
 
 impl ArtifactServer {
-    const PORT: u16 = 6666;
+    pub const PORT: u16 = 6666;
+
+    pub fn new(topo_db: Arc<TopologyDatabase>, if_info: InterfaceInfo) -> Self {
+        let ip_address = convert_mac_to_eui64(if_info.mac);
+
+        Self {
+            topo_db,
+            if_info,
+            ip_address,
+            instance: None,
+        }
+    }
+
+    pub fn if_info(&self) -> &InterfaceInfo {
+        &self.if_info
+    }
+
+    pub fn ip_address(&self) -> Ipv6Addr {
+        self.ip_address
+    }
 
     #[instrument(skip_all, "artifact_server")]
-    pub async fn start(&mut self, if_name: &str) -> anyhow::Result<&mut ArtifactServerInstance> {
-        info!(if_name, "starting server");
+    pub async fn start(&mut self) -> anyhow::Result<()> {
+        debug!("starting server");
 
-        let Some(interface) = get_interface_info(if_name) else {
-            bail!("interface {if_name} not found");
-        };
-
-        if let Some(instance) = self.instance.take() {
-            if instance.interface.mac == interface.mac {
-                info!("server already started");
-                return Ok(self.instance.insert(instance));
-            }
+        if self.instance.is_some() {
+            info!("server already started");
+            return Ok(());
         }
 
-        let runtime = Handle::try_current()?;
-        let ip_address = convert_mac_to_eui64(interface.mac);
-
-        debug!(if_name, mac = %interface.mac, %ip_address, "assigning ip address to the interface");
-        call_rt_new_address_v6(interface.if_index, ip_address).await?;
+        debug!(
+            if_name = self.if_info.if_name,
+            mac = %self.if_info.mac,
+            ip_address = %self.ip_address,
+            "assigning ip address to the interface",
+        );
+        call_rt_new_address_v6(self.if_info.if_index, self.ip_address).await?;
 
         debug!("starting tcp listener");
-        let socket_address = SocketAddrV6::new(ip_address, Self::PORT, 0, interface.if_index);
-        let listener = TcpListener::bind(socket_address).await?;
+        let runtime = Handle::try_current()?;
+        let ip_address = self.ip_address;
+        let so_address = SocketAddrV6::new(self.ip_address, Self::PORT, 0, self.if_info.if_index);
+        let listener = TcpListener::bind(so_address).await?;
 
         debug!("starting server worker");
         let mut join_set = JoinSet::new();
         join_set.spawn(Self::worker(listener));
 
-        info!("server successfully started");
-        Ok(self.instance.insert(ArtifactServerInstance {
+        info!(
+            if_name = self.if_info.if_name,
+            ip_address = %self.ip_address,
+            "server successfully started",
+        );
+        self.topo_db.set_artifact_server_address(Some(ip_address));
+        self.instance = Some(ArtifactServerInstance {
+            topo_db: self.topo_db.clone(),
             runtime,
-            interface,
-            ip_address,
-            socket_address,
+            if_info: self.if_info.clone(),
+            ip_address: self.ip_address,
             _join_set: join_set,
-        }))
+        });
+        Ok(())
     }
 
     pub fn stop(&mut self, if_name: &str) {
-        self.instance.take_if(|e| e.interface.if_name == if_name);
+        info!("server stopped");
+        self.instance.take_if(|e| e.if_info.if_name == if_name);
     }
 
     #[instrument(skip_all, "artifact_server/worker", fields(task = next_task_id()))]
@@ -135,23 +160,18 @@ impl ArtifactServer {
 }
 
 pub struct ArtifactServerInstance {
+    topo_db: Arc<TopologyDatabase>,
     runtime: Handle,
-    interface: InterfaceInfo,
+    if_info: InterfaceInfo,
     ip_address: Ipv6Addr,
-    socket_address: SocketAddrV6,
     _join_set: JoinSet<()>,
-}
-
-impl ArtifactServerInstance {
-    pub fn socket_address(&self) -> SocketAddrV6 {
-        self.socket_address
-    }
 }
 
 impl Drop for ArtifactServerInstance {
     fn drop(&mut self) {
+        self.topo_db.set_artifact_server_address(None);
         self.runtime.spawn(call_rt_remove_address_v6(
-            self.interface.if_index,
+            self.if_info.if_index,
             self.ip_address,
         ));
     }

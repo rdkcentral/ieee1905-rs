@@ -325,6 +325,7 @@ async fn inject_topology_response_tlvs(
         DeviceBridgingCapability::TYPE.to_u8(),
         Ieee1905NeighborDevice::TYPE.to_u8(),
         NonIeee1905NeighborDevices::TYPE.to_u8(),
+        Ipv6::TYPE.to_u8(),
     ];
     vec.retain(|e| !filtered_types.contains(&e.tlv_type));
 
@@ -411,6 +412,15 @@ async fn inject_topology_response_tlvs(
                 neighborhood_list: neighbors.to_owned(),
             }))
         }));
+    }
+
+    // injecting Ipv6
+    if let Some(address) = db.get_artifact_server_ip_address() {
+        vec.push(TLV::from(Ipv6 {
+            al_mac_address: db.al_mac_address,
+            link_local_ipv6_address: address,
+            additional_ipv6_addresses: vec![],
+        }))
     }
 
     vec.push(end_of_message_tlv);

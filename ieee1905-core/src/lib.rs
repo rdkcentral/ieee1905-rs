@@ -60,7 +60,7 @@ pub mod cmdu {
     pub use crate::tlv_cmdu_codec::TLV;
 }
 
-pub mod http {
+pub mod artifact_service {
     pub mod artifact_client;
     pub mod artifact_server;
 }

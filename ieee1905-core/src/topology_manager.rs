@@ -42,6 +42,8 @@ use tracing::{debug, error, info, instrument};
 // Standard library
 use indexmap::IndexMap;
 use neli::consts::rtnl::Iff;
+use parking_lot::Mutex;
+use std::net::Ipv6Addr;
 use std::ops::Deref;
 use std::sync::OnceLock;
 use std::{io, sync::Arc};
@@ -436,6 +438,7 @@ pub struct TopologyDatabase {
     pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905LocalInterface>>>>,
     pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905NodeInternal>>>,
     pub local_role: Arc<RwLock<Option<Role>>>,
+    artifact_server_ip_address: Mutex<Option<Ipv6Addr>>,
 }
 
 impl TopologyDatabase {
@@ -455,6 +458,7 @@ impl TopologyDatabase {
             local_interface_list: Arc::new(RwLock::new(None)),
             nodes: Arc::new(RwLock::new(IndexMap::new())),
             local_role: Arc::new(RwLock::new(None)),
+            artifact_server_ip_address: Default::default(),
         })
     }
 
@@ -478,6 +482,14 @@ impl TopologyDatabase {
     pub async fn get_forwarding_interface_mac(&self) -> MacAddr {
         let mac_guard = self.local_mac.read().await;
         *mac_guard
+    }
+
+    pub fn get_artifact_server_ip_address(&self) -> Option<Ipv6Addr> {
+        *self.artifact_server_ip_address.lock()
+    }
+
+    pub fn set_artifact_server_address(&self, address: Option<Ipv6Addr>) {
+        *self.artifact_server_ip_address.lock() = address;
     }
 
     /// **Returns a globally shared `TopologyDatabase` instance (async)**
@@ -1008,10 +1020,7 @@ impl TopologyDatabase {
 
                 let top_chunks = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([
-                        Constraint::Percentage(70),
-                        Constraint::Percentage(30),
-                    ])
+                    .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
                     .split(chunks[0]);
 
                 // ─────────────────────── BLOQUE 1: TOPOLOGY MANAGER
