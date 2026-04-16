@@ -21,7 +21,7 @@
 
 mod logger;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use ieee1905::al_sap::AlServiceAccessPoint;
 use ieee1905::cmdu_handler::*;
 use ieee1905::cmdu_message_id_generator::get_message_id_generator;
@@ -36,7 +36,7 @@ use ieee1905::{next_task_id, CMDUObserver};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 //use ieee1905::crypto_engine::CRYPTO_CONTEXT;
-use anyhow::anyhow;
+use anyhow::bail;
 use ieee1905::http::artifact_client::ArtifactClient;
 use ieee1905::http::artifact_server::ArtifactServer;
 use sd_notify::NotifyState;
@@ -84,6 +84,15 @@ struct CliArgs {
     /// Disable LLDP receivers
     #[arg(long)]
     no_lldp_receivers: bool,
+    /// Enables artifact server
+    #[arg(long)]
+    artifacts_sync: Option<ArtifactsSync>,
+}
+
+#[derive(ValueEnum, Debug, Clone)]
+enum ArtifactsSync {
+    Server,
+    Client,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -134,13 +143,6 @@ fn main() -> anyhow::Result<()> {
 async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     let mut join_sets = Vec::new();
 
-    let mut artifact_server = ArtifactServer::default();
-    let instance = artifact_server.start(&cli.interface).await?;
-
-    let client = ArtifactClient::new(&cli.interface, instance.socket_address())?;
-    client.download_firmware("firmware_downloaded.bin").await?;
-    client.upload_file("firmware.bin").await?;
-
     //Set AL MAC & test MAC addresses
     let forwarding_interface =
         if let Some(iface) = get_forwarding_interface_name(cli.interface.clone()) {
@@ -152,8 +154,11 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
         };
 
     // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
-    let al_mac = get_local_al_mac(cli.interface.clone())
-        .ok_or_else(|| anyhow!("failed to get local al mac"))?;
+    let Some(if_info) = get_interface_info(&cli.interface) else {
+        bail!("failed to get local interface {}", cli.interface);
+    };
+
+    let al_mac = if_info.mac;
     tracing::info!("AL MAC address: {}", al_mac);
 
     // // Initialize Database
@@ -170,6 +175,24 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
 
     //we initilize here the values for LLDP input parameters
     let chassis_id = al_mac;
+
+    let mut _artifact_server = None;
+    let mut artifact_client = None;
+    if let Some(artifact_sync) = cli.artifacts_sync.as_ref() {
+        match artifact_sync {
+            ArtifactsSync::Server => {
+                let mut server = ArtifactServer::new(if_info.clone());
+                server.start().await?;
+                topology_db
+                    .set_artifact_server_ip_address(Some(server.ip_address()))
+                    .await;
+                _artifact_server = Some(server);
+            }
+            ArtifactsSync::Client => {
+                artifact_client = Some(Mutex::new(ArtifactClient::new(if_info.clone())?));
+            }
+        }
+    }
 
     tracing::debug!("Topology Database initialized with AL MAC: {:?}", al_mac);
 
@@ -217,6 +240,7 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
             Arc::clone(&message_id_generator),
             al_mac,
             forwarding_interface.clone(),
+            artifact_client,
         )
         .await,
     );

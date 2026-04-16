@@ -29,11 +29,13 @@ use crate::cmdu_codec::*;
 use crate::cmdu_proxy::*;
 use crate::cmdu_reassembler::CmduReassembler;
 use crate::ethernet_subject_transmission::EthernetSender;
+use crate::http::artifact_client::ArtifactClient;
 use crate::sdu_codec::SDU;
 use crate::tlv_cmdu_codec::{TLVTrait, TLV};
 use crate::topology_manager::*;
 use crate::MessageIdGenerator;
 use pnet::datalink::MacAddr;
+use tokio::sync::Mutex;
 
 ///the handler has to take care of the reassembly
 pub struct CMDUHandler {
@@ -42,6 +44,7 @@ pub struct CMDUHandler {
     local_al_mac: MacAddr,
     pub interface_name: String,
     pub reassembler: Arc<CmduReassembler>,
+    artifact_client: Option<Mutex<ArtifactClient>>,
 }
 
 impl CMDUHandler {
@@ -52,6 +55,7 @@ impl CMDUHandler {
         message_id_generator: Arc<MessageIdGenerator>,
         local_al_mac: MacAddr,
         interface_name: String,
+        artifact_client: Option<Mutex<ArtifactClient>>,
     ) -> Self {
         Self {
             sender,
@@ -59,6 +63,7 @@ impl CMDUHandler {
             local_al_mac,
             interface_name,
             reassembler: Arc::new(CmduReassembler::new()),
+            artifact_client,
         }
     }
 
@@ -510,6 +515,15 @@ impl CMDUHandler {
                 if let Some(bridge_index) = bridge_index_by_interface.get(&interface.mac) {
                     interface.bridging_flag = true;
                     interface.bridging_tuple = Some(*bridge_index);
+                }
+            }
+        }
+
+        if let Some(artifact_client) = self.artifact_client.as_ref() {
+            if let Some(ipv6) = Ipv6::find(tlvs) {
+                let mut lock = artifact_client.lock().await;
+                if let Err(e) = lock.start(ipv6.link_local_ipv6_address).await {
+                    error!(%e, "failed to start artifact client");
                 }
             }
         }
@@ -1215,6 +1229,7 @@ mod tests {
             Arc::clone(&message_id_generator),
             al_mac,
             forwarding_interface.clone(),
+            None,
         )
         .await;
 
