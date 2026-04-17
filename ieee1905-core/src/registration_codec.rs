@@ -85,7 +85,6 @@ impl ServiceType {
 pub enum RegistrationResult {
     Unknown = 0x00,
     Success = 0x01,
-    NoRangesAvailable = 0x02,
     ServiceNotSupported = 0x03,
     OperationNotSupported = 0x04,
 }
@@ -96,7 +95,6 @@ impl RegistrationResult {
         let result = match val {
             0x00 => RegistrationResult::Unknown,
             0x01 => RegistrationResult::Success,
-            0x02 => RegistrationResult::NoRangesAvailable,
             0x03 => RegistrationResult::ServiceNotSupported,
             0x04 => RegistrationResult::OperationNotSupported,
             _ => {
@@ -189,69 +187,6 @@ impl AlServiceRegistrationResponse {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum TopologyChangeType {
-    Add,
-    Delete,
-}
-impl TopologyChangeType {
-    pub fn serialize(&self) -> u8 {
-        match self {
-            TopologyChangeType::Add => 0x01,
-            TopologyChangeType::Delete => 0x02,
-        }
-    }
-
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, value) = be_u8(input)?;
-        let change_type = match value {
-            0x01 => TopologyChangeType::Add,
-            0x02 => TopologyChangeType::Delete,
-            _ => {
-                return Err(nom::Err::Failure(nom::error::Error::new(
-                    input,
-                    nom::error::ErrorKind::Tag,
-                )))
-            }
-        };
-        Ok((input, change_type))
-    }
-}
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct AlTopologyChange {
-    pub al_mac_address_remote: MacAddr,
-    pub change_type: TopologyChangeType,
-}
-
-impl AlTopologyChange {
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(7);
-        buf.extend_from_slice(&self.al_mac_address_remote.octets());
-        buf.push(self.change_type.serialize());
-        buf
-    }
-
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, mac_bytes) = take(6usize)(input)?;
-        let mac = MacAddr::new(
-            mac_bytes[0],
-            mac_bytes[1],
-            mac_bytes[2],
-            mac_bytes[3],
-            mac_bytes[4],
-            mac_bytes[5],
-        );
-        let (input, change_type) = TopologyChangeType::parse(input)?;
-        Ok((
-            input,
-            Self {
-                al_mac_address_remote: mac,
-                change_type,
-            },
-        ))
-    }
-}
-
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -299,7 +234,6 @@ pub mod tests {
         // Expect successes parsing valid registration result
         assert!(RegistrationResult::parse(&[0]).is_ok());
         assert!(RegistrationResult::parse(&[1]).is_ok());
-        assert!(RegistrationResult::parse(&[2]).is_ok());
         assert!(RegistrationResult::parse(&[3]).is_ok());
         assert!(RegistrationResult::parse(&[4]).is_ok());
         assert_eq!(
@@ -309,10 +243,6 @@ pub mod tests {
         assert_eq!(
             RegistrationResult::parse(&[1]).unwrap().1,
             RegistrationResult::Success
-        );
-        assert_eq!(
-            RegistrationResult::parse(&[2]).unwrap().1,
-            RegistrationResult::NoRangesAvailable
         );
         assert_eq!(
             RegistrationResult::parse(&[3]).unwrap().1,
@@ -375,59 +305,6 @@ pub mod tests {
 
         // Expect success comparing serialized and then parsed data with original ones
         assert_eq!(parsed.serialize(), registration_request);
-    }
-
-    // Verify parsing and serializing of Add type of AlTopologyChange
-    #[test]
-    fn test_topology_change_parse_and_serialize_add() {
-        // Prepare MAC address from example data
-        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
-
-        // Prepare Add as TopologyChangeType
-        let topology_type = TopologyChangeType::Add.serialize();
-
-        // Prepare the whole AlTopologyChange contents
-        let mut topology_change_data: Vec<u8> = mac;
-        topology_change_data.push(topology_type);
-
-        // Do the parsing of AlTopologyChange
-        let parsed = AlTopologyChange::parse(&topology_change_data).unwrap().1;
-
-        // Expect success comparing serialized and then parsed data with original ones
-        assert_eq!(topology_change_data, parsed.serialize());
-    }
-
-    // Verify parsing and serializing of Delete type of AlTopologyChange
-    #[test]
-    fn test_topology_change_parse_and_serialize_delete() {
-        // Prepare MAC address from example data
-        let mac: Vec<u8> = vec![0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02];
-
-        // Prepare Delete as TopologyChangeType
-        let topology_type = TopologyChangeType::Delete.serialize();
-
-        // Prepare the whole AlTopologyChange contents
-        let mut topology_change_data: Vec<u8> = mac;
-        topology_change_data.push(topology_type);
-
-        // Do the parsing of AlTopologyChange
-        let parsed = AlTopologyChange::parse(&topology_change_data).unwrap().1;
-
-        // Expect success comparing serialized and then parsed data with original ones
-        assert_eq!(topology_change_data, parsed.serialize());
-    }
-
-    // Verify trying to parse invalid TopologyChangeType code
-    #[test]
-    fn test_topology_change_type_parse_invalid() {
-        // Prepare invalid code 5 of TopologyChangeType
-        let bind: Vec<u8> = vec![5];
-
-        // Try to parse invalid value of 5
-        let topology_type = TopologyChangeType::parse(&bind);
-
-        // Expect error trying to parse invalid value of 5
-        assert!(topology_type.is_err());
     }
 
     // Verify recognition and signalling of too short registration request
