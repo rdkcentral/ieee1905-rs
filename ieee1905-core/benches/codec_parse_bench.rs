@@ -1,7 +1,7 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use ieee1905::cmdu::{IEEE1905TLVType, TLV as CmduTlv, CMDU};
+use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use ieee1905::cmdu::{CMDU, IEEE1905TLVType, TLV as CmduTlv};
 use ieee1905::cmdu_codec::MessageVersion;
-use ieee1905::lldpdu::{LLDPTLVType, TLV as LldpTlv, LLDPDU};
+use ieee1905::lldpdu::{LLDPDU, LLDPTLVType, TLV as LldpTlv};
 
 fn build_cmdu_bytes(vendor_tlvs: usize, vendor_data_len: usize) -> Vec<u8> {
     let mut payload = Vec::new();
@@ -86,7 +86,11 @@ fn build_lldpdu_bytes(extra_tlvs: usize, tlv_value_len: usize) -> Vec<u8> {
 
 fn bench_cmdu_parse(c: &mut Criterion) {
     let mut group = c.benchmark_group("codec_parse_cmdu");
-    let cases = [("small", 1usize, 16usize), ("medium", 8, 64), ("large", 24, 128)];
+    let cases = [
+        ("small", 1usize, 16usize),
+        ("medium", 8, 64),
+        ("large", 24, 128),
+    ];
 
     for (name, count, value_len) in cases {
         let bytes = build_cmdu_bytes(count, value_len);

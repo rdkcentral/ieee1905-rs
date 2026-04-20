@@ -1,11 +1,15 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use ieee1905::cmdu::CMDU;
 use ieee1905::cmdu_reassembler::CmduReassembler;
 use pnet::datalink::MacAddr;
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
-fn make_fragments(message_id: u16, num_fragments: usize, fragment_payload_size: usize) -> Vec<CMDU> {
+fn make_fragments(
+    message_id: u16,
+    num_fragments: usize,
+    fragment_payload_size: usize,
+) -> Vec<CMDU> {
     (0..num_fragments)
         .map(|fragment_id| {
             let is_last = fragment_id == num_fragments - 1;
@@ -30,7 +34,13 @@ fn bench_cmdu_reassembler(c: &mut Criterion) {
     let rt = Runtime::new().expect("failed to create tokio runtime");
     let src = MacAddr::new(0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee);
     let packet_fragments = (0..packets_per_iteration)
-        .map(|packet_id| make_fragments(0x2244 + packet_id as u16, fragments_per_packet, fragment_payload_size))
+        .map(|packet_id| {
+            make_fragments(
+                0x2244 + packet_id as u16,
+                fragments_per_packet,
+                fragment_payload_size,
+            )
+        })
         .collect::<Vec<_>>();
 
     let reassembler = rt.block_on(async { CmduReassembler::new() });

@@ -1,5 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use ieee1905::cmdu::{CMDUType, CMDU};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use ieee1905::cmdu::{CMDU, CMDUType};
 use ieee1905::cmdu_handler::CMDUHandler;
 use ieee1905::cmdu_message_id_generator::get_message_id_generator;
 use ieee1905::ethernet_subject_transmission::EthernetSender;
@@ -77,12 +77,14 @@ fn bench_handle_cmdu(c: &mut Criterion) {
 
     c.bench_function("cmdu_handler/topology_response_node_missing", |b| {
         b.to_async(&rt).iter(|| async {
-            let result = handler.handle_cmdu(
-                black_box(&cmdu),
-                black_box(src_missing),
-                black_box(dst),
-                black_box(if_mac),
-            ).await;
+            let result = handler
+                .handle_cmdu(
+                    black_box(&cmdu),
+                    black_box(src_missing),
+                    black_box(dst),
+                    black_box(if_mac),
+                )
+                .await;
             let _ = black_box(result);
         });
     });
