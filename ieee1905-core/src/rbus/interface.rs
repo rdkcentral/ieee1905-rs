@@ -27,7 +27,7 @@ impl RBusProviderGetter for RBus_Interface {
     type UserData = ();
 
     fn get(&mut self, args: RBusProviderGetterArgs<Self::UserData>) -> Result<(), RBusError> {
-        let Some(if_index) = args.table_idx.get(0) else {
+        let Some(if_index) = args.table_idx.first() else {
             return Err(RBusError::ElementDoesNotExists);
         };
 

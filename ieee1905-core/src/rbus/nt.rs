@@ -18,7 +18,7 @@ impl RBusProviderGetter for RBus_NetworkTopology {
 
         match args.path_name.as_bytes() {
             b"IEEE1905DeviceNumberOfEntries" => {
-                let len = RBus_NetworkTopology_Ieee1905Device::count_rows(&db);
+                let len = RBus_NetworkTopology_Ieee1905Device::count_rows(db);
                 args.property.set(&(len as u32));
                 Ok(())
             }

@@ -974,7 +974,7 @@ mod tests {
                 } else {
                     // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
                     assert!(
-                        fragment.total_size() >= 8 + 1,
+                        fragment.total_size() > 8,
                         "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
                         i,
                         fragment.total_size()
@@ -1142,7 +1142,7 @@ mod tests {
                 } else {
                     // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
                     assert!(
-                        fragment.total_size() >= 8 + 1,
+                        fragment.total_size() > 8,
                         "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
                         i,
                         fragment.total_size()
@@ -1244,7 +1244,7 @@ mod tests {
         cmdu2.flags = 0x80; // set last fragment flag
 
         let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
-        let fragments = vec![cmdu0, cmdu1, cmdu2];
+        let fragments = [cmdu0, cmdu1, cmdu2];
         let cmdu_reasm = CmduReassembler::new();
 
         for fragment in fragments.iter() {

@@ -20,10 +20,10 @@
 #![deny(warnings)]
 // External crates
 use nom::{
+    Err as NomErr, IResult,
     bytes::complete::take,
     error::ErrorKind,
-    number::complete::{be_u16, be_u8},
-    Err as NomErr, IResult,
+    number::complete::{be_u8, be_u16},
 };
 use pnet::datalink::MacAddr;
 
@@ -43,7 +43,7 @@ impl ServiceOperation {
                 return Err(nom::Err::Failure(nom::error::Error::new(
                     input,
                     nom::error::ErrorKind::Tag,
-                )))
+                )));
             }
         };
         Ok((input, op))
@@ -70,7 +70,7 @@ impl ServiceType {
                 return Err(nom::Err::Failure(nom::error::Error::new(
                     input,
                     nom::error::ErrorKind::Tag,
-                )))
+                )));
             }
         };
         Ok((input, st))
@@ -101,7 +101,7 @@ impl RegistrationResult {
                 return Err(nom::Err::Failure(nom::error::Error::new(
                     input,
                     nom::error::ErrorKind::Tag,
-                )))
+                )));
             }
         };
         Ok((input, result))

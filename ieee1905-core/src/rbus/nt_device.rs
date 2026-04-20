@@ -1,3 +1,4 @@
+use crate::TopologyDatabase;
 use crate::cmdu_codec::{DeviceIdentificationType, Ieee1905ProfileVersion, SupportedFreqBand};
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
 use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
@@ -5,7 +6,6 @@ use crate::rbus::{format_mac_address, peek_topology_database};
 use crate::topology_manager::{
     Ieee1905InterfaceData, Ieee1905LocalInterface, Ieee1905NodeInternal,
 };
-use crate::TopologyDatabase;
 use either::Either;
 use nom::AsBytes;
 use rbus_core::RBusError;
@@ -40,7 +40,7 @@ impl RBusProviderTableSync for RBus_NetworkTopology_Ieee1905Device {
     fn len(&mut self, args: RBusProviderTableSyncArgs<Self::UserData>) -> Result<u32, RBusError> {
         let _ = args;
         let db = peek_topology_database()?;
-        Ok(Self::count_rows(&db) as u32)
+        Ok(Self::count_rows(db) as u32)
     }
 }
 
@@ -49,7 +49,7 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device {
 
     fn get(&mut self, args: RBusProviderGetterArgs<Self::UserData>) -> Result<(), RBusError> {
         let db = peek_topology_database()?;
-        let node = RBus_Ieee1905Device_Node::from(&db, args.table_idx)?.1;
+        let node = RBus_Ieee1905Device_Node::from(db, args.table_idx)?.1;
 
         match args.path_name.as_bytes() {
             b"IEEE1905Id" => {
@@ -135,19 +135,19 @@ pub enum RBus_Ieee1905Device_Node<'a> {
 
 impl<'a> RBus_Ieee1905Device_Node<'a> {
     pub fn from(db: &'a TopologyDatabase, table_idx: &[u32]) -> Result<(u32, Self), RBusError> {
-        let Some(node_index) = table_idx.get(0).copied() else {
+        let Some(node_index) = table_idx.first() else {
             return Err(RBusError::ElementDoesNotExists);
         };
 
         let Some(index) = node_index.checked_sub(1) else {
             let ifs = db.local_interface_list.blocking_read();
             let ifs = RwLockReadGuard::map(ifs, |e| e.as_deref().unwrap_or_default());
-            return Ok((node_index, Self::Local(ifs)));
+            return Ok((*node_index, Self::Local(ifs)));
         };
 
         let nodes = db.nodes.blocking_read();
         match RwLockReadGuard::try_map(nodes, |e| Some(e.get_index(index as usize)?.1)) {
-            Ok(e) => Ok((node_index, Self::Remote(e))),
+            Ok(e) => Ok((*node_index, Self::Remote(e))),
             Err(_) => Err(RBusError::ElementDoesNotExists),
         }
     }

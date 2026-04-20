@@ -45,16 +45,16 @@ pub mod rbus;
 
 // ───── Submodules: TLVs grouped under namespaces ─────
 pub mod lldpdu {
-    pub use crate::lldpdu_codec::{ChassisId, LLDPTLVType, PortId, TimeToLiveTLV, LLDPDU};
+    pub use crate::lldpdu_codec::{ChassisId, LLDPDU, LLDPTLVType, PortId, TimeToLiveTLV};
     pub use crate::tlv_lldpdu_codec::TLV;
 }
 
 pub mod cmdu {
     pub use crate::cmdu_codec::{
-        AlMacAddress, BridgingTuple, CMDUType, DeviceBridgingCapability, DeviceInformation,
+        AlMacAddress, BridgingTuple, CMDU, CMDUType, DeviceBridgingCapability, DeviceInformation,
         IEEE1905Neighbor, IEEE1905TLVType, Ieee1905NeighborDevice, LocalInterface, MacAddress,
         NonIEEE1905LocalInterfaceNeighborhood, NonIEEE1905Neighbor, NonIeee1905NeighborDevices,
-        VendorSpecificInfo, CMDU,
+        VendorSpecificInfo,
     };
     pub use crate::tlv_cmdu_codec::TLV;
 }

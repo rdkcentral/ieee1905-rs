@@ -1,5 +1,6 @@
 #![allow(non_camel_case_types)]
 
+use crate::TopologyDatabase;
 use crate::cmdu_codec::MediaType;
 use crate::rbus::al_device::RBus_Al_Device;
 use crate::rbus::interface::RBus_Interface;
@@ -10,14 +11,13 @@ use crate::rbus::nt_device::RBus_NetworkTopology_Ieee1905Device;
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
 use crate::rbus::nt_device_bridge_list::RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList;
 use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
-use crate::TopologyDatabase;
 use anyhow::bail;
 use pnet::datalink::MacAddr;
 use rbus_core::{RBusError, RBusLibrary, RBusLogHandler, RBusLogLevel, RBusLogRecord};
+use rbus_provider::element::RBusProviderElement;
 use rbus_provider::element::object::rbus_object;
 use rbus_provider::element::property::rbus_property;
 use rbus_provider::element::table::rbus_table;
-use rbus_provider::element::RBusProviderElement;
 use rbus_provider::provider::{RBusProvider, RBusProviderError};
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};

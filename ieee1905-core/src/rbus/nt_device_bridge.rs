@@ -28,7 +28,7 @@ impl RBusProviderTableSync for RBus_NetworkTopology_Ieee1905Device_BridgingTuple
 
     fn len(&mut self, args: RBusProviderTableSyncArgs<Self::UserData>) -> Result<u32, RBusError> {
         let db = peek_topology_database()?;
-        let node = RBus_Ieee1905Device_Node::from(&db, args.table_idx)?.1;
+        let node = RBus_Ieee1905Device_Node::from(db, args.table_idx)?.1;
         let tuples = Self::get_tuples(&node);
         Ok(tuples.len() as u32)
     }

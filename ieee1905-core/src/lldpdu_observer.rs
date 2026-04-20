@@ -26,7 +26,7 @@ use tracing::{debug, error, info, warn};
 
 // Internal modules
 use crate::ethernet_subject_reception::EthernetFrameObserver;
-use crate::lldpdu::{ChassisId, LLDPTLVType, PortId, LLDPDU};
+use crate::lldpdu::{ChassisId, LLDPDU, LLDPTLVType, PortId};
 use crate::topology_manager::{TopologyDatabase, UpdateType};
 
 #[derive(Clone)]
@@ -159,7 +159,8 @@ impl EthernetFrameObserver for LLDPObserver {
                     // Log when a loop is detected
                     return tracing::trace!(
                         "Loop detected: neighbor_chassis_id ({:?}) is equal to local_chassis_id ({:?})",
-                        neighbor_chassis_id, self.local_chassis_id
+                        neighbor_chassis_id,
+                        self.local_chassis_id
                     );
                 }
 

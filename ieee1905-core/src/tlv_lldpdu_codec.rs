@@ -21,10 +21,10 @@
 // External crates
 use nom::Err as NomErr;
 use nom::{
-    bytes::complete::take,    // Parses a specified number of bytes from the input.
-    error::ErrorKind,         // Represents specific parsing error types.
-    number::complete::be_u16, // Parses unsigned integers in big-endian format.
     IResult, // Represents the result of a parsing operation, either success or failure.
+    bytes::complete::take, // Parses a specified number of bytes from the input.
+    error::ErrorKind, // Represents specific parsing error types.
+    number::complete::be_u16, // Parses unsigned integers in big-endian format.
 }; // Alias for errors returned by `nom` parsers.
 
 // Standard library
@@ -187,6 +187,6 @@ mod tests {
         assert!(result.is_ok());
 
         // Expect that parser returns redundant (not needed) data: &['G', 'H']
-        assert_eq!(result.unwrap().0, &[b'G', b'H']);
+        assert_eq!(result.unwrap().0, b"GH");
     }
 }

@@ -19,7 +19,7 @@
 
 #![deny(warnings)]
 // External crates
-use nom::{bytes::complete::take, multi::many0, number::complete::be_u8, IResult, Parser};
+use nom::{IResult, Parser, bytes::complete::take, multi::many0, number::complete::be_u8};
 use pnet::datalink::MacAddr;
 
 // Standard library
@@ -163,10 +163,10 @@ impl SDU {
 mod tests {
     use super::*;
     use crate::cmdu_codec::IEEE1905TLVType;
-    use crate::cmdu_codec::{CMDUType, CMDU};
+    use crate::cmdu_codec::{CMDU, CMDUType};
     use crate::tlv_cmdu_codec::TLV;
-    use nom::error::ErrorKind;
     use nom::Err as NomErr;
+    use nom::error::ErrorKind;
     use pnet::datalink::MacAddr;
 
     // Verify parsing and serializing of SDU and CMDU
@@ -619,7 +619,9 @@ mod tests {
         match SDU::parse(&sdu_bytes) {
             Ok(_) => { /* everything after EOM is considered padding */ }
             Err(NomErr::Error(_)) | Err(NomErr::Incomplete(_)) => {
-                panic!("ErrorKind::Tag should be returned on additional TLV after EndOfMessage TLV in CMDU");
+                panic!(
+                    "ErrorKind::Tag should be returned on additional TLV after EndOfMessage TLV in CMDU"
+                );
             }
             Err(NomErr::Failure(e)) => {
                 assert_eq!(e.code, nom::error::ErrorKind::Tag);

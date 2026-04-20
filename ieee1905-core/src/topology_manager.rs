@@ -23,20 +23,20 @@
 use crossterm::{
     event::{self, KeyCode},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use pnet::datalink::MacAddr;
 use ratatui::{
+    Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Row, Table},
-    Terminal,
 };
 use tokio::{
     sync::RwLock,
     task::yield_now,
-    time::{interval, Duration, Instant},
+    time::{Duration, Instant, interval},
 };
 use tracing::{debug, error, info, instrument};
 // Standard library
@@ -256,24 +256,24 @@ impl Ieee1905NodeInfo {
             self.lldp_neighbor = Some(lldp_neighbor);
         }
 
-        if let Some(local) = new_node_state_local {
-            if self.node_state_local != local {
-                info!(
-                    "{} local state changed: {:?} -> {local:?}",
-                    self.al_mac, self.node_state_local
-                );
-                self.node_state_local = local;
-            }
+        if let Some(local) = new_node_state_local
+            && self.node_state_local != local
+        {
+            info!(
+                "{} local state changed: {:?} -> {local:?}",
+                self.al_mac, self.node_state_local,
+            );
+            self.node_state_local = local;
         }
 
-        if let Some(remote) = new_node_state_remote {
-            if self.node_state_remote != remote {
-                info!(
-                    "{} remote state changed: {:?} -> {remote:?}",
-                    self.al_mac, self.node_state_remote
-                );
-                self.node_state_remote = remote;
-            }
+        if let Some(remote) = new_node_state_remote
+            && self.node_state_remote != remote
+        {
+            info!(
+                "{} remote state changed: {:?} -> {remote:?}",
+                self.al_mac, self.node_state_remote,
+            );
+            self.node_state_remote = remote;
         }
 
         self.last_seen = Instant::now();
@@ -588,27 +588,27 @@ impl TopologyDatabase {
 
             nodes.retain(|al_mac, node| {
                 // Remove nodes stuck in ConvergingLocal state
-                if let StateLocal::ConvergingLocal(when) = node.metadata.node_state_local {
-                    if now.duration_since(when) >= Duration::from_secs(5) {
-                        debug!(
-                            al_mac = ?al_mac,
-                            state = ?node.metadata.last_update,
-                            "Removing node stuck in local convergence for too long"
-                        );
-                        return false; // Remove from database
-                    }
+                if let StateLocal::ConvergingLocal(when) = node.metadata.node_state_local
+                    && now.duration_since(when) >= Duration::from_secs(5)
+                {
+                    debug!(
+                        al_mac = ?al_mac,
+                        state = ?node.metadata.last_update,
+                        "Removing node stuck in local convergence for too long"
+                    );
+                    return false; // Remove from database
                 }
 
                 // Remove nodes stuck in ConvergingRemote state
-                if let StateRemote::ConvergingRemote(when) = node.metadata.node_state_remote {
-                    if now.duration_since(when) >= Duration::from_secs(5) {
-                        debug!(
-                            al_mac = ?al_mac,
-                            state = ?node.metadata.last_update,
-                            "Removing node stuck in remote convergence for too long"
-                        );
-                        return false; // Remove from database
-                    }
+                if let StateRemote::ConvergingRemote(when) = node.metadata.node_state_remote
+                    && now.duration_since(when) >= Duration::from_secs(5)
+                {
+                    debug!(
+                        al_mac = ?al_mac,
+                        state = ?node.metadata.last_update,
+                        "Removing node stuck in remote convergence for too long"
+                    );
+                    return false; // Remove from database
                 }
 
                 // Remove nodes that have been inactive
@@ -1008,10 +1008,7 @@ impl TopologyDatabase {
 
                 let top_chunks = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([
-                        Constraint::Percentage(70),
-                        Constraint::Percentage(30),
-                    ])
+                    .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
                     .split(chunks[0]);
 
                 // ─────────────────────── BLOQUE 1: TOPOLOGY MANAGER
@@ -1142,13 +1139,14 @@ impl TopologyDatabase {
 
                 f.render_widget(paragraph3, chunks[2]);
             })?;
+
             yield_now().await;
-            if event::poll(Duration::from_millis(500))? {
-                if let event::Event::Key(key) = event::read()? {
-                    if key.code == KeyCode::Char('q') {
-                        break;
-                    }
-                }
+
+            if event::poll(Duration::from_millis(500))?
+                && let event::Event::Key(key) = event::read()?
+                && key.code == KeyCode::Char('q')
+            {
+                break;
             }
         }
 
@@ -1160,9 +1158,9 @@ impl TopologyDatabase {
 
 #[cfg(test)]
 mod tests {
+    use crate::TopologyDatabase;
     use crate::cmdu_codec::MediaType;
     use crate::topology_manager::{Ieee1905DeviceData, Ieee1905InterfaceData, UpdateType};
-    use crate::TopologyDatabase;
     use pnet::datalink::MacAddr;
 
     #[tokio::test]
@@ -1191,7 +1189,7 @@ mod tests {
             device_al_mac,
             device_al_mac,
             Some(device_mac),
-            db.local_mac.read().await.clone(),
+            *db.local_mac.read().await,
             Some(vec![interface]),
             None,
         );
@@ -1206,9 +1204,10 @@ mod tests {
 
         assert!(db.find_device_by_port(device_mac).await.is_some());
         assert!(db.find_device_by_port(device_al_mac).await.is_some());
-        assert!(db
-            .find_device_by_port(MacAddr::new(0, 0, 0, 0, 0, 4))
-            .await
-            .is_none());
+        assert!(
+            db.find_device_by_port(MacAddr::new(0, 0, 0, 0, 0, 4))
+                .await
+                .is_none()
+        );
     }
 }
