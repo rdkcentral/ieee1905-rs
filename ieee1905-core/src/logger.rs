@@ -1,13 +1,13 @@
 mod rolling_file_appender;
 
-use crate::logger::rolling_file_appender::RollingFileAppender;
 use crate::CliArgs;
+use crate::logger::rolling_file_appender::RollingFileAppender;
 use std::num::NonZeroUsize;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 
 ///////////////////////////////////////////////////////////////////////////
 const BYTES_IN_MB: NonZeroUsize = NonZeroUsize::new(1024 * 1024).unwrap();
@@ -48,12 +48,18 @@ pub fn init_logger(cli: &CliArgs) -> Option<WorkerGuard> {
     #[cfg(feature = "enable_tokio_console")]
     if cli.console_subscriber {
         use tracing_subscriber::Layer;
-        
+
+        let console_layer = console_subscriber::ConsoleLayer::builder()
+            .with_default_env()
+            .server_addr(std::net::SocketAddr::from(([0, 0, 0, 0], 6669)))
+            .spawn();
+
         tracing::info!("Tokio console: Enabled");
         tracing_subscriber::registry()
             .with(logging_layer.with_filter(filter))
-            .with(console_subscriber::spawn())
+            .with(console_layer)
             .init();
+
         return file_layer_guard;
     }
 
