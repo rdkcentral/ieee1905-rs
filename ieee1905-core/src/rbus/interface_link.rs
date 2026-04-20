@@ -1,8 +1,8 @@
+use crate::TopologyDatabase;
 use crate::rbus::{format_mac_address, format_media_type, peek_topology_database};
 use crate::topology_manager::{
     Ieee1905DeviceData, Ieee1905InterfaceData, Ieee1905LocalInterface, Ieee1905NodeInternal,
 };
-use crate::TopologyDatabase;
 use nom::AsBytes;
 use rbus_core::RBusError;
 use rbus_provider::element::property::{RBusProviderGetter, RBusProviderGetterArgs};
@@ -21,7 +21,7 @@ impl RBus_InterfaceLink {
         db: &TopologyDatabase,
         table_idx: &[u32],
     ) -> Result<(Ieee1905LocalInterface, Vec<Ieee1905DeviceData>), RBusError> {
-        let Some(if_index) = table_idx.get(0) else {
+        let Some(if_index) = table_idx.first() else {
             return Err(RBusError::ElementDoesNotExists);
         };
 
@@ -58,7 +58,7 @@ impl RBusProviderTableSync for RBus_InterfaceLink {
 
     fn len(&mut self, args: RBusProviderTableSyncArgs<Self::UserData>) -> Result<u32, RBusError> {
         let db = peek_topology_database()?;
-        let (_, links) = Self::get_links(&db, args.table_idx)?;
+        let (_, links) = Self::get_links(db, args.table_idx)?;
         Ok(links.len() as u32)
     }
 }
@@ -72,7 +72,7 @@ impl RBusProviderGetter for RBus_InterfaceLink {
         };
 
         let db = peek_topology_database()?;
-        let (_, links) = Self::get_links(&db, args.table_idx)?;
+        let (_, links) = Self::get_links(db, args.table_idx)?;
         let Some(link) = links.get(*link_index as usize) else {
             return Err(RBusError::ElementDoesNotExists);
         };

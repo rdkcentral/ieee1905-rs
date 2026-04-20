@@ -27,8 +27,8 @@ use crate::registration_codec::{
 };
 use crate::sdu_codec::SDU;
 use crate::topology_manager::Role;
-use crate::{next_task_id, TopologyDatabase};
-use anyhow::{bail, Context, Result};
+use crate::{TopologyDatabase, next_task_id};
+use anyhow::{Context, Result, bail};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
@@ -42,7 +42,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 // Internal modules
-use crate::cmdu_codec::{CMDUFragmentation, IEEE1905TLVType, Profile2ApCapability, CMDU};
+use crate::cmdu_codec::{CMDU, CMDUFragmentation, IEEE1905TLVType, Profile2ApCapability};
 use tokio::sync::oneshot;
 
 use once_cell::sync::Lazy;
@@ -371,7 +371,9 @@ pub async fn service_access_point_data_indication(sdu: &SDU) -> Result<()> {
 
         return Ok(());
     }
-    tracing::trace!("SDU has to be fragmented SDU_PAYLOAD_SIZE: {total_size:?} MAX_PAYLOAD_SIZE: {FRAGMENT_SIZE:?}");
+    tracing::trace!(
+        "SDU has to be fragmented SDU_PAYLOAD_SIZE: {total_size:?} MAX_PAYLOAD_SIZE: {FRAGMENT_SIZE:?}"
+    );
     let num_fragments = total_size.div_ceil(FRAGMENT_SIZE);
     tracing::trace!("SDU will be fragmented into {num_fragments:?} parts");
     for i in 0..num_fragments {
@@ -579,7 +581,9 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
                                                         || last_tlv.tlv_length != 0
                                                         || last_tlv.tlv_value.is_some()
                                                     {
-                                                        tracing::error!("ReassembleSDU: Last is not end of message");
+                                                        tracing::error!(
+                                                            "ReassembleSDU: Last is not end of message"
+                                                        );
                                                         return Err(AlSapError::Other(
                                                             "Error: last TLV is not end of message"
                                                                 .to_string(),
@@ -617,7 +621,9 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
                 }
             }
             None => {
-                tracing::debug!("Remote unix stream side has unexpectedly closed connection in the middle of SDU fragments transmission. Dropping this incomplete SDU instead of sending it through network.");
+                tracing::debug!(
+                    "Remote unix stream side has unexpectedly closed connection in the middle of SDU fragments transmission. Dropping this incomplete SDU instead of sending it through network."
+                );
                 return Err(AlSapError::SocketClosed);
             }
         }

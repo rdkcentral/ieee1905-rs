@@ -27,7 +27,7 @@ impl RBusProviderGetter for RBus_InterfaceLinkMetric {
         };
 
         let db = peek_topology_database()?;
-        let (interface, links) = RBus_InterfaceLink::get_links(&db, args.table_idx)?;
+        let (interface, links) = RBus_InterfaceLink::get_links(db, args.table_idx)?;
         let Some(_) = links.get(*link_index as usize) else {
             return Err(RBusError::ElementDoesNotExists);
         };

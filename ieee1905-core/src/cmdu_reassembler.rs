@@ -27,7 +27,7 @@ use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio::time::Duration;
-use tracing::{info_span, Instrument};
+use tracing::{Instrument, info_span};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CmduReassemblyError {
@@ -150,8 +150,8 @@ impl CmduReassembler {
 pub mod tests {
     use super::*;
     use crate::cmdu::TLV;
-    use crate::cmdu_codec::tests::make_dummy_cmdu;
     use crate::cmdu_codec::MessageVersion;
+    use crate::cmdu_codec::tests::make_dummy_cmdu;
     use tokio::time::sleep;
     use tracing::{error, trace};
 
@@ -298,7 +298,7 @@ pub mod tests {
         cmdu2.flags = 0x80; // set last fragment flag
 
         let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
-        let fragments = vec![cmdu0, cmdu1, cmdu2];
+        let fragments = [cmdu0, cmdu1, cmdu2];
         let cmdu_reasm = CmduReassembler::new();
 
         for fragment in fragments.iter() {

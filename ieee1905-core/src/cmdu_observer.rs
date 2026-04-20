@@ -17,14 +17,14 @@
  * limitations under the License.
 */
 
-use crate::cmdu::{CMDUType, CMDU};
+use crate::cmdu::{CMDU, CMDUType};
 use crate::cmdu_handler::CMDUHandler;
 use crate::ethernet_subject_reception::EthernetFrameObserver;
 use crate::next_task_id;
 use async_trait::async_trait;
 use pnet::datalink::MacAddr;
 use std::sync::Arc;
-use tracing::{error, info_span, trace, warn, Instrument};
+use tracing::{Instrument, error, info_span, trace, warn};
 
 #[derive(Clone)]
 pub struct CMDUObserver {
@@ -63,8 +63,8 @@ impl EthernetFrameObserver for CMDUObserver {
 
                 trace!("Processing CMDU type: {cmdu_type:?}");
                 let handler = Arc::clone(&self.handler); // Explicit type annotation
-                                                         //TODO to clean up
-                                                         //let interface_name = handler_ref.interface_name.clone(); // --> not needed for now unles we pass the interface to the handler
+                //TODO to clean up
+                //let interface_name = handler_ref.interface_name.clone(); // --> not needed for now unles we pass the interface to the handler
 
                 tokio::task::spawn(
                     async move {

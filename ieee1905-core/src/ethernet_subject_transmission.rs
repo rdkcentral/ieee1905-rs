@@ -20,9 +20,9 @@ use crate::next_task_id;
 use anyhow::anyhow;
 use pnet::datalink::MacAddr;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
-use tracing::{debug, error, info, info_span, warn, Instrument};
+use tracing::{Instrument, debug, error, info, info_span, warn};
 
 #[derive(Debug)]
 struct Frame {

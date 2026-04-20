@@ -20,13 +20,13 @@
 #![deny(warnings)]
 
 // External crates
+use nom::{Err as NomErr, Needed};
 use nom::{
+    IResult, Parser,
     bytes::complete::take,
     error::{Error, ErrorKind},
-    number::complete::{be_i8, be_u16, be_u32, be_u8},
-    IResult, Parser,
+    number::complete::{be_i8, be_u8, be_u16, be_u32},
 };
-use nom::{Err as NomErr, Needed};
 
 use anyhow::bail;
 use nom::combinator::{all_consuming, cond};
@@ -36,8 +36,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::net::Ipv6Addr;
 // Internal modules
 use crate::cmdu_reassembler::CmduReassemblyError;
-use crate::tlv_cmdu_codec::{TLVTrait, TLV};
-
+use crate::tlv_cmdu_codec::{TLV, TLVTrait};
 
 ///////////////////////////////////////////////////////////////////////////
 //DEFINITION OF CMDU TYPES and IEEE1905 TLVs
@@ -340,10 +339,8 @@ impl TLVTrait for Ipv6 {
         let (input, additional_ipv6_addresses) = count(
             |input| {
                 let (input, address_type_raw) = be_u8(input)?;
-                let address_type =
-                    IPv6AddressType::from_u8(address_type_raw).ok_or_else(|| {
-                        NomErr::Failure(Error::new(input, ErrorKind::Alt))
-                    })?;
+                let address_type = IPv6AddressType::from_u8(address_type_raw)
+                    .ok_or_else(|| NomErr::Failure(Error::new(input, ErrorKind::Alt)))?;
                 let (input, ipv6_address) = take_ipv6_addr(input)?;
                 let (input, ipv6_originator) = take_ipv6_addr(input)?;
 
@@ -1870,15 +1867,14 @@ impl CMDU {
                 return Err(NomErr::Failure(Error::new(input, ErrorKind::Tag)));
             };
             // We can check if TLV's can be parsed and last TLV is really EoF
-            if let Some(last_tlv) = tlvs.last() {
-                if last_tlv.tlv_type != IEEE1905TLVType::EndOfMessage.to_u8()
+            if let Some(last_tlv) = tlvs.last()
+                && (last_tlv.tlv_type != IEEE1905TLVType::EndOfMessage.to_u8()
                     || last_tlv.tlv_length != 0
-                    || last_tlv.tlv_value.is_some()
-                {
-                    tracing::error!("TLV: Last is not end of message");
-                    return Err(NomErr::Failure(Error::new(input, ErrorKind::Tag)));
-                }
-            };
+                    || last_tlv.tlv_value.is_some())
+            {
+                tracing::error!("TLV: Last is not end of message");
+                return Err(NomErr::Failure(Error::new(input, ErrorKind::Tag)));
+            }
         }
         tracing::trace!("Returning CMDU. Might have incomplete TLV's due to size fragmentation");
         Ok((&[], cmdu))
@@ -1923,11 +1919,11 @@ impl CMDU {
                 bail!("TLV is too large, size = {tlv_size}/{max_content_size}");
             }
 
-            if let Some(fragment) = fragments.last_mut() {
-                if fragment.payload.len() + tlv_size <= max_content_size {
-                    fragment.payload.extend(tlv.serialize());
-                    continue;
-                }
+            if let Some(fragment) = fragments.last_mut()
+                && fragment.payload.len() + tlv_size <= max_content_size
+            {
+                fragment.payload.extend(tlv.serialize());
+                continue;
             }
 
             fragments.push(Self {
@@ -2478,7 +2474,7 @@ pub mod tests {
                 } else {
                     // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
                     assert!(
-                        frag.total_size() >= 8 + 1,
+                        frag.total_size() > 8,
                         "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
                         i,
                         frag.total_size()
@@ -2537,7 +2533,8 @@ pub mod tests {
         assert!(
             fragments[0].total_size() >= 8 + 3,
             "Empty CMDU payload. CMDU fragment should be at least 8+3 bytes (CMDU header + endOfMessageTlv) but is {:?} bytes long",
-            fragments[0].total_size());
+            fragments[0].total_size()
+        );
 
         // Check if total size of CMDU meets requirement of maximal size of the fragment
         assert!(
@@ -3188,7 +3185,10 @@ pub mod tests {
         // Parse the BridgingTuple data
         let bridging_tuple = BridgingTuple::parse(bridging_tuple_data).unwrap().1;
         assert_eq!(bridging_tuple.bridging_mac_count, 1);
-        assert_eq!(bridging_tuple.bridging_mac_list[0], [0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02]);
+        assert_eq!(
+            bridging_tuple.bridging_mac_list[0],
+            [0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02]
+        );
 
         // Serialize just parsed BridgingTuple structure
         let serialized = bridging_tuple.serialize();
@@ -3359,8 +3359,8 @@ pub mod tests {
     // Try to serialize and parse AP autoconfig search CMDU with invalid role
     #[test]
     fn test_ap_autoconfig_search_with_invalid_role_should_fail() {
-        use nom::error::ErrorKind;
         use nom::Err;
+        use nom::error::ErrorKind;
 
         let searched_role_value = SearchedRole { role: 0x01 };
         let searched_role_tlv = TLV {
@@ -4013,7 +4013,7 @@ pub mod tests {
                 } else {
                     // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
                     assert!(
-                        frag.total_size() >= 8 + 1,
+                        frag.total_size() > 8,
                         "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
                         i,
                         frag.total_size()
@@ -4179,7 +4179,7 @@ pub mod tests {
         let mut offset = 0;
 
         // Define vector of sizes of consecutive TLVs for verification (from already sorted CMDUs)
-        let sizes = vec![10, 20, 30, 40, 50, 60];
+        let sizes = [10, 20, 30, 40, 50, 60];
 
         // Iter on all the TLVs and check their size with the predefined vector "sizes"
         for i in sizes.iter() {

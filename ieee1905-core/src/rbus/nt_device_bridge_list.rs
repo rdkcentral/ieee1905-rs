@@ -18,7 +18,7 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device_BridgingTuple_In
         };
 
         let db = peek_topology_database()?;
-        let (node_index, node) = RBus_Ieee1905Device_Node::from(&db, args.table_idx)?;
+        let (node_index, node) = RBus_Ieee1905Device_Node::from(db, args.table_idx)?;
         let tuples = RBus_NetworkTopology_Ieee1905Device_BridgingTuple::get_tuples(&node);
 
         let Some((_, interfaces)) = tuples.get_index(tuple_index as usize) else {

@@ -28,9 +28,9 @@ use ieee1905::sdu_codec::SDU;
 use pnet::datalink::*;
 use std::process::exit;
 use tokio::net::UnixStream;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 fn _prepare_test_packet_with_payload(
     r: &AlServiceRegistrationResponse,
@@ -2077,15 +2077,15 @@ async fn read_data(
                                 }
 
                                 assembled_payload.extend(&fragment.payload);
-                                if fragment.is_last_fragment == 1 {
-                                    if let Some(mut final_message) = message.clone() {
-                                        final_message.payload = assembled_payload.clone();
-                                        tracing::info!(
-                                            "Got reassembled SDU [{:?}] {final_message:?}",
-                                            final_message.payload.len()
-                                        );
-                                        return Ok(final_message);
-                                    }
+                                if fragment.is_last_fragment == 1
+                                    && let Some(mut final_message) = message.clone()
+                                {
+                                    final_message.payload = assembled_payload.clone();
+                                    tracing::info!(
+                                        "Got reassembled SDU [{:?}] {final_message:?}",
+                                        final_message.payload.len()
+                                    );
+                                    return Ok(final_message);
                                 }
                                 fragment_id_expected += 1;
                             }
