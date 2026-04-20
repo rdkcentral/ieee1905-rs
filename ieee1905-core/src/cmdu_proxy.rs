@@ -245,10 +245,6 @@ pub fn cmdu_topology_response_transmission(
                 TLV::from(AlMacAddress {
                     al_mac_address: local_al_mac_address,
                 }),
-                TLV::from(VendorSpecificInfo {
-                    oui: COMCAST_OUI,
-                    vendor_data: COMCAST_QUERY_TAG,
-                }),
                 TLV::from(EndOfMessage),
             ];
 
@@ -414,13 +410,30 @@ async fn inject_topology_response_tlvs(
         }));
     }
 
-    // injecting Ipv6
+    // injecting VendorInfo and Ipv6
     if let Some(address) = db.get_artifact_server_ip_address() {
+        vec.push(TLV::from(VendorSpecificInfo {
+            oui: COMCAST_OUI,
+            vendor_data: VendorSpecificInfoData {
+                version: 0,
+                info_type: VendorSpecificInfoType::ArtifactService,
+                role: VendorSpecificInfoRole::Server,
+            },
+        }));
         vec.push(TLV::from(Ipv6 {
             al_mac_address: db.al_mac_address,
             link_local_ipv6_address: address,
             additional_ipv6_addresses: vec![],
-        }))
+        }));
+    } else {
+        vec.push(TLV::from(VendorSpecificInfo {
+            oui: COMCAST_OUI,
+            vendor_data: VendorSpecificInfoData {
+                version: 0,
+                info_type: VendorSpecificInfoType::ArtifactService,
+                role: VendorSpecificInfoRole::Client,
+            },
+        }));
     }
 
     vec.push(end_of_message_tlv);
