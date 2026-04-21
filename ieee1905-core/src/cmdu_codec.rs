@@ -3867,7 +3867,7 @@ pub mod tests {
         match bridging_tuple {
             Err(nom::Err::Error(e)) if e.code == ErrorKind::Eof => {}
             _ => {
-                panic!("nom::Err::Incomplete should be returned")
+                panic!("ErrorKind::Eof should be returned")
             }
         }
     }
