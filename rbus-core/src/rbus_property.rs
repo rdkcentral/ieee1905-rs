@@ -1,6 +1,6 @@
 use crate::rbus_library::RBusLibrary;
 use crate::rbus_value::RBusValue;
-use crate::{RBusError, RBusObject, RBusValueGetError, RBusValueReadable, RBusValueWritable};
+use crate::{RBusObject, RBusValueGetError, RBusValueReadable, RBusValueWritable};
 use rbus_sys::*;
 use std::cmp::Ordering;
 use std::ffi::CStr;
@@ -15,15 +15,15 @@ impl RBusProperty {
     ///
     /// Allocate and initialize a property.
     ///
-    pub fn new(library: &RBusLibrary, name: &CStr, value: &RBusValue) -> Result<Self, RBusError> {
+    pub fn new(library: &RBusLibrary, name: &CStr, value: &RBusValue) -> Self {
         let library_raw = library.as_raw();
         let handle = unsafe {
             library_raw.rbusProperty_Init(std::ptr::null_mut(), name.as_ptr(), value.handle)
         };
-        Ok(Self {
+        Self {
             handle,
             library: library.clone(),
-        })
+        }
     }
 
     pub(crate) fn retain(library: &RBusLibrary, handle: rbusProperty_t) -> Self {
