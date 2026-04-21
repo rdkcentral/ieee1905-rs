@@ -27,8 +27,8 @@ use crate::registration_codec::{
 };
 use crate::sdu_codec::SDU;
 use crate::topology_manager::Role;
-use crate::{next_task_id, TopologyDatabase};
-use anyhow::{bail, Context, Result};
+use crate::{TopologyDatabase, next_task_id};
+use anyhow::{Context, Result, bail};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
@@ -38,11 +38,11 @@ use std::sync::Arc;
 use tokio::fs;
 use tokio::net::UnixListener;
 use tokio::net::UnixStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 // Internal modules
-use crate::cmdu_codec::{CMDUFragmentation, IEEE1905TLVType, Profile2ApCapability, CMDU};
+use crate::cmdu_codec::{CMDU, CMDUFragmentation, IEEE1905TLVType, Profile2ApCapability};
 use tokio::sync::oneshot;
 
 use once_cell::sync::Lazy;
@@ -108,6 +108,8 @@ impl AlServiceAccessPoint {
         interface_name: String,
         shutdown_tx: oneshot::Sender<()>,
     ) {
+        SAP_INSTANCE.lock().await.take();
+
         let sap = AlServiceAccessPoint::start_server(
             control_socket_path,
             data_socket_path,
@@ -193,6 +195,10 @@ impl AlServiceAccessPoint {
         })
     }
 
+    pub async fn get() -> Option<OwnedMutexGuard<Self>> {
+        Some(get_instance_mut().await?.lock_owned().await)
+    }
+
     pub fn control_socket_path(&self) -> &Path {
         &self.control_socket_path
     }
@@ -206,6 +212,14 @@ impl AlServiceAccessPoint {
             return false;
         };
         instance.lock_owned().await.enabled
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn service_type(&self) -> Option<ServiceType> {
+        self.service_type
     }
 
     pub async fn control_is_connected(&mut self) -> bool {
@@ -357,7 +371,9 @@ pub async fn service_access_point_data_indication(sdu: &SDU) -> Result<()> {
 
         return Ok(());
     }
-    tracing::trace!("SDU has to be fragmented SDU_PAYLOAD_SIZE: {total_size:?} MAX_PAYLOAD_SIZE: {FRAGMENT_SIZE:?}");
+    tracing::trace!(
+        "SDU has to be fragmented SDU_PAYLOAD_SIZE: {total_size:?} MAX_PAYLOAD_SIZE: {FRAGMENT_SIZE:?}"
+    );
     let num_fragments = total_size.div_ceil(FRAGMENT_SIZE);
     tracing::trace!("SDU will be fragmented into {num_fragments:?} parts");
     for i in 0..num_fragments {
@@ -445,7 +461,7 @@ pub async fn intercept_wcs_profile2_dpp_compatibility(
         if e.tlv_type != IEEE1905TLVType::Profile2ApCapability.to_u8() {
             return None;
         }
-        Some(Profile2ApCapability::parse(&e.tlv_value.as_ref()?).ok()?.1)
+        Some(Profile2ApCapability::parse(e.tlv_value.as_ref()?).ok()?.1)
     });
 
     let Some(ap_capability) = ap_capability else {
@@ -565,7 +581,9 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
                                                         || last_tlv.tlv_length != 0
                                                         || last_tlv.tlv_value.is_some()
                                                     {
-                                                        tracing::error!("ReassembleSDU: Last is not end of message");
+                                                        tracing::error!(
+                                                            "ReassembleSDU: Last is not end of message"
+                                                        );
                                                         return Err(AlSapError::Other(
                                                             "Error: last TLV is not end of message"
                                                                 .to_string(),
@@ -603,7 +621,9 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
                 }
             }
             None => {
-                tracing::debug!("Remote unix stream side has unexpectedly closed connection in the middle of SDU fragments transmission. Dropping this incomplete SDU instead of sending it through network.");
+                tracing::debug!(
+                    "Remote unix stream side has unexpectedly closed connection in the middle of SDU fragments transmission. Dropping this incomplete SDU instead of sending it through network."
+                );
                 return Err(AlSapError::SocketClosed);
             }
         }

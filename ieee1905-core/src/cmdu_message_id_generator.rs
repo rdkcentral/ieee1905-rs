@@ -18,8 +18,8 @@
 */
 
 #![deny(warnings)]
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use tokio::sync::OnceCell;
 use tracing::{debug, info}; // Import tracing
 
@@ -82,22 +82,22 @@ pub mod tests {
     // and u16 type overflow handling
     #[tokio::test]
     async fn test_check_message_id_value_overflow() {
-        let gen = get_message_id_generator().await;
+        let id_gen = get_message_id_generator().await;
 
-        assert_eq!(gen.next_id(), 1);
-        assert_eq!(gen.next_id(), 2);
+        assert_eq!(id_gen.next_id(), 1);
+        assert_eq!(id_gen.next_id(), 2);
 
         // Rewind u16 type values to the value of 0xFFFE (near the last value of u16)
         for _i in 0u32..(u16::MAX as u32 - 4) {
-            let _ = gen.next_id();
+            let _ = id_gen.next_id();
         }
 
-        assert_eq!(gen.next_id(), 0xFFFE);
-        assert_eq!(gen.next_id(), 0xFFFF); // last value of u16 type
+        assert_eq!(id_gen.next_id(), 0xFFFE);
+        assert_eq!(id_gen.next_id(), 0xFFFF); // last value of u16 type
 
         // Expect counter overflow and correcting action of the value after overflow
         // The next value after 0xFFFF should be 1 (the value of message id == 0 should be skipped)
-        assert_eq!(gen.next_id(), 1);
-        assert_eq!(gen.next_id(), 2);
+        assert_eq!(id_gen.next_id(), 1);
+        assert_eq!(id_gen.next_id(), 2);
     }
 }

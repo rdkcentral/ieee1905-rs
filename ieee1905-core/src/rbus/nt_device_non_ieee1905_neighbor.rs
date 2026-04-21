@@ -47,10 +47,10 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neigh
         };
 
         let db = peek_topology_database()?;
-        let (node_index, node) = RBus_Ieee1905Device_Node::from(&db, args.table_idx)?;
-        let neighbours = Self::iter_neighbors(&node);
+        let (node_index, node) = RBus_Ieee1905Device_Node::from(db, args.table_idx)?;
+        let mut neighbours = Self::iter_neighbors(&node);
 
-        let Some((if_index, neighbour)) = neighbours.skip(neighbour_index as usize).next() else {
+        let Some((if_index, neighbour)) = neighbours.nth(neighbour_index as usize) else {
             return Err(RBusError::ElementDoesNotExists);
         };
 

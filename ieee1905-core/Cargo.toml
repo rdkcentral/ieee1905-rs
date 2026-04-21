@@ -1,7 +1,7 @@
 [package]
 name = "ieee1905"
 version = "0.5.0"
-edition = "2021"
+edition = "2024"
 repository = "git@github.com:rdkcentral/ieee1905-rs.git"
 license = "Apache-2.0"
 #license-file = "LICENSE"
@@ -10,10 +10,6 @@ publish = false
 [features]
 enable_tokio_console = []
 rbus = ["rbus-core", "rbus-provider"]
-rbus-bundled = [
-    "rbus",
-    "rbus-core/bundled",
-]
 
 [dependencies]
 rbus-core = { path = "../rbus-core", optional = true }
@@ -28,7 +24,6 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 tracing-appender = "0.2.4"
 ratatui = "0.30"
 crossterm = "0.29.0"
-netdev = "0.40.0"
 anyhow = "1.0.100"
 futures = "0.3"
 tokio-util = "0.7.17"
@@ -45,6 +40,7 @@ either = "1.15.0"
 
 # RUSTSEC transitive dependency overrides
 time = ">=0.3.47"
+rand = ">=0.9.3"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }

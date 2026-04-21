@@ -23,8 +23,9 @@ A short, high-level plan:
 - [x] Link Metric management and topology inegration.
 - [ ] Interoperability.
 - [ ] IEEE1905 CMDU parsing and serialization (version 2024)
-- [ ] Controller backup.
-- [ ] File Transfers between Controller and agents.
+- [ ] Controller Redundancy.
+- [ ] Log transfers between Controller and Agents.
+- [ ] Binary transfer for upgrade from Controller to Agents.
 - [ ] IEEE1905 security.
 
 ## Architecture Decisions (ADRs)
@@ -48,6 +49,8 @@ EasyMesh on Linux-based platforms.
 - [ADR-0007: Virtual Interface and Linux Bridge for CMDU Transmission](docs/architecture/adr/0007-virtual-interface-linux-bridge.md)
 - [ADR-0008: IEEE 1905 Does Not Own Per-Media Forwarding State](docs/architecture/adr/0008-no-per-media-forwarding.md)
 - [ADR-0009: IEEE 1905 Topology Is Informational, Not Authoritative](docs/architecture/adr/0009-topology-informational.md)
+- [ADR-0019: Use Link-Local IPv6 on Control Interface to Reuse IP-Based Services](docs/architecture/adr/0019-link-local-ipv6-ip-service-reuse.md)
+- [ADR-0020: Isolate IEEE1905 Virtual Ethernet in a Dedicated Network Namespace](docs/architecture/adr/0020-network-namespace-virtual-ethernet-isolation.md)
 
 ### EasyMesh Integration Model
 
@@ -305,6 +308,76 @@ The protection against split brain scenraio will work as follow:
 ![ARCH](docs/architecture/call_flow_diagram/IEEE1905_controller_protection.jpg)
 
 ---
+
+### Private Link-Local IPv6 EUI-64 for Control Plane Virtual Ethernet
+
+The IEEE1905 control-plane virtual Ethernet interface can be assigned a **private link-local IPv6 address** derived from the AL MAC address using EUI-64 interface-ID rules.  
+This address is in the `fe80::/64` scope and is **not routable outside the local home link/network**.
+
+1. Use the AL MAC assigned to the virtual Ethernet interface as the base identifier.
+2. Build the EUI-64 interface ID from the 48-bit MAC:
+   flip the U/L bit in the first octet, then insert `ff:fe` in the middle.
+3. Combine the resulting 64-bit interface ID with the link-local IPv6 prefix `fe80::/64`.
+4. Assign the address to the virtual Ethernet interface used by the IEEE1905 control plane.
+5. Validate duplicate-address detection (DAD), route reachability, and namespace placement (if isolation is enabled).
+
+Example (conceptual):
+
+- AL MAC: `02:42:c0:a8:64:02`
+- EUI-64 ID: `0042:c0ff:fea8:6402`
+- Link-local `/64` prefix: `fe80::/64`
+- Resulting IPv6: `fe80::42:c0ff:fea8:6402/64`
+
+### Network Isolation (Virtual Ethernet Namespace)
+
+To reduce blast radius and improve security boundaries, the IEEE1905 virtual Ethernet interface can be isolated in a dedicated Linux network namespace.
+
+1. Create a dedicated namespace for IEEE1905 control-plane traffic.
+2. Move the virtual Ethernet endpoint used by IEEE1905 into that namespace.
+3. Expose only the minimum required links/routes between host and IEEE1905 namespaces.
+4. Apply namespace-scoped firewall rules and permissions to restrict unintended traffic paths.
+5. Monitor namespace/interface state and fail fast if the virtual interface is missing or detached.
+
+Expected benefits:
+
+- Better separation between IEEE1905 control traffic and unrelated host networking.
+- Lower risk of accidental packet leakage across services.
+- Cleaner policy enforcement for interface access, logging, and debugging.
+
+Operational notes:
+
+- Startup scripts or systemd units should create/validate the namespace before launching IEEE1905.
+- Recovery logic should recreate or reattach the virtual interface if namespace state is lost.
+- Diagnostics should include namespace-aware checks (`ip netns`, interface/link state, routes).
+
+### Syslog Integration
+
+IEEE1905 service logs can be integrated with system syslog to simplify operational monitoring and troubleshooting in production deployments.  
+For discovery and exchange of logging capabilities and operational metadata between peers, we will use the IEEE1905 Higher Layer Information Protocol, specifically the **Higher Layer Query Message** and **Higher Layer Response Message**.
+
+1. The service should log key control-plane events with consistent severity levels (`INFO`, `WARN`, `ERROR`), including registration, topology convergence, role transitions, and forwarding decisions.
+2. Logs should include stable context fields (interface, local AL MAC, remote AL MAC, message type, message ID) to enable correlation across components.
+3. In RDK-B integrations, logs should be forwarded to the platform syslog/journald pipeline and retained according to platform policy.
+4. Rate limiting should be applied for repeated transient failures to avoid log flooding while preserving first-occurrence diagnostics.
+5. Higher Layer Query/Response exchange should be used to synchronize or verify peer logging-related capabilities before relying on cross-node diagnostics.
+
+![ARCH](docs/architecture/call_flow_diagram/IEEE1905_syslog.jpg)
+
+### Firmware Upgrade
+
+Firmware upgrades should preserve IEEE1905 service continuity and prevent topology instability during restart windows.  
+Upgrade coordination metadata between IEEE1905 entities will be handled through the IEEE1905 Higher Layer Information Protocol using **Higher Layer Query Message** and **Higher Layer Response Message** exchanges.
+
+In this model, only the **controller** requires connectivity to the backend firmware repository/service.  
+The controller distributes, via IEEE1905, the upgrade metadata required by extenders (for example image URI, version, integrity/checksum, and policy), so extenders can fetch and apply the correct binaries.
+
+1. During upgrade/restart, IEEE1905 should gracefully stop transmission workers and release resources in deterministic order.
+2. On startup after upgrade, the service should rebuild local interface state, restart discovery/notification timers, and repopulate topology state through normal convergence.
+3. If role-bearing entities (agent/controller/registrar) restart, role selection and split-brain protection flow must be re-evaluated using the same tie-break logic.
+4. Upgrade procedures should be backward compatible for topology/CMDU behavior across adjacent firmware versions whenever feasible.
+5. During rolling upgrades, Higher Layer Query/Response should be used to detect peer upgrade state/capability and gate feature activation until compatibility is confirmed.
+
+![ARCH](docs/architecture/call_flow_diagram/IEEE1905_fw_repo.jpg)
 
 ### IEEE1905.1 Forwarding Table
 
@@ -646,7 +719,6 @@ Change interface to ```eth1```
 IEEE1905 service can be build with few compile time features:
 
 - `rbus` - enable RBUS provider
-- `rbus-bundled` - same as `rbus` but uses bundled so files for linking
 - `enable_tokio_console` - enable tokio-console
 
 By default, RBUS provider is not included in the binary.
@@ -656,11 +728,12 @@ In order to enable it one has to build with following command:
 cargo build --package ieee1905 --release --features=rbus
 ```
 
-In case RBUS binaries are not available on the host machine,
-ieee1905 can be built with the bundled binaries: 
+RBUS-enabled builds require a GNU toolchain.
+It will be selected by default when building on the target machine.
+In case it was not selected by default or the binary is cross-compiled, it should be provided manually:
 
 ```shell
-cargo build --package ieee1905 --release --features=rbus-bundled
+cargo build --package ieee1905 --release --features=rbus --target aarch64-unknown-linux-gnu
 ```
 
 By default, tokio-console is not included in the binary.

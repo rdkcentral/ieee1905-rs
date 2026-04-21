@@ -16,6 +16,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
+use crate::SDU;
 use crate::al_sap::AlServiceAccessPoint;
 use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
@@ -23,14 +24,13 @@ use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
 use crate::tlv_cmdu_codec::TLVTrait;
 use crate::topology_manager::{Ieee1905Node, Role, TopologyDatabase, UpdateType};
-use crate::SDU;
-use crate::{next_task_id, MessageIdGenerator};
+use crate::{MessageIdGenerator, next_task_id};
 use pnet::datalink::MacAddr;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, info_span, instrument, trace, warn, Instrument};
+use tracing::{Instrument, debug, error, info, info_span, instrument, trace, warn};
 
 #[instrument(skip_all, name = "cmdu_discovery_transmission", fields(task = next_task_id()))]
 pub async fn cmdu_topology_discovery_transmission_worker(
@@ -558,17 +558,32 @@ pub async fn cmdu_link_metric_query_transmission_worker(
     }
 }
 
+pub struct LinkMetricResponseTransmissionRequest {
+    pub interface: String,
+    pub sender: Arc<EthernetSender>,
+    pub message_id: u16,
+    pub local_al_mac_address: MacAddr,
+    pub remote_al_mac_address: MacAddr,
+    pub include_rx: bool,
+    pub include_tx: bool,
+    pub neighbors: Vec<Ieee1905Node>,
+}
+
 #[instrument(skip_all, name = "cmdu_link_metric_response_transmission", fields(task = next_task_id()))]
 pub async fn cmdu_link_metric_response_transmission(
-    interface: String,
-    sender: Arc<EthernetSender>,
-    message_id: u16,
-    local_al_mac_address: MacAddr,
-    remote_al_mac_address: MacAddr,
-    include_rx: bool,
-    include_tx: bool,
-    neighbors: Vec<Ieee1905Node>,
+    request: LinkMetricResponseTransmissionRequest,
 ) {
+    let LinkMetricResponseTransmissionRequest {
+        interface,
+        sender,
+        message_id,
+        local_al_mac_address,
+        remote_al_mac_address,
+        include_rx,
+        include_tx,
+        neighbors,
+    } = request;
+
     debug!(
         %interface,
         message_id,
@@ -841,8 +856,10 @@ mod tests {
         let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
         *db.local_interface_list.write().await = Some(vec![if1.clone(), if2.clone()]);
 
-        let mut device = Ieee1905DeviceData::default();
-        device.al_mac = MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x01, 0x01);
+        let device = Ieee1905DeviceData {
+            al_mac: MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x01, 0x01),
+            ..Default::default()
+        };
         db.update_ieee1905_topology(
             device.clone(),
             UpdateType::DiscoveryReceived,

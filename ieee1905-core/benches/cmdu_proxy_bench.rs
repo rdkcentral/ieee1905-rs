@@ -1,5 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use ieee1905::cmdu::{IEEE1905TLVType, TLV, CMDU};
+use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use ieee1905::cmdu::{CMDU, IEEE1905TLVType, TLV};
 use ieee1905::cmdu_codec::{CMDUFragmentation, MessageVersion};
 
 fn build_payload(num_tlvs: usize, tlv_value_len: usize) -> Vec<u8> {

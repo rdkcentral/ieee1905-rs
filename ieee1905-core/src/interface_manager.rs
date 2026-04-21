@@ -25,14 +25,14 @@ use pnet::datalink::{self, MacAddr};
 // Standard library
 use crate::cmdu_codec::{MediaType, MediaTypeSpecialInfo, MediaTypeSpecialInfoWifi};
 use crate::linux::eth_tool::{
-    EthToolBitsetAttr, EthToolBitsetBitAttr, EthToolHeaderAttribute, EthToolLinkMode,
-    EthToolLinkModesAttribute, EthToolMessage, ETH_TOOL_GENL_NAME,
+    ETH_TOOL_GENL_NAME, EthToolBitsetAttr, EthToolBitsetBitAttr, EthToolHeaderAttribute,
+    EthToolLinkMode, EthToolLinkModesAttribute, EthToolMessage,
 };
 use crate::linux::if_link::{RtnlLinkStats, RtnlLinkStats64};
 use crate::linux::nl80211::{
-    Nl80211Attribute, Nl80211Band, Nl80211BandAttr, Nl80211BandIfTypeAttr, Nl80211BitrateAttr,
-    Nl80211ChannelWidth, Nl80211Command, Nl80211IfType, Nl80211RateInfo, Nl80211StaInfo,
-    Nl80211SurveyInfoAttr, NL80211_GENL_NAME,
+    NL80211_GENL_NAME, Nl80211Attribute, Nl80211Band, Nl80211BandAttr, Nl80211BandIfTypeAttr,
+    Nl80211BitrateAttr, Nl80211ChannelWidth, Nl80211Command, Nl80211IfType, Nl80211RateInfo,
+    Nl80211StaInfo, Nl80211SurveyInfoAttr,
 };
 use crate::topology_manager::{Ieee1905InterfaceData, Ieee1905LocalInterface};
 use indexmap::{IndexMap, IndexSet};
@@ -209,7 +209,7 @@ async fn call_rt_get_links() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo>>
         }
 
         let if_flags = *payload.ifi_flags();
-        let if_index = i32::from(*payload.ifi_index());
+        let if_index = *payload.ifi_index();
         let bridge_if_index = attr_handle.get_attr_payload_as(Ifla::Master).ok();
         let link_stats = get_link_stats(&attr_handle);
 
@@ -267,7 +267,7 @@ async fn call_rt_get_bridge_fdb() -> anyhow::Result<IndexMap<MacAddr, IndexSet<i
         };
 
         let mac = MacAddr::from(mac);
-        let if_index = i32::from(*payload.ndm_index());
+        let if_index = *payload.ndm_index();
 
         result
             .entry(mac)
@@ -744,10 +744,10 @@ async fn call_eth_tool_get_link_modes(
             if let Ok(bits) = bitset_handle.get_nested_attributes::<u16>(EthToolBitsetAttr::Bits) {
                 for bit in bits.iter() {
                     let bit = bit.get_attr_handle::<EthToolBitsetBitAttr>()?;
-                    if let Ok(index) = bit.get_attr_payload_as(EthToolBitsetBitAttr::Index) {
-                        if flags_802_3ab.contains(&index) {
-                            is_802_3ab_supported = true;
-                        }
+                    if let Ok(index) = bit.get_attr_payload_as(EthToolBitsetBitAttr::Index)
+                        && flags_802_3ab.contains(&index)
+                    {
+                        is_802_3ab_supported = true;
                     }
                 }
             }

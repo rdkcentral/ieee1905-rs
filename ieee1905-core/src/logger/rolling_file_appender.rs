@@ -124,10 +124,10 @@ impl RollingFileAppender {
 
     fn get_current_writer(&mut self) -> std::io::Result<&mut CurrentFile> {
         let now = Local::now();
-        if let Some(file) = self.current_file.take() {
-            if !self.should_rollover(&file, &now) {
-                return Ok(self.current_file.insert(file));
-            }
+        if let Some(file) = self.current_file.take()
+            && !self.should_rollover(&file, &now)
+        {
+            return Ok(self.current_file.insert(file));
         }
 
         std::fs::create_dir_all(&self.folder)?;

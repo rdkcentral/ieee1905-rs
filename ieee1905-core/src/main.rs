@@ -32,19 +32,18 @@ use ieee1905::interface_manager::*;
 use ieee1905::lldpdu_observer::LLDPObserver;
 use ieee1905::lldpdu_proxy::lldp_discovery_worker;
 use ieee1905::topology_manager::*;
-use ieee1905::{next_task_id, CMDUObserver};
+use ieee1905::{CMDUObserver, next_task_id};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 //use ieee1905::crypto_engine::CRYPTO_CONTEXT;
 use anyhow::anyhow;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::signal::unix::{signal, SignalKind};
-use tokio::sync::oneshot;
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Mutex;
+use tokio::sync::oneshot;
 use tracing::instrument;
 
-use sd_notify;
 use sd_notify::NotifyState;
 
 #[derive(Parser)]
@@ -88,9 +87,6 @@ struct CliArgs {
 
 fn main() -> anyhow::Result<()> {
     let cli = CliArgs::parse();
-
-    // Start the Tokio console subscriber
-    std::env::set_var("RUST_CONSOLE_BIND", "0.0.0.0:6669");
 
     let _guard = logger::init_logger(&cli);
     tracing::info!("Tracing initialized!");

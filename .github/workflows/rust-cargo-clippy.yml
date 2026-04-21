@@ -1,11 +1,14 @@
-name: Run Rust Tests
+name: Run Rust Clippy
 
 on:
   pull_request:
     branches: [ develop ]
 
+permissions:
+  contents: read
+
 jobs:
-  test:
+  clippy:
     runs-on: ubuntu-latest
 
     steps:
@@ -15,5 +18,5 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run cargo test
-        run: cargo test --workspace --exclude rbus-core --exclude rbus-sys --exclude rbus-provider
+      - name: Run cargo clippy
+        run: cargo clippy

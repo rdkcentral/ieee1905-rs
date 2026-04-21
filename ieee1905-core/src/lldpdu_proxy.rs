@@ -18,10 +18,10 @@
 */
 
 use crate::ethernet_subject_transmission::EthernetSender;
-use crate::lldpdu::{ChassisId, LLDPTLVType, PortId, TimeToLiveTLV, LLDPDU, TLV};
+use crate::lldpdu::{ChassisId, LLDPDU, LLDPTLVType, PortId, TLV, TimeToLiveTLV};
 use crate::next_task_id;
 use pnet::datalink::MacAddr;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, instrument};
 
 /// Launches the discovery process for L2 devices using LLDP.

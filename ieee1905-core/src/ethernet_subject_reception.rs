@@ -24,16 +24,16 @@ use crate::next_task_id;
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use pnet::datalink::{self, Channel::Ethernet, Config};
-use pnet::packet::ethernet::EthernetPacket;
 use pnet::packet::Packet;
+use pnet::packet::ethernet::EthernetPacket;
 use pnet::util::MacAddr;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::io::ErrorKind;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
-use tokio::task::{yield_now, JoinSet};
-use tracing::{debug, error, info, info_span, warn, Instrument};
+use tokio::task::{JoinSet, yield_now};
+use tracing::{Instrument, debug, error, info, info_span, warn};
 
 /// Observer trait for handling specific Ethernet frame types
 #[async_trait]
@@ -80,7 +80,9 @@ impl EthernetReceiver {
         // Si ya hay un canal para ese ethertype, no duplicamos suscripciones
         let observer_entry = match self.observers.entry(ether_type) {
             Entry::Occupied(_) => {
-                warn!("Observer for EtherType 0x{ether_type:04X} is already subscribed — skipping duplicate");
+                warn!(
+                    "Observer for EtherType 0x{ether_type:04X} is already subscribed — skipping duplicate"
+                );
                 return;
             }
             Entry::Vacant(e) => e,
@@ -167,7 +169,7 @@ impl EthernetReceiver {
                     Ok(e) => {
                         retry_timeout = Self::RETRY_TIMEOUT_MIN;
                         e
-                    },
+                    }
                     Err(e) => {
                         if e.kind() != ErrorKind::TimedOut {
                             error!("Error receiving Ethernet frame: {e}");

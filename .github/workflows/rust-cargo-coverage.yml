@@ -1,0 +1,43 @@
+name: Run Rust Coverage
+
+on:
+  pull_request:
+    branches: [ develop ]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (+llvm-tools-preview)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Run cargo llvm-cov
+        run: cargo llvm-cov --package ieee1905 --summary-only --output-path coverage_report.txt
+
+      - name: Formatting Coverage Report
+        run: |
+          echo '### Coverage Report' > coverage_report_formatted.txt
+          echo '```text' >> coverage_report_formatted.txt
+          cat coverage_report.txt >> coverage_report_formatted.txt
+          echo -e '\n```' >> coverage_report_formatted.txt
+
+      - name: Post Coverage Report Comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: coverage-report
+          path: coverage_report_formatted.txt

@@ -1,0 +1,27 @@
+name: Run Rust Hack
+
+on:
+  pull_request:
+    branches: [ develop ]
+
+permissions:
+  contents: read
+
+jobs:
+  hack:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack
+
+      - name: Run cargo hack
+        run: cargo hack test --package ieee1905

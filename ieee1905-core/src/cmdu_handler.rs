@@ -23,16 +23,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, trace, warn};
 
-use crate::al_sap::{service_access_point_data_indication, AlServiceAccessPoint};
-use crate::cmdu::{CMDUType, CMDU};
+use crate::MessageIdGenerator;
+use crate::al_sap::{AlServiceAccessPoint, service_access_point_data_indication};
+use crate::cmdu::{CMDU, CMDUType};
 use crate::cmdu_codec::*;
 use crate::cmdu_proxy::*;
 use crate::cmdu_reassembler::CmduReassembler;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::sdu_codec::SDU;
-use crate::tlv_cmdu_codec::{TLVTrait, TLV};
+use crate::tlv_cmdu_codec::{TLV, TLVTrait};
 use crate::topology_manager::*;
-use crate::MessageIdGenerator;
 use pnet::datalink::MacAddr;
 
 ///the handler has to take care of the reassembly
@@ -235,7 +235,9 @@ impl CMDUHandler {
         );
 
         if EndOfMessage::find(tlvs).is_none() {
-            return error!("Topology Discovery CMDU is missing the required End of Message TLV. Ignoring CMDU.");
+            return error!(
+                "Topology Discovery CMDU is missing the required End of Message TLV. Ignoring CMDU."
+            );
         }
 
         let Some(remote_al_mac) = AlMacAddress::find(tlvs) else {
@@ -691,14 +693,16 @@ impl CMDUHandler {
 
         if let Some((remote_al_mac, neighbors)) = result {
             tokio::spawn(cmdu_link_metric_response_transmission(
-                self.interface_name.clone(),
-                self.sender.clone(),
-                message_id,
-                self.local_al_mac,
-                remote_al_mac,
-                query.requested_metrics != LinkMetricQuery::METRIC_TX,
-                query.requested_metrics != LinkMetricQuery::METRIC_RX,
-                neighbors,
+                LinkMetricResponseTransmissionRequest {
+                    interface: self.interface_name.clone(),
+                    sender: self.sender.clone(),
+                    message_id,
+                    local_al_mac_address: self.local_al_mac,
+                    remote_al_mac_address: remote_al_mac,
+                    include_rx: query.requested_metrics != LinkMetricQuery::METRIC_TX,
+                    include_tx: query.requested_metrics != LinkMetricQuery::METRIC_RX,
+                    neighbors,
+                },
             ));
         } else {
             debug!("No transmission event triggered by Link Metric Query");
@@ -863,7 +867,10 @@ impl CMDUHandler {
         }
 
         if destination_mac != IEEE1905_CONTROL_ADDRESS && destination_mac != self.local_al_mac {
-            return debug!("Skipping SDU from CMDU as destination mac {destination_mac:?} is different as local al mac {}", self.local_al_mac);
+            return debug!(
+                "Skipping SDU from CMDU as destination mac {destination_mac:?} is different as local al mac {}",
+                self.local_al_mac
+            );
         }
 
         let topology_db = TopologyDatabase::get_instance(source_mac, &self.interface_name);
@@ -972,7 +979,7 @@ mod tests {
                 } else {
                     // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
                     assert!(
-                        fragment.total_size() >= 8 + 1,
+                        fragment.total_size() > 8,
                         "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
                         i,
                         fragment.total_size()
@@ -1140,7 +1147,7 @@ mod tests {
                 } else {
                     // Last CMDU fragment which is not first one - in case of size based fragmentation should have minimal size of CMDU header + 1 byte
                     assert!(
-                        fragment.total_size() >= 8 + 1,
+                        fragment.total_size() > 8,
                         "Fragment {0} should be at least 8+1 bytes but is {1} bytes long",
                         i,
                         fragment.total_size()
@@ -1224,10 +1231,12 @@ mod tests {
         let destination_mac = MacAddr::new(0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc);
 
         // Expect panic in handle_cmdu() as the CMDU size is prepared to have 1501 bytes
-        assert!(cmdu_handler
-            .handle_cmdu(&cmdu, source_mac, destination_mac, destination_mac)
-            .await
-            .is_err());
+        assert!(
+            cmdu_handler
+                .handle_cmdu(&cmdu, source_mac, destination_mac, destination_mac)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -1242,7 +1251,7 @@ mod tests {
         cmdu2.flags = 0x80; // set last fragment flag
 
         let source_mac = MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
-        let fragments = vec![cmdu0, cmdu1, cmdu2];
+        let fragments = [cmdu0, cmdu1, cmdu2];
         let cmdu_reasm = CmduReassembler::new();
 
         for fragment in fragments.iter() {

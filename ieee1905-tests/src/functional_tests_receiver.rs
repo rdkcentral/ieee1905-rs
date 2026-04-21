@@ -26,7 +26,7 @@ use ieee1905::sdu_codec::SDU;
 use std::process::exit;
 use tokio::net::UnixStream;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 // Send response to transmitter containing complete SDU: (SDU + CMDU + TLVs)
 // Only the TLV chain is a 1-to-1 copy without any modifications as SDU and CMDU headers
@@ -67,7 +67,7 @@ async fn send_echoed_packet(
                 is_fragment: 0,
                 is_last_fragment: 1,
                 fragment_id: 0,
-                payload: payload,
+                payload,
             };
 
             println!(
