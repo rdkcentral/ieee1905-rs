@@ -1477,10 +1477,13 @@ dependencies = [
  "rbus-provider",
  "reqwest",
  "sd-notify",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "time",
  "tokio",
  "tokio-util",
+ "tower-http",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -2557,6 +2560,9 @@ dependencies = [
  "log",
  "percent-encoding",
  "pin-project-lite",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-util",
@@ -3243,6 +3249,7 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]

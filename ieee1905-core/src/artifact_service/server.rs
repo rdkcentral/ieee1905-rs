@@ -1,23 +1,24 @@
+mod get_artifact;
+mod get_artifact_list;
+mod put_artifact;
+
+use crate::artifact_service::common::ArtifactConfig;
 use crate::interface_manager::{
     InterfaceInfo, call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64,
 };
 use crate::{TopologyDatabase, next_task_id};
 use axum::Router;
-use axum::body::{Body, BodyDataStream};
-use axum::extract::{DefaultBodyLimit, Request};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
-use futures::StreamExt;
+use axum::extract::DefaultBodyLimit;
+use axum::routing::{get, put};
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
-use tokio_util::io::ReaderStream;
+use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, instrument};
 
+////////////////////////////////////////////////////////////////////////////////
 pub struct ArtifactServer {
     topo_db: Arc<TopologyDatabase>,
     if_info: InterfaceInfo,
@@ -26,8 +27,6 @@ pub struct ArtifactServer {
 }
 
 impl ArtifactServer {
-    pub const PORT: u16 = 6666;
-
     pub fn new(topo_db: Arc<TopologyDatabase>, if_info: InterfaceInfo) -> Self {
         let ip_address = convert_mac_to_eui64(if_info.mac);
 
@@ -39,14 +38,17 @@ impl ArtifactServer {
         }
     }
 
+    ////////////////////////////////////////////////////////////////////////////////
     pub fn if_info(&self) -> &InterfaceInfo {
         &self.if_info
     }
 
+    ////////////////////////////////////////////////////////////////////////////////
     pub fn ip_address(&self) -> Ipv6Addr {
         self.ip_address
     }
 
+    ////////////////////////////////////////////////////////////////////////////////
     #[instrument(skip_all, "artifact_server")]
     pub async fn start(&mut self) -> anyhow::Result<()> {
         debug!("starting server");
@@ -64,107 +66,62 @@ impl ArtifactServer {
         );
         call_rt_new_address_v6(self.if_info.if_index, self.ip_address).await?;
 
-        debug!("starting tcp listener");
-        let runtime = Handle::try_current()?;
-        let ip_address = self.ip_address;
-        let so_address = SocketAddrV6::new(self.ip_address, Self::PORT, 0, self.if_info.if_index);
-        let listener = TcpListener::bind(so_address).await?;
-
-        debug!("starting server worker");
-        let mut join_set = JoinSet::new();
-        join_set.spawn(Self::worker(listener));
-
-        info!(
-            if_name = self.if_info.if_name,
-            ip_address = %self.ip_address,
-            "server successfully started",
-        );
-        self.topo_db.set_artifact_server_address(Some(ip_address));
-        self.instance = Some(ArtifactServerInstance {
-            topo_db: self.topo_db.clone(),
-            runtime,
-            if_info: self.if_info.clone(),
-            ip_address: self.ip_address,
-            _join_set: join_set,
+        self.instance = Some({
+            let topo_db = self.topo_db.clone();
+            let if_info = self.if_info.clone();
+            ArtifactServerInstance::new(topo_db, if_info, self.ip_address).await?
         });
+        info!("server started");
         Ok(())
     }
 
+    ////////////////////////////////////////////////////////////////////////////////
     pub fn stop(&mut self, if_name: &str) {
         info!("server stopped");
         self.instance.take_if(|e| e.if_info.if_name == if_name);
     }
-
-    #[instrument(skip_all, "artifact_server/worker", fields(task = next_task_id()))]
-    async fn worker(listener: TcpListener) {
-        info!("worker started");
-        let app = Router::new()
-            .route("/", get(Self::get_root_page))
-            .route("/firmware", get(Self::get_firmware))
-            .route("/upload_file", post(Self::upload_file))
-            .layer(DefaultBodyLimit::max(100 * 1024 * 1024));
-
-        match axum::serve(listener, app).await {
-            Ok(_) => info!("worker finished"),
-            Err(e) => error!(%e, "worker failed"),
-        }
-    }
-
-    #[instrument(skip_all, "artifact_server/get_root_page")]
-    async fn get_root_page() -> String {
-        info!("requested");
-        let name = env!("CARGO_PKG_NAME");
-        let version = env!("CARGO_PKG_VERSION");
-        format!("{name} {version}")
-    }
-
-    #[instrument(skip_all, "artifact_server/get_firmware")]
-    async fn get_firmware() -> Response {
-        info!("requested");
-
-        let file = match tokio::fs::File::open("firmware.bin").await {
-            Ok(file) => file,
-            Err(e) => {
-                let message = format!("Failed to read firmware: {e}");
-                return (StatusCode::NOT_FOUND, message).into_response();
-            }
-        };
-
-        let stream = ReaderStream::new(file);
-        let body = Body::from_stream(stream);
-        let headers = [(axum::http::header::CONTENT_TYPE, "application/octet-stream")];
-
-        (StatusCode::OK, headers, body).into_response()
-    }
-
-    #[instrument(skip_all, "artifact_server/upload_file")]
-    async fn upload_file(request: Request) -> Response {
-        async fn inner(mut stream: BodyDataStream) -> anyhow::Result<()> {
-            let mut file = tokio::fs::File::create("firmware_uploaded.bin").await?;
-
-            while let Some(chunk) = stream.next().await {
-                file.write_all(&chunk?).await?;
-            }
-            Ok(())
-        }
-
-        let stream = request.into_body().into_data_stream();
-        match inner(stream).await {
-            Ok(_) => StatusCode::NO_CONTENT.into_response(),
-            Err(e) => {
-                let message = format!("Failed to write file: {e}");
-                (StatusCode::INTERNAL_SERVER_ERROR, message).into_response()
-            }
-        }
-    }
 }
 
+////////////////////////////////////////////////////////////////////////////////
 pub struct ArtifactServerInstance {
     topo_db: Arc<TopologyDatabase>,
     runtime: Handle,
     if_info: InterfaceInfo,
     ip_address: Ipv6Addr,
     _join_set: JoinSet<()>,
+}
+
+impl ArtifactServerInstance {
+    async fn new(
+        topo_db: Arc<TopologyDatabase>,
+        if_info: InterfaceInfo,
+        ip_address: Ipv6Addr,
+    ) -> anyhow::Result<Self> {
+        debug!("starting tcp listener");
+        let runtime = Handle::try_current()?;
+        let port = ArtifactConfig::PORT;
+        let so_address = SocketAddrV6::new(ip_address, port, 0, if_info.if_index);
+        let listener = TcpListener::bind(so_address).await?;
+
+        debug!("starting server worker");
+        let mut join_set = JoinSet::new();
+        join_set.spawn(ArtifactServerInstanceActor.worker(listener));
+
+        info!(
+            if_name = if_info.if_name,
+            ip_address = %ip_address,
+            "server successfully started",
+        );
+        topo_db.set_artifact_server_address(Some(ip_address));
+
+        Ok(ArtifactServerInstance {
+            topo_db,
+            runtime,
+            if_info,
+            ip_address,
+            _join_set: join_set,
+        })
+    }
 }
 
 impl Drop for ArtifactServerInstance {
@@ -174,5 +131,48 @@ impl Drop for ArtifactServerInstance {
             self.if_info.if_index,
             self.ip_address,
         ));
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+struct ArtifactServerInstanceActor;
+
+impl ArtifactServerInstanceActor {
+    ////////////////////////////////////////////////////////////////////////////////
+    #[instrument(skip_all, "artifact_server/worker", fields(task = next_task_id()))]
+    async fn worker(self, listener: TcpListener) {
+        let config = ArtifactConfig::get();
+
+        debug!("cleanup");
+        if let Err(e) = tokio::fs::remove_dir_all(&config.rx_folder).await {
+            error!(%e, "failed to remove rx folder: {}", config.rx_folder.display());
+        }
+
+        info!("worker started");
+        let app = Router::new()
+            .route("/", get(Self::get_root_page))
+            .route(
+                "/artifacts/{artifact_type}/{artifact_name}",
+                get(Self::get_artifact),
+            )
+            .route(
+                "/artifacts/{artifact_type}/{artifact_name}",
+                put(Self::put_artifact),
+            )
+            .route("/artifacts", get(Self::get_artifact_list))
+            .layer(TraceLayer::new_for_http())
+            .layer(DefaultBodyLimit::max(100 * 1024 * 1024));
+
+        match axum::serve(listener, app).await {
+            Ok(_) => info!("worker finished"),
+            Err(e) => error!(%e, "worker failed"),
+        }
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    async fn get_root_page() -> String {
+        let name = env!("CARGO_PKG_NAME");
+        let version = env!("CARGO_PKG_VERSION");
+        format!("{name} {version}")
     }
 }
