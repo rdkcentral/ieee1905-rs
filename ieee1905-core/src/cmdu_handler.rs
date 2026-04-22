@@ -258,12 +258,7 @@ impl CMDUHandler {
             destination_frame_mac: source_mac,
             destination_mac: Some(remote_interface_mac),
             local_interface_mac,
-            local_interface_list: None,
-            registry_role: None,
-            supported_fragmentation: Default::default(),
-            supported_freq_band: None,
-            ieee1905profile_version: None,
-            device_identification_type: None,
+            ..Default::default()
         };
 
         let transmission_event = topology_db
@@ -339,14 +334,8 @@ impl CMDUHandler {
             Ieee1905DeviceData {
                 al_mac: remote_al_mac.al_mac_address,
                 destination_frame_mac: source_mac,
-                destination_mac: None,
                 local_interface_mac,
-                local_interface_list: None,
-                registry_role: None,
-                supported_fragmentation: Default::default(),
-                supported_freq_band: None,
-                ieee1905profile_version: None,
-                device_identification_type: None,
+                ..Default::default()
             }
         } else {
             let Some(mut node) = topology_db.find_device_by_port(source_mac).await else {
@@ -469,6 +458,19 @@ impl CMDUHandler {
             }
         }
 
+        let mut artifact_server_address = None;
+        for info in VendorSpecificInfo::find_all(tlvs) {
+            if info.oui != COMCAST_OUI {
+                continue;
+            }
+            if info.vendor_data.info_type == VendorSpecificInfoType::ArtifactService
+                && info.vendor_data.role == VendorSpecificInfoRole::Server
+                && let Some(address) = Ipv6::find(tlvs)
+            {
+                artifact_server_address = Some(address.link_local_ipv6_address);
+            }
+        }
+
         let topology_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
         let Some(node) = topology_db.find_device_by_port(source_mac).await.clone() else {
             warn!(
@@ -520,14 +522,10 @@ impl CMDUHandler {
         let updated_device_data = Ieee1905DeviceData {
             al_mac: remote_al_mac,
             destination_frame_mac: source_mac,
-            destination_mac: None,
             local_interface_mac,
             local_interface_list: Some(interfaces.clone()),
-            registry_role: None,
-            supported_fragmentation: Default::default(),
-            supported_freq_band: None,
-            ieee1905profile_version: None,
-            device_identification_type: None,
+            artifact_server_address,
+            ..Default::default()
         };
 
         let transmission_event = topology_db
@@ -618,14 +616,8 @@ impl CMDUHandler {
         let received_device_data = Ieee1905DeviceData {
             al_mac: remote_al_mac_address,
             destination_frame_mac: source_mac,
-            destination_mac: None,
             local_interface_mac,
-            local_interface_list: None,
-            registry_role: None,
-            supported_fragmentation: Default::default(),
-            supported_freq_band: None,
-            ieee1905profile_version: None,
-            device_identification_type: None,
+            ..Default::default()
         };
 
         let transmission_event = topology_db
@@ -732,14 +724,8 @@ impl CMDUHandler {
         let device_data = Ieee1905DeviceData {
             al_mac: al_mac.al_mac_address,
             destination_frame_mac: source_mac,
-            destination_mac: None,
             local_interface_mac,
-            local_interface_list: None,
-            registry_role: None,
-            supported_fragmentation: Default::default(),
-            supported_freq_band: None,
-            ieee1905profile_version: None,
-            device_identification_type: None,
+            ..Default::default()
         };
 
         let transmission_event =

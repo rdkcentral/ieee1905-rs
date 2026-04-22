@@ -300,6 +300,7 @@ pub struct Ieee1905DeviceData {
     pub supported_freq_band: Option<SupportedFreqBand>,
     pub ieee1905profile_version: Option<Ieee1905ProfileVersion>,
     pub device_identification_type: Option<DeviceIdentificationType>,
+    pub artifact_server_address: Option<Ipv6Addr>,
 }
 
 impl Ieee1905DeviceData {
@@ -323,6 +324,7 @@ impl Ieee1905DeviceData {
             supported_freq_band: None,
             ieee1905profile_version: None,
             device_identification_type: None,
+            artifact_server_address: None,
         }
     }
 
