@@ -11,11 +11,15 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 ///////////////////////////////////////////////////////////////////////////
 const BYTES_IN_MB: NonZeroUsize = NonZeroUsize::new(1024 * 1024).unwrap();
+const DEFAULT_FILTER: &str = "ieee1905=info,tower_http=debug";
 
 ///////////////////////////////////////////////////////////////////////////
 pub fn init_logger(cli: &CliArgs) -> Option<WorkerGuard> {
     // modify this filter for your tracing during run time
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&cli.filter));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        let filter = cli.filter.as_deref();
+        EnvFilter::new(filter.unwrap_or(DEFAULT_FILTER))
+    });
 
     // logging to stdout
     let fmt_layer = (!cli.no_stdout_appender && !cli.topology_ui).then(|| {

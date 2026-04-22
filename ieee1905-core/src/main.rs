@@ -63,8 +63,8 @@ struct CliArgs {
     #[arg(long,default_value_t=String::from("/tmp/al_data_socket"))]
     sap_data_path: String,
     /// Tracing filter
-    #[arg(long,short,default_value_t=String::from("info"))]
-    filter: String,
+    #[arg(long, short)]
+    filter: Option<String>,
     /// Enable console subscriber for tokio-console
     #[cfg(feature = "enable_tokio_console")]
     #[arg(short, long, default_value_t = false)]

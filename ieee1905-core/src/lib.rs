@@ -61,6 +61,7 @@ pub mod cmdu {
 
 pub mod artifact_service {
     pub mod client;
+    mod common;
     pub mod server;
 }
 
