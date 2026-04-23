@@ -1,4 +1,4 @@
-use crate::artifact_service::server::ArtifactServer;
+use crate::artifact_service::config::ArtifactConfig;
 use crate::interface_manager::InterfaceInfo;
 use futures::StreamExt;
 use std::net::Ipv6Addr;
@@ -13,8 +13,6 @@ pub struct ArtifactClient {
 }
 
 impl ArtifactClient {
-    pub const PORT: u16 = ArtifactServer::PORT;
-
     pub fn new(if_info: InterfaceInfo) -> anyhow::Result<Self> {
         Ok(Self {
             if_info,
@@ -55,7 +53,7 @@ impl ArtifactClientInstance {
 
         Ok(Self {
             ip_address,
-            base_url: format!("http://[{}]:{}", ip_address, ArtifactClient::PORT),
+            base_url: format!("http://[{}]:{}", ip_address, ArtifactConfig::PORT),
             client,
         })
     }
