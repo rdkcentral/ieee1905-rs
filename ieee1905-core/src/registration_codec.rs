@@ -20,10 +20,7 @@
 #![deny(warnings)]
 // External crates
 use nom::{
-    Err as NomErr, IResult,
-    bytes::complete::take,
-    error::ErrorKind,
-    number::complete::{be_u8, be_u16},
+    Err as NomErr, IResult, bytes::complete::take, error::ErrorKind, number::complete::be_u8,
 };
 use pnet::datalink::MacAddr;
 
@@ -149,7 +146,6 @@ impl AlServiceRegistrationRequest {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct AlServiceRegistrationResponse {
     pub al_mac_address_local: MacAddr,
-    pub message_id_range: (u16, u16),
     pub result: RegistrationResult,
 }
 
@@ -164,24 +160,19 @@ impl AlServiceRegistrationResponse {
             mac_bytes[4],
             mac_bytes[5],
         );
-        let (input, start_id) = be_u16(input)?;
-        let (input, end_id) = be_u16(input)?;
         let (input, result) = RegistrationResult::parse(input)?;
         Ok((
             input,
             Self {
                 al_mac_address_local: mac,
-                message_id_range: (start_id, end_id),
                 result,
             },
         ))
     }
 
     pub fn serialize(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(11);
+        let mut buf = Vec::with_capacity(7);
         buf.extend_from_slice(&self.al_mac_address_local.octets());
-        buf.extend_from_slice(&self.message_id_range.0.to_be_bytes());
-        buf.extend_from_slice(&self.message_id_range.1.to_be_bytes());
         buf.push(self.result.serialize());
         buf
     }
@@ -263,18 +254,10 @@ pub mod tests {
         // Prepare vector for AlServiceRegistrationResponse contents
         let mut registration_response_data: Vec<u8> = mac;
 
-        // Prepare starting message_id value
-        let start: Vec<u8> = vec![0x00, 0x01];
-
-        // Prepare ending message_id value
-        let end: Vec<u8> = vec![0x00, 0x10];
-
         // Prepare Success as RegistrationResult
         let result = RegistrationResult::Success.serialize();
 
         // Combine all parts of AlServiceRegistrationResponse together
-        registration_response_data.append(&mut start.clone());
-        registration_response_data.append(&mut end.clone());
         registration_response_data.push(result);
 
         // Do the parsing of AlServiceRegistrationResponse
