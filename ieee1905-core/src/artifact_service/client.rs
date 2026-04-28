@@ -26,12 +26,12 @@ impl ArtifactClient {
     pub async fn start(&mut self, ip_address: Ipv6Addr) -> anyhow::Result<()> {
         debug!(%ip_address, "starting");
 
-        if let Some(instance) = self.instance.take() {
-            if instance.ip_address == ip_address {
-                self.instance = Some(instance);
-                info!("already started");
-                return Ok(());
-            }
+        if let Some(instance) = self.instance.take()
+            && instance.ip_address == ip_address
+        {
+            self.instance = Some(instance);
+            info!("already started");
+            return Ok(());
         }
 
         info!(%ip_address, "started");
