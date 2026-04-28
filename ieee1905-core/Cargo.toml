@@ -39,7 +39,10 @@ sd-notify = "0.4.5"
 either = "1.15.0"
 parking_lot = "0.12.5"
 axum = "0.8.8"
-reqwest = { version = "0.13.2", default-features = false, features = ["http2", "stream"] }
+tower-http = { version = "0.6.8", features = ["trace"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["http2", "stream", "query", "json"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
 
 # RUSTSEC transitive dependency overrides
 time = ">=0.3.47"
