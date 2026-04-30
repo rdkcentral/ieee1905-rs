@@ -20,10 +20,7 @@
 #![deny(warnings)]
 // External crates
 use nom::{
-    Err as NomErr, IResult,
-    bytes::complete::take,
-    error::ErrorKind,
-    number::complete::{be_u8, be_u16},
+    Err as NomErr, IResult, bytes::complete::take, error::ErrorKind, number::complete::be_u8,
 };
 use pnet::datalink::MacAddr;
 
@@ -85,8 +82,7 @@ impl ServiceType {
 pub enum RegistrationResult {
     Unknown = 0x00,
     Success = 0x01,
-    ServiceNotSupported = 0x03,
-    OperationNotSupported = 0x04,
+    ServiceNotSupported = 0x02,
 }
 
 impl RegistrationResult {
@@ -95,8 +91,7 @@ impl RegistrationResult {
         let result = match val {
             0x00 => RegistrationResult::Unknown,
             0x01 => RegistrationResult::Success,
-            0x03 => RegistrationResult::ServiceNotSupported,
-            0x04 => RegistrationResult::OperationNotSupported,
+            0x02 => RegistrationResult::ServiceNotSupported,
             _ => {
                 return Err(nom::Err::Failure(nom::error::Error::new(
                     input,
@@ -149,7 +144,6 @@ impl AlServiceRegistrationRequest {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct AlServiceRegistrationResponse {
     pub al_mac_address_local: MacAddr,
-    pub message_id_range: (u16, u16),
     pub result: RegistrationResult,
 }
 
@@ -164,24 +158,19 @@ impl AlServiceRegistrationResponse {
             mac_bytes[4],
             mac_bytes[5],
         );
-        let (input, start_id) = be_u16(input)?;
-        let (input, end_id) = be_u16(input)?;
         let (input, result) = RegistrationResult::parse(input)?;
         Ok((
             input,
             Self {
                 al_mac_address_local: mac,
-                message_id_range: (start_id, end_id),
                 result,
             },
         ))
     }
 
     pub fn serialize(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(11);
+        let mut buf = Vec::with_capacity(7);
         buf.extend_from_slice(&self.al_mac_address_local.octets());
-        buf.extend_from_slice(&self.message_id_range.0.to_be_bytes());
-        buf.extend_from_slice(&self.message_id_range.1.to_be_bytes());
         buf.push(self.result.serialize());
         buf
     }
@@ -234,8 +223,7 @@ pub mod tests {
         // Expect successes parsing valid registration result
         assert!(RegistrationResult::parse(&[0]).is_ok());
         assert!(RegistrationResult::parse(&[1]).is_ok());
-        assert!(RegistrationResult::parse(&[3]).is_ok());
-        assert!(RegistrationResult::parse(&[4]).is_ok());
+        assert!(RegistrationResult::parse(&[2]).is_ok());
         assert_eq!(
             RegistrationResult::parse(&[0]).unwrap().1,
             RegistrationResult::Unknown
@@ -245,12 +233,8 @@ pub mod tests {
             RegistrationResult::Success
         );
         assert_eq!(
-            RegistrationResult::parse(&[3]).unwrap().1,
+            RegistrationResult::parse(&[2]).unwrap().1,
             RegistrationResult::ServiceNotSupported
-        );
-        assert_eq!(
-            RegistrationResult::parse(&[4]).unwrap().1,
-            RegistrationResult::OperationNotSupported
         );
     }
 
@@ -263,18 +247,10 @@ pub mod tests {
         // Prepare vector for AlServiceRegistrationResponse contents
         let mut registration_response_data: Vec<u8> = mac;
 
-        // Prepare starting message_id value
-        let start: Vec<u8> = vec![0x00, 0x01];
-
-        // Prepare ending message_id value
-        let end: Vec<u8> = vec![0x00, 0x10];
-
         // Prepare Success as RegistrationResult
         let result = RegistrationResult::Success.serialize();
 
         // Combine all parts of AlServiceRegistrationResponse together
-        registration_response_data.append(&mut start.clone());
-        registration_response_data.append(&mut end.clone());
         registration_response_data.push(result);
 
         // Do the parsing of AlServiceRegistrationResponse
@@ -328,9 +304,9 @@ pub mod tests {
     // Try to parse some value that is out of range of allowed in enum RegistrationResult
     #[test]
     fn test_try_to_parse_inappropriate_registration_result() {
-        // The value of 5 is not allowed (not covered in RegistrationResult enum) so expect ErrorKind::Tag error
+        // The value of 3 is not allowed (not covered in RegistrationResult enum) so expect ErrorKind::Tag error
         if let Err(NomErr::Failure(nom::error::Error { code, .. })) =
-            RegistrationResult::parse(&[5])
+            RegistrationResult::parse(&[3])
         {
             assert_eq!(code, ErrorKind::Tag);
         }
@@ -339,17 +315,17 @@ pub mod tests {
     // Verify the correctness of parsing and returning not parsed data of RegistrationResult
     #[test]
     fn test_check_consumption_of_registration_result_parser() {
-        // Expect none of returned data because of parsing single valid value of 4
-        assert_eq!(RegistrationResult::parse(&[4]).unwrap().0.len(), 0);
+        // Expect none of returned data because of parsing single valid value of 2
+        assert_eq!(RegistrationResult::parse(&[2]).unwrap().0.len(), 0);
 
-        // Expect '5' of returned data because of parsing valid value 4 and additional ignored value of 5
-        assert_eq!(RegistrationResult::parse(&[4, 5]).unwrap().0.len(), 1);
-        assert_eq!(RegistrationResult::parse(&[4, 5]).unwrap().0, &[5]);
+        // Expect '5' of returned data because of parsing valid value 2 and additional ignored value of 5
+        assert_eq!(RegistrationResult::parse(&[2, 5]).unwrap().0.len(), 1);
+        assert_eq!(RegistrationResult::parse(&[2, 5]).unwrap().0, &[5]);
 
         // Check if not consumed part is properly returned, untouched and unparsed by parser at all
-        // Expect returning slice of &[5, 6, 7] values because of parsing: &[4, 5, 6, 7]
+        // Expect returning slice of &[5, 6, 7] values because of parsing: &[2, 5, 6, 7]
         assert_eq!(
-            RegistrationResult::parse(&[4, 5, 6, 7]).unwrap().0,
+            RegistrationResult::parse(&[2, 5, 6, 7]).unwrap().0,
             &[5, 6, 7]
         );
     }
