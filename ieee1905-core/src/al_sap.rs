@@ -280,7 +280,6 @@ impl AlServiceAccessPoint {
 
                     let response = AlServiceRegistrationResponse {
                         al_mac_address_local: al_mac,
-                        message_id_range: (0, 65535),
                         result: RegistrationResult::Success,
                     };
 
