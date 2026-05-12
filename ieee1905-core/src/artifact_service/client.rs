@@ -137,19 +137,11 @@ impl ArtifactClientInstanceActor {
                 continue;
             }
 
-            let artifact_dir = config.archive_folder.join("rx").join(&artifact.kind);
+            let artifact_dir = config.rx_folder.join(&artifact.kind);
             let artifact_path = artifact_dir.join(&artifact.name);
 
             if let Err(e) = tokio::fs::create_dir_all(&artifact_dir).await {
-                error!(%e, "failed to create artifact dir: {}", artifact_dir.display());
-                continue;
-            }
-
-            let archive_dir = config.archive_folder.join("rx").join(&artifact.kind);
-            let archive_path = artifact_dir.join(&artifact.name);
-
-            if let Err(e) = tokio::fs::create_dir_all(&archive_dir).await {
-                error!(%e, "failed to create archive dir: {}", archive_dir.display());
+                error!(%e, "failed to create artifact dir: {artifact_dir:?}");
                 continue;
             }
 
@@ -158,7 +150,7 @@ impl ArtifactClientInstanceActor {
                 && let Ok(modified) = modified.duration_since(UNIX_EPOCH)
                 && artifact.ts_secs == modified.as_secs()
             {
-                info!("skipping up-to-date artifact: {}", artifact_path.display());
+                info!("skipping up-to-date artifact: {artifact_path:?}");
                 continue;
             }
 
@@ -168,56 +160,48 @@ impl ArtifactClientInstanceActor {
                 continue;
             }
 
-            if let Err(e) = tokio::fs::rename(&artifact_path, &archive_path).await {
-                error!(src = ?artifact_path, dst = ?archive_path, %e, "failed to archive an artifact");
+            let mut storage = config.get_rx_archive_storage(&artifact.kind);
+            if let Err(e) = storage.store(&artifact_path).await {
+                error!(%e, "failed to archive an artifact {artifact_path:?}");
                 let _ = tokio::fs::remove_file(&artifact_path).await;
                 continue;
             }
 
-            info!("artifact successfully downloaded: {archive_path:?}");
+            info!("artifact successfully downloaded");
         }
 
         for artifact_type in config.c2s_artifact_types.iter() {
             let in_flight_dir = config.tx_folder.join(artifact_type);
-            let archive_dir = config.archive_folder.join("tx").join(artifact_type);
-            let failed_dir = config.failed_folder.join("tx").join(artifact_type);
-
-            for dir in [&archive_dir, &failed_dir] {
-                if let Err(e) = tokio::fs::create_dir_all(dir).await {
-                    error!(?dir, %e, "failed to create a directory");
-                    continue;
-                }
-            }
 
             let Ok(mut tx_files) = tokio::fs::read_dir(&in_flight_dir).await else {
-                warn!("failed to read tx folder: {}", in_flight_dir.display());
+                warn!("failed to read tx folder: {in_flight_dir:?}");
                 continue;
             };
 
             while let Ok(Some(entry)) = tx_files.next_entry().await {
                 let path = entry.path();
-                debug!("uploading artifact: {}", path.display());
+                debug!("uploading artifact: {path:?}");
 
                 let file_name = entry.file_name();
                 let Some(file_name) = file_name.to_str() else {
-                    warn!("invalid file name: {}", file_name.display());
+                    warn!("invalid file name: {file_name:?}");
                     continue;
                 };
 
                 if let Err(e) = self.put_artifact(artifact_type, file_name, &path).await {
-                    error!(%e, "failed to send artifact: {}", path.display());
+                    error!(%e, "failed to send artifact: {path:?}");
 
-                    let failed_path = failed_dir.join(file_name);
-                    if let Err(e) = tokio::fs::rename(&path, &failed_path).await {
-                        error!(?path, ?failed_path, %e, "failed to move file");
+                    let mut storage = config.get_tx_failure_storage(artifact_type);
+                    if let Err(e) = storage.store(&path).await {
+                        error!(%e, "failed to move file {path:?}");
                         let _ = tokio::fs::remove_file(&path).await;
                     }
                 } else {
                     info!("artifact sent successfully: {}", path.display());
 
-                    let archive_path = archive_dir.join(file_name);
-                    if let Err(e) = tokio::fs::rename(&path, &archive_path).await {
-                        error!(?path, ?archive_path, %e, "failed to archive file");
+                    let mut storage = config.get_tx_archive_storage(artifact_type);
+                    if let Err(e) = storage.store(&path).await {
+                        error!(%e, "failed to archive file {path:?}");
                         let _ = tokio::fs::remove_file(&path).await;
                     }
                 }
