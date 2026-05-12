@@ -47,38 +47,39 @@ impl ArtifactServerInstanceActor {
         let in_flight_dir = config.rx_folder.join(artifact_type);
         let in_flight_path = in_flight_dir.join(artifact_name);
 
-        let archive_dir = config.archive_folder.join("rx").join(artifact_type);
-        let archive_path = archive_dir.join(artifact_name);
-
-        let failed_dir = config.failed_folder.join("rx").join(artifact_type);
-        let failed_path = failed_dir.join(artifact_name);
-
-        for dir in [&in_flight_dir, &archive_dir, &failed_dir] {
-            if let Err(e) = tokio::fs::create_dir_all(dir).await {
-                error!(?dir, %e, "failed to create a directory");
-                let message = format!("failed to create a directory: {e}");
-                return (StatusCode::INTERNAL_SERVER_ERROR, message).into_response();
-            }
+        if let Err(e) = tokio::fs::create_dir_all(&in_flight_dir).await {
+            error!(?in_flight_dir, %e, "failed to create a directory");
+            let message = format!("failed to create a directory: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, message).into_response();
         }
 
         let input_file_stream = body.into_data_stream();
         debug!(?in_flight_path, "saving file");
-        if let Err(e) = copy_to_file(input_file_stream, &in_flight_path).await {
-            if let Err(e) = tokio::fs::rename(&in_flight_path, &failed_path).await {
-                error!(?in_flight_path, ?failed_path, %e, "failed to move file");
-                let _ = tokio::fs::remove_file(&in_flight_path).await;
+
+        match copy_to_file(input_file_stream, &in_flight_path).await {
+            Ok(_) => {
+                debug!(?in_flight_path, "archiving file");
+
+                let mut storage = config.get_rx_archive_storage(artifact_type);
+                if let Err(e) = storage.store(&in_flight_path).await {
+                    error!(?in_flight_path, %e, "failed to archive file");
+                    let _ = tokio::fs::remove_file(&in_flight_path).await;
+                }
+
+                StatusCode::NO_CONTENT.into_response()
             }
-            error!(?in_flight_path, %e, "failed to save file");
-            let message = format!("failed to write file: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, message).into_response();
-        }
+            Err(e) => {
+                error!(?in_flight_path, %e, "failed to save file");
 
-        debug!(?in_flight_path, "archiving file");
-        if let Err(e) = tokio::fs::rename(&in_flight_path, &archive_path).await {
-            error!(?in_flight_path, ?archive_path, %e, "failed to archive file");
-            let _ = tokio::fs::remove_file(&in_flight_path).await;
-        }
+                let mut storage = config.get_rx_failure_storage(artifact_type);
+                if let Err(e) = storage.store(&in_flight_path).await {
+                    error!(?in_flight_path, %e, "failed to store file");
+                    let _ = tokio::fs::remove_file(&in_flight_path).await;
+                }
 
-        StatusCode::NO_CONTENT.into_response()
+                let message = format!("failed to write file: {e}");
+                (StatusCode::INTERNAL_SERVER_ERROR, message).into_response()
+            }
+        }
     }
 }

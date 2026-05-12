@@ -856,7 +856,7 @@ mod tests {
         let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
         let response = inject_topology_response_tlvs(&mut vec, &db).await;
         assert!(response.is_ok());
-        assert_eq!(vec.len(), 2);
+        assert_eq!(vec.len(), 3);
     }
 
     #[tokio::test]
