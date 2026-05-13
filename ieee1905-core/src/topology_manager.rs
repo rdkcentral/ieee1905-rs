@@ -211,6 +211,7 @@ pub struct Ieee1905NodeInfo {
     pub lldp_neighbor: Option<PortId>,
     pub node_state_local: StateLocal,
     pub node_state_remote: StateRemote,
+    pub discovery_sent_until: Option<Instant>,
 }
 
 impl Ieee1905NodeInfo {
@@ -231,6 +232,7 @@ impl Ieee1905NodeInfo {
             lldp_neighbor,
             node_state_local,
             node_state_remote,
+            discovery_sent_until: None,
         }
     }
 
@@ -857,6 +859,7 @@ impl TopologyDatabase {
                             lldp_neighbor,
                             node_state_local: StateLocal::Idle,
                             node_state_remote: StateRemote::Idle,
+                            discovery_sent_until: None,
                         },
                         device_data,
                         link_metrics_query_cancellation_token: None,
@@ -911,13 +914,15 @@ impl TopologyDatabase {
 
     async fn handle_discovery_sent(&self) {
         let mut previous_states = Vec::new();
+        let expires_at = Instant::now() + Duration::from_secs(1);
         {
             let mut nodes = self.nodes.write().await;
             for (al_mac, node) in nodes.iter_mut() {
                 if node.metadata.node_state_remote != StateRemote::ConvergedRemote {
                     continue;
                 }
-                previous_states.push((*al_mac, node.metadata.node_state_remote));
+                previous_states.push((*al_mac, node.metadata.node_state_remote, expires_at));
+                node.metadata.discovery_sent_until = Some(expires_at);
                 node.metadata.update(
                     Some(UpdateType::DiscoverySent),
                     None,
@@ -938,14 +943,17 @@ impl TopologyDatabase {
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             let mut nodes = nodes.write().await;
-            for (al_mac, previous_state) in previous_states {
+            for (al_mac, previous_state, expires_at) in previous_states {
                 let Some(node) = nodes.get_mut(&al_mac) else {
                     continue;
                 };
 
-                if node.metadata.last_update == UpdateType::DiscoverySent
-                    && node.metadata.node_state_remote == StateRemote::Idle
-                {
+                if node.metadata.discovery_sent_until != Some(expires_at) {
+                    continue;
+                }
+
+                node.metadata.discovery_sent_until = None;
+                if node.metadata.node_state_remote == StateRemote::Idle {
                     node.metadata
                         .update(None, None, None, None, None, Some(previous_state));
                 }
