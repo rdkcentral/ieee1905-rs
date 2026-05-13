@@ -25,12 +25,104 @@ use ieee1905::registration_codec::{
     AlServiceRegistrationRequest, AlServiceRegistrationResponse, ServiceOperation, ServiceType,
 };
 use ieee1905::sdu_codec::SDU;
+use ieee1905::topology_manager::{Ieee1905DeviceData, TopologyDatabase, UpdateType};
 use pnet::datalink::*;
 use std::process::exit;
+use std::sync::Arc;
 use tokio::net::UnixStream;
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, sleep, timeout};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+
+async fn update_observed_topology(topology_db: Option<&Arc<TopologyDatabase>>, sdu: &SDU) {
+    let Some(topology_db) = topology_db else {
+        return;
+    };
+
+    let device_data = Ieee1905DeviceData::new(
+        sdu.source_al_mac_address,
+        sdu.source_al_mac_address,
+        Some(sdu.destination_al_mac_address),
+        sdu.source_al_mac_address,
+        None,
+        None,
+    );
+
+    topology_db
+        .update_ieee1905_topology(device_data, UpdateType::DiscoveryReceived, None, None, None)
+        .await;
+}
+
+async fn update_observed_topology_from_bytes(
+    topology_db: Option<&Arc<TopologyDatabase>>,
+    bytes: &[u8],
+) {
+    if let Ok((_, sdu)) = SDU::parse(bytes) {
+        update_observed_topology(topology_db, &sdu).await;
+    }
+}
+
+fn build_tlv(tlv_type: IEEE1905TLVType, value: Option<Vec<u8>>) -> ieee1905::cmdu::TLV {
+    ieee1905::cmdu::TLV {
+        tlv_type: tlv_type.to_u8(),
+        tlv_length: value.as_ref().map_or(0, Vec::len) as u16,
+        tlv_value: value,
+    }
+}
+
+fn prepare_ap_autoconfig_request_sdu(
+    r: &AlServiceRegistrationResponse,
+    message_id: u16,
+) -> Vec<u8> {
+    let src_mac_addr = r.al_mac_address_local;
+    let mut payload = Vec::new();
+    payload.extend(
+        build_tlv(
+            IEEE1905TLVType::AlMacAddress,
+            Some(src_mac_addr.octets().to_vec()),
+        )
+        .serialize(),
+    );
+    payload.extend(build_tlv(IEEE1905TLVType::SearchedRole, Some(vec![0x00])).serialize());
+    payload.extend(build_tlv(IEEE1905TLVType::EndOfMessage, None).serialize());
+
+    let cmdu = CMDU {
+        message_version: MessageVersion::Version2013.to_u8(),
+        reserved: 0,
+        message_type: CMDUType::ApAutoConfigSearch.to_u16(),
+        message_id,
+        fragment: 0,
+        flags: 0x80,
+        payload,
+    };
+
+    SDU {
+        source_al_mac_address: src_mac_addr,
+        destination_al_mac_address: IEEE1905_CONTROL_ADDRESS,
+        is_fragment: 0,
+        is_last_fragment: 1,
+        fragment_id: 0,
+        payload: cmdu.serialize(),
+    }
+    .serialize()
+}
+
+fn is_ap_autoconfig_response(sdu: &SDU) -> bool {
+    let Ok((_, cmdu)) = CMDU::parse(&sdu.payload) else {
+        return false;
+    };
+
+    if cmdu.message_type != CMDUType::ApAutoConfigResponse.to_u16() {
+        return false;
+    }
+
+    let Ok(tlvs) = cmdu.get_tlvs() else {
+        return false;
+    };
+
+    tlvs.iter()
+        .any(|tlv| tlv.tlv_type == IEEE1905TLVType::SupportedFreqBand.to_u8())
+}
 
 fn _prepare_test_packet_with_payload(
     r: &AlServiceRegistrationResponse,
@@ -1809,7 +1901,12 @@ fn prepare_payload_with_huge_tlv(r: &AlServiceRegistrationResponse, multicast: b
     }
 }
 
-async fn test1() -> anyhow::Result<()> {
+async fn test1(
+    sap_control_path: &str,
+    sap_data_path: &str,
+    interface_name: &str,
+    topology_ui: bool,
+) -> anyhow::Result<()> {
     // Modify this filter for your tracing during run time
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("trace")); //add 'tokio=trace' to debug the runtime
 
@@ -1822,9 +1919,6 @@ async fn test1() -> anyhow::Result<()> {
         .init();
 
     println!("Starting test1");
-
-    let sap_control_path = "/tmp/al_control_socket";
-    let sap_data_path = "/tmp/al_data_socket";
 
     let control_socket = match UnixStream::connect(&sap_control_path).await {
         Ok(unix_stream) => unix_stream,
@@ -1888,9 +1982,17 @@ async fn test1() -> anyhow::Result<()> {
     }
     println!("1.3: Registration succeeded");
 
+    let topology_db = topology_ui.then(|| {
+        let topology_db =
+            TopologyDatabase::get_instance(reg_resp.al_mac_address_local, interface_name);
+        tokio::task::spawn(topology_db.clone().start_topology_cli());
+        topology_db
+    });
+
     loop {
         println!("2.0 Prepare and send multicast autoconfig search request");
         let sdu_autoconfig_search = prepare_payload_with_huge_tlv(&reg_resp, true);
+        update_observed_topology_from_bytes(topology_db.as_ref(), &sdu_autoconfig_search).await;
         match framed_data_socket
             .send(Bytes::from(sdu_autoconfig_search.clone()))
             .await
@@ -1945,6 +2047,27 @@ async fn connect(
     Ok((Some(framed_control_socket), Some(framed_data_socket)))
 }
 
+async fn connect_with_retry(
+    cp: &str,
+    dp: &str,
+) -> (
+    Framed<UnixStream, LengthDelimitedCodec>,
+    Framed<UnixStream, LengthDelimitedCodec>,
+) {
+    loop {
+        match connect(cp, dp).await {
+            Ok((Some(control), Some(data))) => return (control, data),
+            Ok(_) => {
+                println!("Sockets not available. Retrying...");
+            }
+            Err(e) => {
+                println!("Couldn't connect to AL-SAP sockets: {e:?}. Retrying...");
+            }
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+}
+
 async fn register(
     framed_control_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
 ) -> anyhow::Result<AlServiceRegistrationResponse> {
@@ -1981,11 +2104,13 @@ async fn register(
 async fn send_short_data(
     framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
     reg_resp: AlServiceRegistrationResponse,
+    topology_db: Option<&Arc<TopologyDatabase>>,
 ) -> anyhow::Result<Vec<u8>> {
     println!("Sending data");
     println!("Prepare and send multicast autoconfig search request");
 
     let sdu_short = prepare_payload_with_small_tlv(&reg_resp, false);
+    update_observed_topology_from_bytes(topology_db, &sdu_short).await;
     match framed_data_socket
         .send(Bytes::from(sdu_short.clone()))
         .await
@@ -2004,10 +2129,12 @@ async fn send_short_data(
 async fn send_huge_data(
     framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
     reg_resp: AlServiceRegistrationResponse,
+    topology_db: Option<&Arc<TopologyDatabase>>,
 ) -> anyhow::Result<Vec<u8>> {
     println!("Sending data");
     println!("Prepare and send multicast autoconfig search request");
     let sdu_autoconfig_search = prepare_payload_with_huge_tlv(&reg_resp, true);
+    update_observed_topology_from_bytes(topology_db, &sdu_autoconfig_search).await;
     match framed_data_socket
         .send(Bytes::from(sdu_autoconfig_search.clone()))
         .await
@@ -2023,8 +2150,28 @@ async fn send_huge_data(
     Ok(sdu_autoconfig_search)
 }
 
+async fn send_ap_autoconfig_request(
+    framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
+    reg_resp: &AlServiceRegistrationResponse,
+    message_id: u16,
+    topology_db: Option<&Arc<TopologyDatabase>>,
+) -> anyhow::Result<Vec<u8>> {
+    println!("Sending AP autoconfig request");
+    let sdu_ap_autoconfig_request = prepare_ap_autoconfig_request_sdu(reg_resp, message_id);
+    update_observed_topology_from_bytes(topology_db, &sdu_ap_autoconfig_request).await;
+
+    framed_data_socket
+        .send(Bytes::from(sdu_ap_autoconfig_request.clone()))
+        .await
+        .map_err(|err| anyhow::anyhow!("Sending AP autoconfig request failed: {err}"))?;
+
+    println!("Successfully sent AP autoconfig request");
+    Ok(sdu_ap_autoconfig_request)
+}
+
 async fn read_data(
     framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
+    topology_db: Option<&Arc<TopologyDatabase>>,
 ) -> anyhow::Result<SDU> {
     println!("Waiting for any data");
 
@@ -2052,6 +2199,7 @@ async fn read_data(
                                         "Got complete SDU [{}] {complete_sdu:?}",
                                         complete_sdu.payload.len()
                                     );
+                                    update_observed_topology(topology_db, &complete_sdu).await;
                                     return Ok(complete_sdu);
                                 }
 
@@ -2085,6 +2233,7 @@ async fn read_data(
                                         "Got reassembled SDU [{:?}] {final_message:?}",
                                         final_message.payload.len()
                                     );
+                                    update_observed_topology(topology_db, &final_message).await;
                                     return Ok(final_message);
                                 }
                                 fragment_id_expected += 1;
@@ -2108,12 +2257,29 @@ async fn read_data(
     }
 }
 
+async fn read_ap_autoconfig_response(
+    framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
+    topology_db: Option<&Arc<TopologyDatabase>>,
+) -> anyhow::Result<()> {
+    let sdu = read_data(framed_data_socket, topology_db).await?;
+
+    if is_ap_autoconfig_response(&sdu) {
+        println!("Received AP autoconfig response");
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "Received data, but it was not an AP autoconfig response"
+        ))
+    }
+}
+
 // Read complete SDU with CMDU and TLVs and compare CMDU payload
 async fn read_and_compare_data(
     framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
     data_to_compare: &Vec<u8>,
+    topology_db: Option<&Arc<TopologyDatabase>>,
 ) -> anyhow::Result<()> {
-    let sdu_wrapped = read_data(framed_data_socket).await;
+    let sdu_wrapped = read_data(framed_data_socket, topology_db).await;
     match sdu_wrapped {
         Ok(sdu) => {
             let sdu_payload_sent = SDU::parse(data_to_compare.as_slice()).unwrap().1.payload;
@@ -2158,13 +2324,16 @@ async fn close_data_connection(framed_data_socket: &mut Framed<UnixStream, Lengt
 }
 
 // Common case: Connect -> Register -> Send data
-async fn test2_common_without_breaking_connection() -> anyhow::Result<()> {
-    let sap_control_path = "/tmp/al_control_socket";
-    let sap_data_path = "/tmp/al_data_socket";
-
+async fn test2_common_without_breaking_connection(
+    sap_control_path: &str,
+    sap_data_path: &str,
+    interface_name: &str,
+    topology_ui: bool,
+) -> anyhow::Result<()> {
     let mut framed_control_socket: Option<Framed<UnixStream, LengthDelimitedCodec>> = None;
     let mut framed_data_socket: Option<Framed<UnixStream, LengthDelimitedCodec>> = None;
     let mut reg_resp: Option<AlServiceRegistrationResponse> = None;
+    let mut topology_db: Option<Arc<TopologyDatabase>> = None;
 
     enum State {
         Connect,
@@ -2201,6 +2370,14 @@ async fn test2_common_without_breaking_connection() -> anyhow::Result<()> {
                                 "Transition to SendData with registration response: {:?}",
                                 rr
                             );
+                            if topology_ui && topology_db.is_none() {
+                                let db = TopologyDatabase::get_instance(
+                                    rr.al_mac_address_local,
+                                    interface_name,
+                                );
+                                tokio::task::spawn(db.clone().start_topology_cli());
+                                topology_db = Some(db);
+                            }
                             reg_resp = Some(rr);
                         }
                         Err(e) => {
@@ -2214,8 +2391,12 @@ async fn test2_common_without_breaking_connection() -> anyhow::Result<()> {
 
             State::SendData => {
                 if let Some(mut data_socket) = framed_data_socket.take() {
-                    if let Err(e) =
-                        send_short_data(&mut data_socket, reg_resp.clone().unwrap()).await
+                    if let Err(e) = send_short_data(
+                        &mut data_socket,
+                        reg_resp.clone().unwrap(),
+                        topology_db.as_ref(),
+                    )
+                    .await
                     {
                         println!("Sending failed: {e:?}");
                         return Err(e);
@@ -2239,10 +2420,13 @@ async fn test2_common_without_breaking_connection() -> anyhow::Result<()> {
 async fn test3_breaking_connection(
     sap_control_path: &str,
     sap_data_path: &str,
+    interface_name: &str,
+    topology_ui: bool,
 ) -> anyhow::Result<()> {
     let mut framed_control_socket: Option<Framed<UnixStream, LengthDelimitedCodec>> = None;
     let mut framed_data_socket: Option<Framed<UnixStream, LengthDelimitedCodec>> = None;
     let mut reg_resp: Option<AlServiceRegistrationResponse> = None;
+    let mut topology_db: Option<Arc<TopologyDatabase>> = None;
 
     enum State {
         Connect,
@@ -2329,6 +2513,14 @@ async fn test3_breaking_connection(
                                 "Transition to SendData with registration response: {:?}",
                                 rr
                             );
+                            if topology_ui && topology_db.is_none() {
+                                let db = TopologyDatabase::get_instance(
+                                    rr.al_mac_address_local,
+                                    interface_name,
+                                );
+                                tokio::task::spawn(db.clone().start_topology_cli());
+                                topology_db = Some(db);
+                            }
                             reg_resp = Some(rr);
                         }
                         Err(e) => {
@@ -2342,8 +2534,12 @@ async fn test3_breaking_connection(
 
             State::SendData => {
                 if let Some(mut data_socket) = framed_data_socket.take() {
-                    if let Err(e) =
-                        send_huge_data(&mut data_socket, reg_resp.clone().unwrap()).await
+                    if let Err(e) = send_huge_data(
+                        &mut data_socket,
+                        reg_resp.clone().unwrap(),
+                        topology_db.as_ref(),
+                    )
+                    .await
                     {
                         println!("Sending failed: {e:?}");
                         return Err(e);
@@ -2366,12 +2562,15 @@ async fn test3_breaking_connection(
 async fn test4_break_connection_and_receive(
     sap_control_path: &str,
     sap_data_path: &str,
+    interface_name: &str,
+    topology_ui: bool,
     read_timeout: u8,
     connect_timeout: u8,
 ) -> anyhow::Result<()> {
     let mut framed_control_socket: Option<Framed<UnixStream, LengthDelimitedCodec>> = None;
     let mut framed_data_socket: Option<Framed<UnixStream, LengthDelimitedCodec>> = None;
     let mut reg_resp: Option<AlServiceRegistrationResponse> = None;
+    let mut topology_db: Option<Arc<TopologyDatabase>> = None;
 
     enum State {
         Connect,
@@ -2494,6 +2693,14 @@ async fn test4_break_connection_and_receive(
                                 "Transition to SendData with registration response: {:?}",
                                 rr
                             );
+                            if topology_ui && topology_db.is_none() {
+                                let db = TopologyDatabase::get_instance(
+                                    rr.al_mac_address_local,
+                                    interface_name,
+                                );
+                                tokio::task::spawn(db.clone().start_topology_cli());
+                                topology_db = Some(db);
+                            }
                             reg_resp = Some(rr);
                         }
                         Err(e) => {
@@ -2518,7 +2725,12 @@ async fn test4_break_connection_and_receive(
 
             State::SendData => {
                 if let Some(ref mut data_socket) = framed_data_socket {
-                    let res = send_huge_data(data_socket, reg_resp.clone().unwrap()).await;
+                    let res = send_huge_data(
+                        data_socket,
+                        reg_resp.clone().unwrap(),
+                        topology_db.as_ref(),
+                    )
+                    .await;
                     match res {
                         Err(e) => {
                             println!("Sending failed: {e:?}");
@@ -2542,7 +2754,7 @@ async fn test4_break_connection_and_receive(
                 tokio::select! {
                     res = async {
                         if let Some(ref mut data_socket) = framed_data_socket {
-                            let rd = read_and_compare_data(data_socket, &data_for_verification).await;
+                            let rd = read_and_compare_data(data_socket, &data_for_verification, topology_db.as_ref()).await;
                             match rd {
                                 Ok(_) => {
                                     println!("read_and_compare_data: ok");
@@ -2575,6 +2787,54 @@ async fn test4_break_connection_and_receive(
     }
 }
 
+async fn test5_ap_autoconfig_request_loop(
+    sap_control_path: &str,
+    sap_data_path: &str,
+    interface_name: &str,
+    topology_ui: bool,
+) -> anyhow::Result<()> {
+    println!("Starting test5");
+
+    let (mut framed_control_socket, mut framed_data_socket) =
+        connect_with_retry(sap_control_path, sap_data_path).await;
+
+    let reg_resp = register(&mut framed_control_socket).await?;
+    let topology_db = topology_ui.then(|| {
+        let db = TopologyDatabase::get_instance(reg_resp.al_mac_address_local, interface_name);
+        tokio::task::spawn(db.clone().start_topology_cli());
+        db
+    });
+
+    let mut message_id = 1_u16;
+    loop {
+        send_ap_autoconfig_request(
+            &mut framed_data_socket,
+            &reg_resp,
+            message_id,
+            topology_db.as_ref(),
+        )
+        .await?;
+
+        match timeout(
+            Duration::from_secs(10),
+            read_ap_autoconfig_response(&mut framed_data_socket, topology_db.as_ref()),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => println!("AP autoconfig response validation failed: {e:?}"),
+            Err(_) => println!("Timed out waiting for AP autoconfig response"),
+        }
+
+        message_id = if message_id == u16::MAX {
+            1
+        } else {
+            message_id + 1
+        };
+        sleep(Duration::from_secs(10)).await;
+    }
+}
+
 #[derive(Parser)]
 #[command(version, about, long_about = None, name = "IEEE1905 functional tests suite")]
 struct Args {
@@ -2599,34 +2859,80 @@ struct Args {
     read: u8,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
-    let connect = args.connect;
-    let test = args.test_num;
-    let read = args.read;
-    let sap_control_path: &str = &args.control_path.clone()[..];
-    let sap_data_path = &args.data_path.clone()[..];
+pub async fn run_with_config(
+    sap_control_path: &str,
+    sap_data_path: &str,
+    interface_name: &str,
+    topology_ui: bool,
+    test: u8,
+    read: u8,
+    connect: u8,
+) -> anyhow::Result<()> {
     let mut t: anyhow::Result<()> = Ok(());
 
     // Not modularized test1
     if test == 1 {
-        t = test1().await;
+        t = test1(sap_control_path, sap_data_path, interface_name, topology_ui).await;
     }
 
     // Modularized tests
     if test == 2 {
-        t = test2_common_without_breaking_connection().await;
+        t = test2_common_without_breaking_connection(
+            sap_control_path,
+            sap_data_path,
+            interface_name,
+            topology_ui,
+        )
+        .await;
     }
 
     if test == 3 {
-        t = test3_breaking_connection(sap_control_path, sap_data_path).await;
-    }
-
-    if test == 4 {
-        t = test4_break_connection_and_receive(sap_control_path, sap_data_path, read, connect)
+        t = test3_breaking_connection(sap_control_path, sap_data_path, interface_name, topology_ui)
             .await;
     }
 
+    if test == 4 {
+        t = test4_break_connection_and_receive(
+            sap_control_path,
+            sap_data_path,
+            interface_name,
+            topology_ui,
+            read,
+            connect,
+        )
+        .await;
+    }
+
+    if test == 5 {
+        t = test5_ap_autoconfig_request_loop(
+            sap_control_path,
+            sap_data_path,
+            interface_name,
+            topology_ui,
+        )
+        .await;
+    }
+
     return t;
+}
+
+pub async fn run() -> anyhow::Result<()> {
+    let args = Args::parse();
+    let control_path = args.control_path;
+    let data_path = args.data_path;
+    run_with_config(
+        &control_path,
+        &data_path,
+        "eth0",
+        false,
+        args.test_num,
+        args.read,
+        args.connect,
+    )
+    .await
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    run().await
 }
