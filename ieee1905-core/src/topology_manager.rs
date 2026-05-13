@@ -281,6 +281,16 @@ impl Ieee1905NodeInfo {
 
         self.last_seen = Instant::now();
     }
+
+    fn set_remote_state(&mut self, remote: StateRemote) {
+        if self.node_state_remote != remote {
+            info!(
+                "{} remote state changed: {:?} -> {remote:?}",
+                self.al_mac, self.node_state_remote,
+            );
+            self.node_state_remote = remote;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -923,14 +933,8 @@ impl TopologyDatabase {
                 }
                 previous_states.push((*al_mac, node.metadata.node_state_remote, expires_at));
                 node.metadata.discovery_sent_until = Some(expires_at);
-                node.metadata.update(
-                    Some(UpdateType::DiscoverySent),
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some(StateRemote::Idle),
-                );
+                node.metadata.last_update = UpdateType::DiscoverySent;
+                node.metadata.set_remote_state(StateRemote::Idle);
             }
         }
 
@@ -954,8 +958,7 @@ impl TopologyDatabase {
 
                 node.metadata.discovery_sent_until = None;
                 if node.metadata.node_state_remote == StateRemote::Idle {
-                    node.metadata
-                        .update(None, None, None, None, None, Some(previous_state));
+                    node.metadata.set_remote_state(previous_state);
                 }
             }
         });
@@ -1223,8 +1226,11 @@ impl TopologyDatabase {
 mod tests {
     use crate::TopologyDatabase;
     use crate::cmdu_codec::MediaType;
-    use crate::topology_manager::{Ieee1905DeviceData, Ieee1905InterfaceData, UpdateType};
+    use crate::topology_manager::{
+        Ieee1905DeviceData, Ieee1905InterfaceData, StateRemote, UpdateType,
+    };
     use pnet::datalink::MacAddr;
+    use tokio::time::Duration;
 
     #[tokio::test]
     async fn test_remote_controller_won() {
@@ -1271,6 +1277,49 @@ mod tests {
             db.find_device_by_port(MacAddr::new(0, 0, 0, 0, 0, 4))
                 .await
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_window_does_not_refresh_last_seen() {
+        let db = TopologyDatabase::new(MacAddr::new(0, 0, 0, 0, 0, 0), "en1".to_string());
+
+        let device = Ieee1905DeviceData::new(
+            MacAddr::new(0, 0, 0, 0, 0, 1),
+            MacAddr::new(0, 0, 0, 0, 0, 2),
+            None,
+            *db.local_mac.read().await,
+            None,
+            None,
+        );
+
+        db.update_ieee1905_topology(device.clone(), UpdateType::QueryReceived, None, None, None)
+            .await;
+        db.update_ieee1905_topology(device.clone(), UpdateType::ResponseSent, None, None, None)
+            .await;
+
+        let before_window = db.get_last_seen(device.al_mac).await.unwrap();
+
+        db.update_ieee1905_topology(
+            Ieee1905DeviceData::default(),
+            UpdateType::DiscoverySent,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        let during_window = db.get_device(device.al_mac).await.unwrap();
+        assert_eq!(during_window.metadata.last_seen, before_window);
+        assert_eq!(during_window.metadata.node_state_remote, StateRemote::Idle);
+
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+
+        let after_window = db.get_device(device.al_mac).await.unwrap();
+        assert_eq!(after_window.metadata.last_seen, before_window);
+        assert_eq!(
+            after_window.metadata.node_state_remote,
+            StateRemote::ConvergedRemote
         );
     }
 }
