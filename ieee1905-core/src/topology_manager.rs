@@ -77,6 +77,7 @@ pub enum StateRemote {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateType {
     LldpUpdate,
+    DiscoverySent,
     DiscoveryReceived,
     NotificationReceived,
     QuerySent,
@@ -684,6 +685,11 @@ impl TopologyDatabase {
         let al_mac = device_data.al_mac;
         let transmission_event;
 
+        if operation == UpdateType::DiscoverySent {
+            self.handle_discovery_sent().await;
+            return TransmissionEvent::None;
+        }
+
         //TODO: use new update types.
         tracing::debug!("WAITING for write lock");
         {
@@ -835,6 +841,7 @@ impl TopologyDatabase {
                         UpdateType::ApAutoConfigSearch => {
                             node.prepare_link_metrics_query_transmission_event_if_needed()
                         }
+                        UpdateType::DiscoverySent => TransmissionEvent::None,
                     };
                 }
                 None => {
@@ -877,6 +884,10 @@ impl TopologyDatabase {
                             debug!(al_mac = ?al_mac, "Inserted node from ApAutoConfigSearch");
                             node.prepare_link_metrics_query_transmission_event_if_needed()
                         }
+                        UpdateType::DiscoverySent => {
+                            node_was_created = false;
+                            TransmissionEvent::None
+                        }
                         _ => {
                             debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
                             node_was_created = false;
@@ -896,6 +907,50 @@ impl TopologyDatabase {
 
         debug!("Lock released — function continues safely");
         transmission_event
+    }
+
+    async fn handle_discovery_sent(&self) {
+        let mut previous_states = Vec::new();
+        {
+            let mut nodes = self.nodes.write().await;
+            for (al_mac, node) in nodes.iter_mut() {
+                if node.metadata.node_state_remote != StateRemote::ConvergedRemote {
+                    continue;
+                }
+                previous_states.push((*al_mac, node.metadata.node_state_remote));
+                node.metadata.update(
+                    Some(UpdateType::DiscoverySent),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(StateRemote::Idle),
+                );
+            }
+        }
+
+        if previous_states.is_empty() {
+            return;
+        }
+
+        let nodes = self.nodes.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            let mut nodes = nodes.write().await;
+            for (al_mac, previous_state) in previous_states {
+                let Some(node) = nodes.get_mut(&al_mac) else {
+                    continue;
+                };
+
+                if node.metadata.last_update == UpdateType::DiscoverySent
+                    && node.metadata.node_state_remote == StateRemote::Idle
+                {
+                    node.metadata
+                        .update(None, None, None, None, None, Some(previous_state));
+                }
+            }
+        });
     }
 
     pub async fn handle_notification_sent(&self) {

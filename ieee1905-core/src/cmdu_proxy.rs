@@ -23,7 +23,9 @@ use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
 use crate::tlv_cmdu_codec::TLVTrait;
-use crate::topology_manager::{Ieee1905Node, Role, TopologyDatabase, UpdateType};
+use crate::topology_manager::{
+    Ieee1905DeviceData, Ieee1905Node, Role, TopologyDatabase, UpdateType,
+};
 use crate::{MessageIdGenerator, next_task_id};
 use pnet::datalink::MacAddr;
 use std::collections::HashMap;
@@ -93,6 +95,22 @@ pub async fn cmdu_topology_discovery_transmission_worker(
             }
             Ok(()) => {
                 info!(interface = %interface, message_id = message_id, "CMDU Topology Discovery sent successfully");
+                TopologyDatabase::get_instance(local_al_mac_address, &interface)
+                    .update_ieee1905_topology(
+                        Ieee1905DeviceData::new(
+                            local_al_mac_address,
+                            destination_mac,
+                            None,
+                            interface_mac_address,
+                            None,
+                            None,
+                        ),
+                        UpdateType::DiscoverySent,
+                        Some(message_id),
+                        None,
+                        None,
+                    )
+                    .await;
             }
         }
     }
