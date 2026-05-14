@@ -127,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
     let topology_db = TopologyDatabase::get_instance(al_mac, &forwarding_interface);
 
     // Upon every loop restart topology database role can change
-    topology_db.set_local_role(None).await;
+    topology_db.set_local_role(None);
 
     // Find Forwarding MAC Address (Ethernet Interface)
     let forwarding_mac = topology_db.get_forwarding_interface_mac().await;

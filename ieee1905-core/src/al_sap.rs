@@ -261,7 +261,7 @@ impl AlServiceAccessPoint {
                                 get_local_al_mac(self.interface_name.clone()).unwrap(),
                                 &self.interface_name,
                             );
-                            db.set_local_role(Some(Role::Enrollee)).await;
+                            db.set_local_role(Some(Role::Enrollee));
                         }
                         ServiceType::EasyMeshController => {
                             info!("ServiceType EasyMeshController - Might be Registrar");
@@ -269,7 +269,7 @@ impl AlServiceAccessPoint {
                                 get_local_al_mac(self.interface_name.clone()).unwrap(),
                                 &self.interface_name,
                             );
-                            db.set_local_role(Some(Role::Registrar)).await;
+                            db.set_local_role(Some(Role::Registrar));
                         }
                     };
 
@@ -343,7 +343,7 @@ impl AlServiceAccessPoint {
             get_local_al_mac(self.interface_name.clone()).unwrap(),
             &self.interface_name,
         );
-        if let Some(local_role) = db.get_local_role().await {
+        if let Some(local_role) = db.get_requested_local_role() {
             tracing::trace!("Compare local_role {local_role:?} with {role:?}");
             role == local_role
         } else {
