@@ -77,7 +77,6 @@ pub enum StateRemote {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateType {
     LldpUpdate,
-    DiscoverySent,
     DiscoveryReceived,
     NotificationReceived,
     QuerySent,
@@ -697,11 +696,6 @@ impl TopologyDatabase {
         let al_mac = device_data.al_mac;
         let transmission_event;
 
-        if operation == UpdateType::DiscoverySent {
-            self.handle_discovery_sent().await;
-            return TransmissionEvent::None;
-        }
-
         //TODO: use new update types.
         tracing::debug!("WAITING for write lock");
         {
@@ -853,7 +847,6 @@ impl TopologyDatabase {
                         UpdateType::ApAutoConfigSearch => {
                             node.prepare_link_metrics_query_transmission_event_if_needed()
                         }
-                        UpdateType::DiscoverySent => TransmissionEvent::None,
                     };
                 }
                 None => {
@@ -897,10 +890,6 @@ impl TopologyDatabase {
                             debug!(al_mac = ?al_mac, "Inserted node from ApAutoConfigSearch");
                             node.prepare_link_metrics_query_transmission_event_if_needed()
                         }
-                        UpdateType::DiscoverySent => {
-                            node_was_created = false;
-                            TransmissionEvent::None
-                        }
                         _ => {
                             debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
                             node_was_created = false;
@@ -922,7 +911,7 @@ impl TopologyDatabase {
         transmission_event
     }
 
-    async fn handle_discovery_sent(&self) {
+    pub async fn handle_discovery_sent(&self) {
         let mut previous_states = Vec::new();
         let expires_at = Instant::now() + Duration::from_secs(1);
         {
@@ -933,7 +922,6 @@ impl TopologyDatabase {
                 }
                 previous_states.push((*al_mac, node.metadata.node_state_remote, expires_at));
                 node.metadata.discovery_sent_until = Some(expires_at);
-                node.metadata.last_update = UpdateType::DiscoverySent;
                 node.metadata.set_remote_state(StateRemote::Idle);
             }
         }
@@ -1300,14 +1288,7 @@ mod tests {
 
         let before_window = db.get_last_seen(device.al_mac).await.unwrap();
 
-        db.update_ieee1905_topology(
-            Ieee1905DeviceData::default(),
-            UpdateType::DiscoverySent,
-            None,
-            None,
-            None,
-        )
-        .await;
+        db.handle_discovery_sent().await;
 
         let during_window = db.get_device(device.al_mac).await.unwrap();
         assert_eq!(during_window.metadata.last_seen, before_window);
