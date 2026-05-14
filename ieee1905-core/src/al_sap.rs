@@ -18,7 +18,8 @@
 */
 
 #![deny(warnings)]
-use crate::cmdu_proxy::cmdu_from_sdu_transmission;
+use crate::cmdu_message_id_generator::get_message_id_generator;
+use crate::cmdu_proxy::{cmdu_from_sdu_transmission, cmdu_topology_notification_transmission};
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_local_al_mac;
 use crate::registration_codec::{
@@ -283,9 +284,12 @@ impl AlServiceAccessPoint {
                         result: RegistrationResult::Success,
                     };
 
-                    let _ = self
-                        .service_access_point_registration_response(&response)
-                        .await;
+                    self.service_access_point_registration_response(&response)
+                        .await?;
+
+                    if request.service_operation == ServiceOperation::Enable {
+                        self.send_initial_topology_notification(al_mac).await;
+                    }
 
                     return Ok(request);
                 }
@@ -308,6 +312,25 @@ impl AlServiceAccessPoint {
             .send(Bytes::from(serialized.clone()))
             .await?;
         Ok(())
+    }
+
+    async fn send_initial_topology_notification(&self, al_mac: MacAddr) {
+        let topology_db = TopologyDatabase::get_instance(al_mac, &self.interface_name);
+        let forwarding_mac = topology_db.get_forwarding_interface_mac().await;
+        let message_id_generator = get_message_id_generator().await;
+
+        tracing::debug!(
+            "Sending initial topology notification after AL-SAP registration on {}",
+            self.interface_name
+        );
+
+        cmdu_topology_notification_transmission(
+            self.interface_name.clone(),
+            Arc::clone(&self.sender),
+            message_id_generator,
+            al_mac,
+            forwarding_mac,
+        );
     }
 
     pub async fn check_if_role_match(&self, role: Role) -> bool {
