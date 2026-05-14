@@ -315,7 +315,7 @@ impl AlServiceAccessPoint {
             get_local_al_mac(self.interface_name.clone()).unwrap(),
             &self.interface_name,
         );
-        if let Some(local_role) = db.get_local_role().await {
+        if let Some(local_role) = db.get_requested_local_role().await {
             tracing::trace!("Compare local_role {local_role:?} with {role:?}");
             role == local_role
         } else {

@@ -130,7 +130,7 @@ pub async fn cmdu_topology_query_transmission(
 
             // **Retrieve Destination MAC Address**
             let destination_mac = device_data.destination_frame_mac;
-            let local_role = topology_db.get_local_role().await;
+            let local_role = topology_db.get_actual_local_role().await;
 
             // Define TLVs
             let payload = [
@@ -321,12 +321,24 @@ async fn inject_topology_response_tlvs(
     }
 
     let filtered_types = [
+        SupportedService::TYPE.to_u8(),
         DeviceInformation::TYPE.to_u8(),
         DeviceBridgingCapability::TYPE.to_u8(),
         Ieee1905NeighborDevice::TYPE.to_u8(),
         NonIeee1905NeighborDevices::TYPE.to_u8(),
     ];
     vec.retain(|e| !filtered_types.contains(&e.tlv_type));
+
+    // injecting SupportedService
+    if let Some(role) = db.get_actual_local_role().await {
+        let service = match role {
+            Role::Registrar => SupportedServiceType::Controller,
+            Role::Enrollee => SupportedServiceType::Agent,
+        };
+        vec.push(TLV::from(SupportedService {
+            services: vec![service],
+        }))
+    }
 
     // injecting DeviceInformation
     vec.push({

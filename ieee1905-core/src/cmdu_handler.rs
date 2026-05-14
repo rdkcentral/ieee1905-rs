@@ -516,6 +516,16 @@ impl CMDUHandler {
             }
         }
 
+        let registry_role = SupportedService::find(tlvs).and_then(|e| {
+            if e.services.contains(&SupportedServiceType::Controller) {
+                return Some(Role::Registrar);
+            }
+            if e.services.contains(&SupportedServiceType::Agent) {
+                return Some(Role::Enrollee);
+            }
+            None
+        });
+
         let remote_al_mac = node.device_data.al_mac;
         let updated_device_data = Ieee1905DeviceData {
             al_mac: remote_al_mac,
@@ -523,7 +533,7 @@ impl CMDUHandler {
             destination_mac: None,
             local_interface_mac,
             local_interface_list: Some(interfaces.clone()),
-            registry_role: None,
+            registry_role,
             supported_fragmentation: Default::default(),
             supported_freq_band: None,
             ieee1905profile_version: None,
