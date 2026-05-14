@@ -1,3 +1,4 @@
+use crate::fs_quota_aware_storage::FsQuotaAwareStorage;
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
@@ -28,6 +29,38 @@ impl ArtifactConfig {
                 c2s_artifact_types: vec!["logs"],
             }
         })
+    }
+
+    pub fn get_tx_archive_storage(&self, kind: &str) -> FsQuotaAwareStorage {
+        FsQuotaAwareStorage::new(
+            self.archive_folder.join("tx").join(kind),
+            64,
+            32 * 1024 * 1024,
+        )
+    }
+
+    pub fn get_tx_failure_storage(&self, kind: &str) -> FsQuotaAwareStorage {
+        FsQuotaAwareStorage::new(
+            self.failed_folder.join("tx").join(kind),
+            16,
+            8 * 1024 * 1024,
+        )
+    }
+
+    pub fn get_rx_archive_storage(&self, kind: &str) -> FsQuotaAwareStorage {
+        FsQuotaAwareStorage::new(
+            self.archive_folder.join("rx").join(kind),
+            64,
+            32 * 1024 * 1024,
+        )
+    }
+
+    pub fn get_rx_failure_storage(&self, kind: &str) -> FsQuotaAwareStorage {
+        FsQuotaAwareStorage::new(
+            self.failed_folder.join("rx").join(kind),
+            16,
+            8 * 1024 * 1024,
+        )
     }
 }
 
