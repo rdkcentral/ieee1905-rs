@@ -358,10 +358,14 @@ impl CMDUHandler {
         };
 
         let remote_al_mac = device_data.al_mac;
+        let has_vendor_info = VendorSpecificInfo::find(tlvs).is_some_and(|e| e.oui == COMCAST_OUI);
+
         let transmission_event = topology_db
             .update_ieee1905_topology(
                 device_data,
-                UpdateType::QueryReceived,
+                UpdateType::QueryReceived {
+                    force: has_vendor_info,
+                },
                 None,
                 Some(message_id),
                 None,
