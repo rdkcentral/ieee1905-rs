@@ -80,7 +80,7 @@ pub enum UpdateType {
     DiscoveryReceived,
     NotificationReceived,
     QuerySent,
-    QueryReceived,
+    QueryReceived { force: bool },
     ResponseSent,
     ResponseReceived,
     ApAutoConfigSearch,
@@ -733,10 +733,10 @@ impl TopologyDatabase {
                                 TransmissionEvent::None
                             }
                         }
-                        UpdateType::QueryReceived => {
+                        UpdateType::QueryReceived { force } => {
                             let remote_state = node.metadata.node_state_remote;
 
-                            if remote_state != StateRemote::ConvergedRemote {
+                            if force || remote_state != StateRemote::ConvergedRemote {
                                 node.metadata.update(
                                     Some(operation),
                                     local_msg_id,
@@ -863,7 +863,7 @@ impl TopologyDatabase {
                             debug!(al_mac = ?al_mac, "Inserted node from Discovery");
                             TransmissionEvent::SendTopologyQuery(al_mac)
                         }
-                        UpdateType::QueryReceived => {
+                        UpdateType::QueryReceived { .. } => {
                             new_node.metadata.node_state_remote =
                                 StateRemote::ConvergingRemote(Instant::now());
                             nodes.insert(al_mac, new_node);
