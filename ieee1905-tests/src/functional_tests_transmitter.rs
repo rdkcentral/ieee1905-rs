@@ -138,14 +138,10 @@ fn _prepare_test_packet_with_payload(
         }
     };
 
-    println!("Parsed CMDU: {:?}", res);
-
-    println!("After cmdu parse: {res:?}");
     // Hardcoded message type to first unknown
     res.message_type = 0x0007;
     // Override message id
     res.message_id = message_id;
-    println!("Changed message type {res:?}");
     let sdu = SDU {
         source_al_mac_address: al_mac,
         destination_al_mac_address: MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02),
@@ -159,12 +155,21 @@ fn _prepare_test_packet_with_payload(
 }
 
 fn prepare_payload_with_small_tlv(r: &AlServiceRegistrationResponse, multicast: bool) -> Vec<u8> {
+    let dest_mac_addr = if multicast {
+        MacAddr::new(0x01, 0x80, 0xc2, 0x00, 0x00, 0x13)
+    } else {
+        MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02)
+    };
+
+    prepare_payload_with_small_tlv_to_destination(r, dest_mac_addr)
+}
+
+fn prepare_payload_with_small_tlv_to_destination(
+    r: &AlServiceRegistrationResponse,
+    dest_mac_addr: MacAddr,
+) -> Vec<u8> {
     // Here is whole SDU with autoconfig request taken from onewifi_em_agent_
     let src_mac_addr = r.al_mac_address_local;
-    let mut dest_mac_addr: MacAddr = MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02);
-    if multicast {
-        dest_mac_addr = MacAddr::new(0x01, 0x80, 0xc2, 0x00, 0x00, 0x13);
-    }
     let sdu_bytes: Vec<u8> = vec![
         src_mac_addr.0, // SDU source_al_mac_address
         src_mac_addr.1,
@@ -305,12 +310,21 @@ fn prepare_payload_with_small_tlv(r: &AlServiceRegistrationResponse, multicast: 
 }
 
 fn prepare_payload_with_huge_tlv(r: &AlServiceRegistrationResponse, multicast: bool) -> Vec<u8> {
+    let dest_mac_addr = if multicast {
+        MacAddr::new(0x01, 0x80, 0xc2, 0x00, 0x00, 0x13)
+    } else {
+        MacAddr::new(0xee, 0x42, 0xc0, 0xa8, 0x64, 0x02)
+    };
+
+    prepare_payload_with_huge_tlv_to_destination(r, dest_mac_addr)
+}
+
+fn prepare_payload_with_huge_tlv_to_destination(
+    r: &AlServiceRegistrationResponse,
+    dest_mac_addr: MacAddr,
+) -> Vec<u8> {
     // Here is whole SDU with autoconfig request taken from onewifi_em_agent_
     let src_mac_addr = r.al_mac_address_local;
-    let mut dest_mac_addr: MacAddr = MacAddr::new(0xee, 0x42, 0xc0, 0xa8, 0x64, 0x02);
-    if multicast {
-        dest_mac_addr = MacAddr::new(0x01, 0x80, 0xc2, 0x00, 0x00, 0x13);
-    }
     let sdu_bytes: Vec<u8> = vec![
         src_mac_addr.0, // SDU source_al_mac_address
         src_mac_addr.1,
@@ -1887,8 +1901,6 @@ fn prepare_payload_with_huge_tlv(r: &AlServiceRegistrationResponse, multicast: b
         0x00,
     ];
 
-    println!("SDU_BYTES: [{:?}] <{:?}>", sdu_bytes.len(), sdu_bytes);
-
     match SDU::parse(sdu_bytes.as_slice()) {
         Ok(tuple) => {
             println!("Successfully parsed long bytes");
@@ -1998,19 +2010,13 @@ async fn test1(
             .await
         {
             Ok(_) => {
-                println!("Successfully send SDU {sdu_autoconfig_search:?}");
+                println!("Successfully sent SDU");
             }
             Err(err) => {
                 println!("Sending SDU FAILURE {err}");
             }
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
-        // println!("2.1 Prepare and send autoconfig search request");
-        // let sdu_autoconfig_search = prepare_autoconfig_search_request_sdu(&reg_resp, false);
-        // match framed_data_socket.send(Bytes::from(sdu_autoconfig_search.clone())).await {
-        //             Ok(_) => { println!("Successfully send SDU {sdu_autoconfig_search:?}"); },
-        //             Err(err) => { println!("Sending SDU FAILURE {err}"); }
-        // }
     }
     //Ok(())
 }
@@ -2126,6 +2132,25 @@ async fn send_short_data(
     Ok(sdu_short)
 }
 
+async fn send_short_data_to_destination(
+    framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
+    reg_resp: &AlServiceRegistrationResponse,
+    destination_al_mac: MacAddr,
+    topology_db: Option<&Arc<TopologyDatabase>>,
+) -> anyhow::Result<Vec<u8>> {
+    println!("AGENT: sending short SDU to controller {destination_al_mac}");
+    let sdu_short = prepare_payload_with_small_tlv_to_destination(reg_resp, destination_al_mac);
+    update_observed_topology_from_bytes(topology_db, &sdu_short).await;
+
+    framed_data_socket
+        .send(Bytes::from(sdu_short.clone()))
+        .await
+        .map_err(|err| anyhow::anyhow!("Sending small SDU failed: {err}"))?;
+
+    println!("AGENT: sent short SDU");
+    Ok(sdu_short)
+}
+
 async fn send_huge_data(
     framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
     reg_resp: AlServiceRegistrationResponse,
@@ -2150,13 +2175,32 @@ async fn send_huge_data(
     Ok(sdu_autoconfig_search)
 }
 
+async fn send_huge_data_to_destination(
+    framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
+    reg_resp: &AlServiceRegistrationResponse,
+    destination_al_mac: MacAddr,
+    topology_db: Option<&Arc<TopologyDatabase>>,
+) -> anyhow::Result<Vec<u8>> {
+    println!("AGENT: sending long SDU to controller {destination_al_mac}");
+    let sdu_huge = prepare_payload_with_huge_tlv_to_destination(reg_resp, destination_al_mac);
+    update_observed_topology_from_bytes(topology_db, &sdu_huge).await;
+
+    framed_data_socket
+        .send(Bytes::from(sdu_huge.clone()))
+        .await
+        .map_err(|err| anyhow::anyhow!("Sending huge SDU failed: {err}"))?;
+
+    println!("AGENT: sent long SDU");
+    Ok(sdu_huge)
+}
+
 async fn send_ap_autoconfig_request(
     framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
     reg_resp: &AlServiceRegistrationResponse,
     message_id: u16,
     topology_db: Option<&Arc<TopologyDatabase>>,
 ) -> anyhow::Result<Vec<u8>> {
-    println!("Sending AP autoconfig request");
+    println!("AGENT: sending AP autoconfig search");
     let sdu_ap_autoconfig_request = prepare_ap_autoconfig_request_sdu(reg_resp, message_id);
     update_observed_topology_from_bytes(topology_db, &sdu_ap_autoconfig_request).await;
 
@@ -2165,7 +2209,7 @@ async fn send_ap_autoconfig_request(
         .await
         .map_err(|err| anyhow::anyhow!("Sending AP autoconfig request failed: {err}"))?;
 
-    println!("Successfully sent AP autoconfig request");
+    println!("AGENT: sent AP autoconfig search");
     Ok(sdu_ap_autoconfig_request)
 }
 
@@ -2186,7 +2230,6 @@ async fn read_data(
             Some(res) => {
                 match res {
                     Ok(bytes) => {
-                        tracing::trace!("Got some bytes: [{}] <{:?}>", bytes.len(), bytes);
                         match SDU::parse(&bytes) {
                             Ok(tuple) => {
                                 tracing::trace!("Got SDU");
@@ -2195,10 +2238,6 @@ async fn read_data(
                                     // Single complete message
                                     let complete_sdu = fragment.clone();
 
-                                    tracing::trace!(
-                                        "Got complete SDU [{}] {complete_sdu:?}",
-                                        complete_sdu.payload.len()
-                                    );
                                     update_observed_topology(topology_db, &complete_sdu).await;
                                     return Ok(complete_sdu);
                                 }
@@ -2230,7 +2269,7 @@ async fn read_data(
                                 {
                                     final_message.payload = assembled_payload.clone();
                                     tracing::info!(
-                                        "Got reassembled SDU [{:?}] {final_message:?}",
+                                        "Got reassembled SDU payload_len={:?}",
                                         final_message.payload.len()
                                     );
                                     update_observed_topology(topology_db, &final_message).await;
@@ -2261,11 +2300,20 @@ async fn read_ap_autoconfig_response(
     framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
     topology_db: Option<&Arc<TopologyDatabase>>,
 ) -> anyhow::Result<()> {
+    read_ap_autoconfig_response_sdu(framed_data_socket, topology_db)
+        .await
+        .map(|_| ())
+}
+
+async fn read_ap_autoconfig_response_sdu(
+    framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
+    topology_db: Option<&Arc<TopologyDatabase>>,
+) -> anyhow::Result<SDU> {
     let sdu = read_data(framed_data_socket, topology_db).await?;
 
     if is_ap_autoconfig_response(&sdu) {
-        println!("Received AP autoconfig response");
-        Ok(())
+        println!("AGENT: received AP autoconfig response");
+        Ok(sdu)
     } else {
         Err(anyhow::anyhow!(
             "Received data, but it was not an AP autoconfig response"
@@ -2279,9 +2327,19 @@ async fn read_and_compare_data(
     data_to_compare: &Vec<u8>,
     topology_db: Option<&Arc<TopologyDatabase>>,
 ) -> anyhow::Result<()> {
+    read_and_compare_data_named(framed_data_socket, data_to_compare, topology_db, "SDU").await
+}
+
+async fn read_and_compare_data_named(
+    framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
+    data_to_compare: &Vec<u8>,
+    topology_db: Option<&Arc<TopologyDatabase>>,
+    traffic_kind: &str,
+) -> anyhow::Result<()> {
     let sdu_wrapped = read_data(framed_data_socket, topology_db).await;
     match sdu_wrapped {
         Ok(sdu) => {
+            println!("AGENT: received {traffic_kind} SDU");
             let sdu_payload_sent = SDU::parse(data_to_compare.as_slice()).unwrap().1.payload;
             let cmdu_payload_sent = CMDU::parse(&sdu_payload_sent.clone()).unwrap().1.payload;
 
@@ -2292,16 +2350,11 @@ async fn read_and_compare_data(
                 .1
                 .payload;
 
-            println!(
-                "Compare lengths: sent SDU: {} and received SDU: {}",
-                sdu_payload_sent.len(),
-                sdu_payload_received.len()
-            );
             assert_eq!(cmdu_payload_sent.len(), cmdu_payload_received.len());
 
             // compare only CMDU payloads from SDU sent by us and returned (echoed) by receiver
             assert_eq!(cmdu_payload_sent, cmdu_payload_received);
-            println!("Both CMD payloads verified successfully (both identical)");
+            println!("AGENT: {traffic_kind} SDU matches sent SDU");
             Ok(())
         }
         Err(err) => {
@@ -2835,6 +2888,114 @@ async fn test5_ap_autoconfig_request_loop(
     }
 }
 
+async fn test6_ap_autoconfig_request_with_traffic_loop(
+    sap_control_path: &str,
+    sap_data_path: &str,
+    interface_name: &str,
+    topology_ui: bool,
+) -> anyhow::Result<()> {
+    println!("Starting test6");
+
+    let (mut framed_control_socket, mut framed_data_socket) =
+        connect_with_retry(sap_control_path, sap_data_path).await;
+
+    let reg_resp = register(&mut framed_control_socket).await?;
+    let topology_db = topology_ui.then(|| {
+        let db = TopologyDatabase::get_instance(reg_resp.al_mac_address_local, interface_name);
+        tokio::task::spawn(db.clone().start_topology_cli());
+        db
+    });
+
+    let mut message_id = 1_u16;
+    let mut controller_al_mac = None;
+    loop {
+        println!("AGENT: starting traffic cycle with message_id={message_id}");
+
+        send_ap_autoconfig_request(
+            &mut framed_data_socket,
+            &reg_resp,
+            message_id,
+            topology_db.as_ref(),
+        )
+        .await?;
+
+        match timeout(
+            Duration::from_secs(10),
+            read_ap_autoconfig_response_sdu(&mut framed_data_socket, topology_db.as_ref()),
+        )
+        .await
+        {
+            Ok(Ok(sdu)) => {
+                println!(
+                    "AGENT: learned controller AL-MAC {}",
+                    sdu.source_al_mac_address
+                );
+                controller_al_mac = Some(sdu.source_al_mac_address);
+            }
+            Ok(Err(e)) => println!("AP autoconfig response validation failed: {e:?}"),
+            Err(_) => println!("Timed out waiting for AP autoconfig response"),
+        }
+
+        if let Some(controller_al_mac) = controller_al_mac {
+            let short_sdu = send_short_data_to_destination(
+                &mut framed_data_socket,
+                &reg_resp,
+                controller_al_mac,
+                topology_db.as_ref(),
+            )
+            .await?;
+            match timeout(
+                Duration::from_secs(10),
+                read_and_compare_data_named(
+                    &mut framed_data_socket,
+                    &short_sdu,
+                    topology_db.as_ref(),
+                    "short",
+                ),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => println!("Short traffic echo validation failed: {e:?}"),
+                Err(_) => println!("Timed out waiting for short traffic echo"),
+            }
+
+            let huge_sdu = send_huge_data_to_destination(
+                &mut framed_data_socket,
+                &reg_resp,
+                controller_al_mac,
+                topology_db.as_ref(),
+            )
+            .await?;
+            match timeout(
+                Duration::from_secs(10),
+                read_and_compare_data_named(
+                    &mut framed_data_socket,
+                    &huge_sdu,
+                    topology_db.as_ref(),
+                    "long",
+                ),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => println!("Huge traffic echo validation failed: {e:?}"),
+                Err(_) => println!("Timed out waiting for huge traffic echo"),
+            }
+        } else {
+            println!("Skipping unicast traffic; controller AL-MAC is not known yet");
+        }
+
+        message_id = if message_id == u16::MAX {
+            1
+        } else {
+            message_id + 1
+        };
+        println!("AGENT: finished traffic cycle; sleeping before next cycle");
+        sleep(Duration::from_secs(10)).await;
+    }
+}
+
 #[derive(Parser)]
 #[command(version, about, long_about = None, name = "IEEE1905 functional tests suite")]
 struct Args {
@@ -2913,7 +3074,17 @@ pub async fn run_with_config(
         .await;
     }
 
-    return t;
+    if test == 6 {
+        t = test6_ap_autoconfig_request_with_traffic_loop(
+            sap_control_path,
+            sap_data_path,
+            interface_name,
+            topology_ui,
+        )
+        .await;
+    }
+
+    t
 }
 
 pub async fn run() -> anyhow::Result<()> {

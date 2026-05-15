@@ -33,6 +33,8 @@ enum NodeRole {
     Controller,
     /// Agent role: sends AP autoconfig search every 10 seconds
     Agent,
+    /// Agent role: sends AP autoconfig search plus small and huge test traffic
+    AgentWithTraffic,
     /// Backward-compatible receiver role
     Receiver,
     /// Backward-compatible transmitter role
@@ -107,6 +109,18 @@ async fn main() -> anyhow::Result<()> {
                 &args.interface,
                 args.topology_ui,
                 5,
+                args.read,
+                args.connect,
+            )
+            .await
+        }
+        NodeRole::AgentWithTraffic => {
+            functional_tests_transmitter::run_with_config(
+                &args.control_path,
+                &args.data_path,
+                &args.interface,
+                args.topology_ui,
+                6,
                 args.read,
                 args.connect,
             )

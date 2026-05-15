@@ -86,7 +86,7 @@ fn build_ap_autoconfig_response(
 
     SDU {
         source_al_mac_address: local_al_mac,
-        destination_al_mac_address: request.destination_al_mac_address,
+        destination_al_mac_address: request.source_al_mac_address,
         is_fragment: 0,
         is_last_fragment: 1,
         fragment_id: 0,
@@ -118,8 +118,6 @@ async fn send_echoed_packet(
     topology_db: Option<&Arc<TopologyDatabase>>,
     local_al_mac: pnet::datalink::MacAddr,
 ) {
-    println!("Sending SDU packet with copied TLV chain");
-
     let sdu = SDU::parse(bytes.as_slice());
     match sdu {
         Ok(res) => {
@@ -127,13 +125,14 @@ async fn send_echoed_packet(
             let source_mac = res.1.source_al_mac_address;
             let destination_mac = res.1.destination_al_mac_address;
             let mut payload = res.1.payload;
+            let mut traffic_kind = "unknown";
 
             let cmdu_with_payload = CMDU::parse(&payload[..]);
             match cmdu_with_payload {
                 Ok(res) => {
                     let mut cmdu = res.1;
                     if cmdu.message_type == CMDUType::ApAutoConfigSearch.to_u16() {
-                        println!("Received AP autoconfig search; sending AP autoconfig response");
+                        println!("CONTROLLER: received AP autoconfig search");
                         let sdu = build_ap_autoconfig_response(
                             &SDU {
                                 source_al_mac_address: source_mac,
@@ -147,9 +146,21 @@ async fn send_echoed_packet(
                             local_al_mac,
                         );
                         let s = socket.send(bytes::Bytes::from(sdu.serialize())).await;
-                        println!("Sent AP autoconfig response: {:?}", s);
+                        match s {
+                            Ok(()) => println!("CONTROLLER: sent AP autoconfig response"),
+                            Err(e) => {
+                                println!("CONTROLLER: failed to send AP autoconfig response: {e:?}")
+                            }
+                        }
                         return;
                     }
+
+                    traffic_kind = if cmdu.payload.len() > 1000 {
+                        "long"
+                    } else {
+                        "short"
+                    };
+                    println!("CONTROLLER: received {traffic_kind} SDU");
 
                     // Workaround: enforce using Version2013 message in CMDU to get proper
                     // interpretation of vendor specific message on remote side (current
@@ -172,16 +183,14 @@ async fn send_echoed_packet(
                 payload,
             };
 
-            println!(
-                "Sending SDU: source: {:?}  destination: {:?}",
-                sdu.source_al_mac_address, sdu.destination_al_mac_address
-            );
-
             // Assertion for proper SDU delivery to transmitter
             assert_eq!(sdu.payload[0], MessageVersion::Version2013.to_u8());
 
             let s = socket.send(bytes::Bytes::from(sdu.serialize())).await;
-            println!("Sent echoed packet: {:?}", s);
+            match s {
+                Ok(()) => println!("CONTROLLER: looped back {traffic_kind} SDU"),
+                Err(e) => println!("CONTROLLER: failed to loop back SDU: {e:?}"),
+            }
         }
         Err(e) => {
             println!("Got parse error: {:?}", e);
@@ -276,7 +285,6 @@ pub async fn run_with_config(
             Some(res) => {
                 match res {
                     Ok(bytes) => {
-                        tracing::trace!("Got some bytes: [{}] <{:?}>", bytes.len(), bytes);
                         tracing::trace!("Expecting id {:?}", fragment_id_expected);
                         match SDU::parse(&bytes) {
                             Ok(tuple) => {
@@ -285,16 +293,11 @@ pub async fn run_with_config(
                                     tuple.0.len()
                                 );
                                 let fragment = tuple.1;
-                                tracing::trace!("SDU: {:?}", fragment);
                                 if fragment.is_fragment == 0 && fragment.is_last_fragment == 1 {
                                     // Single complete message
                                     let complete_sdu = fragment.clone();
 
                                     tracing::debug!("Sending single message");
-                                    tracing::trace!(
-                                        "Got complete SDU [{}] <{complete_sdu:?}>",
-                                        complete_sdu.payload.len()
-                                    );
                                     send_echoed_packet(
                                         &mut framed_data_socket,
                                         complete_sdu.serialize(),
@@ -333,8 +336,12 @@ pub async fn run_with_config(
                                 if fragment.is_last_fragment == 1 && message.clone().is_some() {
                                     let mut final_message = message.clone().unwrap();
                                     final_message.payload = assembled_payload.clone();
-                                    tracing::info!("Got reassembled SDU {final_message:?}");
+                                    tracing::info!(
+                                        "Got reassembled SDU payload_len={}",
+                                        final_message.payload.len()
+                                    );
                                     fragment_id_expected = 0;
+                                    assembled_payload.clear();
                                     send_echoed_packet(
                                         &mut framed_data_socket,
                                         final_message.serialize(),
