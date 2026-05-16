@@ -210,6 +210,7 @@ pub struct Ieee1905NodeInfo {
     pub lldp_neighbor: Option<PortId>,
     pub node_state_local: StateLocal,
     pub node_state_remote: StateRemote,
+    pub discovery_sent_until: Option<Instant>,
 }
 
 impl Ieee1905NodeInfo {
@@ -230,6 +231,7 @@ impl Ieee1905NodeInfo {
             lldp_neighbor,
             node_state_local,
             node_state_remote,
+            discovery_sent_until: None,
         }
     }
 
@@ -277,6 +279,16 @@ impl Ieee1905NodeInfo {
         }
 
         self.last_seen = Instant::now();
+    }
+
+    fn set_remote_state(&mut self, remote: StateRemote) {
+        if self.node_state_remote != remote {
+            info!(
+                "{} remote state changed: {:?} -> {remote:?}",
+                self.al_mac, self.node_state_remote,
+            );
+            self.node_state_remote = remote;
+        }
     }
 }
 
@@ -850,6 +862,7 @@ impl TopologyDatabase {
                             lldp_neighbor,
                             node_state_local: StateLocal::Idle,
                             node_state_remote: StateRemote::Idle,
+                            discovery_sent_until: None,
                         },
                         device_data,
                         link_metrics_query_cancellation_token: None,
@@ -896,6 +909,47 @@ impl TopologyDatabase {
 
         debug!("Lock released — function continues safely");
         transmission_event
+    }
+
+    pub async fn handle_discovery_sent(&self) {
+        let mut previous_states = Vec::new();
+        let expires_at = Instant::now() + Duration::from_secs(1);
+        {
+            let mut nodes = self.nodes.write().await;
+            for (al_mac, node) in nodes.iter_mut() {
+                if node.metadata.node_state_remote != StateRemote::ConvergedRemote {
+                    continue;
+                }
+                previous_states.push((*al_mac, node.metadata.node_state_remote, expires_at));
+                node.metadata.discovery_sent_until = Some(expires_at);
+                node.metadata.set_remote_state(StateRemote::Idle);
+            }
+        }
+
+        if previous_states.is_empty() {
+            return;
+        }
+
+        let nodes = self.nodes.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            let mut nodes = nodes.write().await;
+            for (al_mac, previous_state, expires_at) in previous_states {
+                let Some(node) = nodes.get_mut(&al_mac) else {
+                    continue;
+                };
+
+                if node.metadata.discovery_sent_until != Some(expires_at) {
+                    continue;
+                }
+
+                node.metadata.discovery_sent_until = None;
+                if node.metadata.node_state_remote == StateRemote::Idle {
+                    node.metadata.set_remote_state(previous_state);
+                }
+            }
+        });
     }
 
     pub async fn handle_notification_sent(&self) {
@@ -1160,8 +1214,11 @@ impl TopologyDatabase {
 mod tests {
     use crate::TopologyDatabase;
     use crate::cmdu_codec::MediaType;
-    use crate::topology_manager::{Ieee1905DeviceData, Ieee1905InterfaceData, UpdateType};
+    use crate::topology_manager::{
+        Ieee1905DeviceData, Ieee1905InterfaceData, StateRemote, UpdateType,
+    };
     use pnet::datalink::MacAddr;
+    use tokio::time::Duration;
 
     #[tokio::test]
     async fn test_remote_controller_won() {
@@ -1208,6 +1265,42 @@ mod tests {
             db.find_device_by_port(MacAddr::new(0, 0, 0, 0, 0, 4))
                 .await
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_window_does_not_refresh_last_seen() {
+        let db = TopologyDatabase::new(MacAddr::new(0, 0, 0, 0, 0, 0), "en1".to_string());
+
+        let device = Ieee1905DeviceData::new(
+            MacAddr::new(0, 0, 0, 0, 0, 1),
+            MacAddr::new(0, 0, 0, 0, 0, 2),
+            None,
+            *db.local_mac.read().await,
+            None,
+            None,
+        );
+
+        db.update_ieee1905_topology(device.clone(), UpdateType::QueryReceived, None, None, None)
+            .await;
+        db.update_ieee1905_topology(device.clone(), UpdateType::ResponseSent, None, None, None)
+            .await;
+
+        let before_window = db.get_last_seen(device.al_mac).await.unwrap();
+
+        db.handle_discovery_sent().await;
+
+        let during_window = db.get_device(device.al_mac).await.unwrap();
+        assert_eq!(during_window.metadata.last_seen, before_window);
+        assert_eq!(during_window.metadata.node_state_remote, StateRemote::Idle);
+
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+
+        let after_window = db.get_device(device.al_mac).await.unwrap();
+        assert_eq!(after_window.metadata.last_seen, before_window);
+        assert_eq!(
+            after_window.metadata.node_state_remote,
+            StateRemote::ConvergedRemote
         );
     }
 }

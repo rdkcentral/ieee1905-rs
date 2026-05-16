@@ -93,6 +93,9 @@ pub async fn cmdu_topology_discovery_transmission_worker(
             }
             Ok(()) => {
                 info!(interface = %interface, message_id = message_id, "CMDU Topology Discovery sent successfully");
+                TopologyDatabase::get_instance(local_al_mac_address, &interface)
+                    .handle_discovery_sent()
+                    .await;
             }
         }
     }
