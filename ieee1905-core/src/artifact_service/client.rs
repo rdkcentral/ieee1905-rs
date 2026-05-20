@@ -1,71 +1,96 @@
 use crate::artifact_service::common::{
-    ArtifactConfig, ArtifactFilter, ArtifactInfo, is_file_name_sanitized,
+    format_mac_as_file_prefix, is_file_name_sanitized, ArtifactConfig, ArtifactFilter, ArtifactInfo,
 };
-use crate::interface_manager::InterfaceInfo;
+use crate::interface_manager::{
+    call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64, InterfaceInfo,
+};
 use crate::next_task_id;
 use futures::StreamExt;
+use pnet::util::MacAddr;
+use std::fmt::Debug;
 use std::net::Ipv6Addr;
 use std::ops::Add;
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
+use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, trace, warn};
 
 ////////////////////////////////////////////////////////////////////////////////
-pub struct ArtifactClient {
+#[derive(Debug, Clone)]
+pub struct ArtifactClientFactory {
+    runtime: Handle,
     if_info: InterfaceInfo,
-    instance: Option<ArtifactClientInstance>,
+    local_ip_address: Ipv6Addr,
 }
 
-impl ArtifactClient {
-    pub fn new(if_info: InterfaceInfo) -> anyhow::Result<Self> {
+impl ArtifactClientFactory {
+    ////////////////////////////////////////////////////////////////////////////////
+    pub async fn new(if_info: InterfaceInfo) -> anyhow::Result<Self> {
+        let config = ArtifactConfig::get();
+        let runtime = Handle::try_current()?;
+        let local_ip_address = convert_mac_to_eui64(if_info.mac);
+        call_rt_new_address_v6(if_info.if_index, local_ip_address).await?;
+
+        if let Err(e) = tokio::fs::remove_dir_all(&config.rx_folder).await {
+            error!(%e, "failed to remove rx folder: {}", config.rx_folder.display());
+        }
+
         Ok(Self {
+            runtime,
             if_info,
-            instance: Default::default(),
+            local_ip_address,
         })
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    #[instrument(skip_all, "artifact_client")]
-    pub async fn start(&mut self, ip_address: Ipv6Addr) -> anyhow::Result<()> {
-        debug!(%ip_address, "starting");
+    pub fn start(
+        &self,
+        remote_mac_address: MacAddr,
+        remote_ip_address: Ipv6Addr,
+    ) -> anyhow::Result<ArtifactClient> {
+        ArtifactClient::new(self.if_info.clone(), remote_mac_address, remote_ip_address)
+    }
+}
 
-        if let Some(instance) = self.instance.take()
-            && instance.ip_address == ip_address
-        {
-            self.instance = Some(instance);
-            info!("already started");
-            return Ok(());
-        }
-
-        info!(%ip_address, "started");
-        self.instance = Some(ArtifactClientInstance::new(
-            self.if_info.clone(),
-            ip_address,
-        )?);
-        Ok(())
+impl Drop for ArtifactClientFactory {
+    ////////////////////////////////////////////////////////////////////////////////
+    fn drop(&mut self) {
+        self.runtime.spawn(call_rt_remove_address_v6(
+            self.if_info.if_index,
+            self.local_ip_address,
+        ));
     }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-pub struct ArtifactClientInstance {
-    ip_address: Ipv6Addr,
+pub struct ArtifactClient {
+    remote_ip_address: Ipv6Addr,
     _join_set: JoinSet<()>,
 }
 
-impl ArtifactClientInstance {
-    fn new(if_info: InterfaceInfo, ip_address: Ipv6Addr) -> anyhow::Result<Self> {
-        debug!("creating client");
+impl ArtifactClient {
+    ////////////////////////////////////////////////////////////////////////////////
+    fn new(
+        if_info: InterfaceInfo,
+        remote_mac_address: MacAddr,
+        remote_ip_address: Ipv6Addr,
+    ) -> anyhow::Result<Self> {
+        debug!(mac = %remote_mac_address, ip = %remote_ip_address, "creating client");
 
         let client = reqwest::Client::builder()
             .interface(&if_info.if_name)
             .build()?;
 
-        let actor = ArtifactClientInstanceActor {
+        let base_url = format!("http://[{remote_ip_address}]:{}", ArtifactConfig::PORT);
+        info!(mac = %remote_mac_address, base_url, "client created");
+
+        let actor = ArtifactClientActor {
             if_info,
-            base_url: format!("http://[{}]:{}", ip_address, ArtifactConfig::PORT),
+            remote_mac_address,
+            base_url,
             client,
         };
 
@@ -74,44 +99,120 @@ impl ArtifactClientInstance {
 
         Ok(Self {
             _join_set: join_set,
-            ip_address,
+            remote_ip_address,
         })
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    pub fn remote_address(&self) -> Ipv6Addr {
+        self.remote_ip_address
+    }
+}
+
+impl Debug for ArtifactClient {
+    ////////////////////////////////////////////////////////////////////////////////
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ArtifactClient({})", self.remote_ip_address)
     }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-struct ArtifactClientInstanceActor {
+struct ArtifactClientActor {
     if_info: InterfaceInfo,
+    remote_mac_address: MacAddr,
     base_url: String,
     client: reqwest::Client,
 }
 
-impl ArtifactClientInstanceActor {
-    const SYNC_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+impl ArtifactClientActor {
+    const UPLOAD_SYNC_INTERVAL: Duration = Duration::from_mins(1);
+    const DOWNLOAD_SYNC_INTERVAL: Duration = Duration::from_mins(10);
 
     ////////////////////////////////////////////////////////////////////////////////
-    #[instrument(skip_all, "artifact_client/worker", fields(task = next_task_id()))]
     async fn worker(self) {
         let config = ArtifactConfig::get();
 
-        debug!("cleanup");
-        if let Err(e) = tokio::fs::remove_dir_all(&config.rx_folder).await {
-            error!(%e, "failed to remove rx folder: {}", config.rx_folder.display());
-        }
-        if let Err(e) = tokio::fs::remove_dir_all(&config.tx_folder).await {
-            error!(%e, "failed to remove tx folder: {}", config.tx_folder.display());
-        }
+        futures::join!(
+            self.upload_artifacts_worker(config),
+            self.download_artifacts_worker(config),
+        );
+    }
 
+    ////////////////////////////////////////////////////////////////////////////////
+    #[instrument(skip_all, "artifact_client/upload", fields(task = next_task_id()))]
+    async fn upload_artifacts_worker(&self, config: &ArtifactConfig) {
         loop {
-            debug!("sync started");
-            self.sync_files(&config).await;
-            debug!("sync finished");
-            tokio::time::sleep(Self::SYNC_INTERVAL).await;
+            let instant = Instant::now();
+            info!(remote = %self.remote_mac_address, "upload sync started");
+
+            for artifact_type in config.c2s_artifact_types.iter() {
+                self.upload_artifacts_by_type(config, artifact_type).await;
+            }
+
+            info!("upload sync finished in {:?}", instant.elapsed());
+            tokio::time::sleep(Self::UPLOAD_SYNC_INTERVAL).await;
         }
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    async fn sync_files(&self, config: &ArtifactConfig) {
+    async fn upload_artifacts_by_type(&self, config: &ArtifactConfig, artifact_type: &str) {
+        let in_flight_dir = config.tx_folder.join(artifact_type);
+        let filter_mac = format_mac_as_file_prefix(self.remote_mac_address);
+
+        let Ok(mut tx_files) = tokio::fs::read_dir(&in_flight_dir).await else {
+            return warn!("failed to read tx folder: {in_flight_dir:?}");
+        };
+
+        while let Ok(Some(entry)) = tx_files.next_entry().await {
+            let path = entry.path();
+            debug!("uploading artifact: {path:?}");
+
+            let file_name = entry.file_name();
+            let Some(file_name) = file_name.to_str() else {
+                warn!("invalid file name: {file_name:?}");
+                continue;
+            };
+
+            if !file_name.starts_with(&filter_mac) {
+                continue;
+            }
+
+            if let Err(e) = self.put_artifact(artifact_type, file_name, &path).await {
+                error!(%e, "failed to send artifact: {path:?}");
+
+                let mut storage = config.get_tx_failure_storage(artifact_type);
+                if let Err(e) = storage.store(&path).await {
+                    error!(%e, "failed to move file {path:?}");
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
+            } else {
+                info!("artifact sent successfully: {}", path.display());
+
+                let mut storage = config.get_tx_archive_storage(artifact_type);
+                if let Err(e) = storage.store(&path).await {
+                    error!(%e, "failed to archive file {path:?}");
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
+            }
+        }
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    #[instrument(skip_all, "artifact_client/download", fields(task = next_task_id()))]
+    async fn download_artifacts_worker(&self, config: &ArtifactConfig) {
+        loop {
+            let instant = Instant::now();
+            info!(remote = %self.remote_mac_address, "download sync started");
+
+            self.download_artifacts(config).await;
+            info!("download sync finished in {:?}", instant.elapsed());
+
+            tokio::time::sleep(Self::DOWNLOAD_SYNC_INTERVAL).await;
+        }
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    async fn download_artifacts(&self, config: &ArtifactConfig) {
         debug!("fetching artifact list");
         let artifacts = match self.get_artifact_list().await {
             Ok(e) => e,
@@ -167,45 +268,7 @@ impl ArtifactClientInstanceActor {
                 continue;
             }
 
-            info!("artifact successfully downloaded");
-        }
-
-        for artifact_type in config.c2s_artifact_types.iter() {
-            let in_flight_dir = config.tx_folder.join(artifact_type);
-
-            let Ok(mut tx_files) = tokio::fs::read_dir(&in_flight_dir).await else {
-                warn!("failed to read tx folder: {in_flight_dir:?}");
-                continue;
-            };
-
-            while let Ok(Some(entry)) = tx_files.next_entry().await {
-                let path = entry.path();
-                debug!("uploading artifact: {path:?}");
-
-                let file_name = entry.file_name();
-                let Some(file_name) = file_name.to_str() else {
-                    warn!("invalid file name: {file_name:?}");
-                    continue;
-                };
-
-                if let Err(e) = self.put_artifact(artifact_type, file_name, &path).await {
-                    error!(%e, "failed to send artifact: {path:?}");
-
-                    let mut storage = config.get_tx_failure_storage(artifact_type);
-                    if let Err(e) = storage.store(&path).await {
-                        error!(%e, "failed to move file {path:?}");
-                        let _ = tokio::fs::remove_file(&path).await;
-                    }
-                } else {
-                    info!("artifact sent successfully: {}", path.display());
-
-                    let mut storage = config.get_tx_archive_storage(artifact_type);
-                    if let Err(e) = storage.store(&path).await {
-                        error!(%e, "failed to archive file {path:?}");
-                        let _ = tokio::fs::remove_file(&path).await;
-                    }
-                }
-            }
+            info!("artifact successfully downloaded: {artifact_path:?}");
         }
     }
 

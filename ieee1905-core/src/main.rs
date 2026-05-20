@@ -37,7 +37,7 @@ use ieee1905::topology_manager::*;
 use ieee1905::{CMDUObserver, next_task_id};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use ieee1905::artifact_service::client::ArtifactClient;
+use ieee1905::artifact_service::client::ArtifactClientFactory;
 use ieee1905::artifact_service::server::ArtifactServer;
 use sd_notify::NotifyState;
 use std::num::NonZeroUsize;
@@ -151,7 +151,6 @@ async fn main() -> anyhow::Result<()> {
     let chassis_id = al_mac;
 
     let mut _artifact_server = None;
-    let mut _artifact_client = None;
     match cli.artifact_sync.as_ref() {
         Some(ArtifactSync::Server) => {
             tracing::info!("ArtifactsSync server is enabled");
@@ -161,7 +160,8 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(ArtifactSync::Client) => {
             tracing::info!("ArtifactsSync client is enabled");
-            _artifact_client = Some(Mutex::new(ArtifactClient::new(if_info.clone())?));
+            let factory = ArtifactClientFactory::new(if_info.clone()).await?;
+            topology_db.set_artifact_client_factory(factory);
         }
         None => tracing::info!("ArtifactsSync is disabled"),
     }

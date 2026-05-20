@@ -19,19 +19,36 @@
 
 #![deny(warnings)]
 #![allow(clippy::too_many_arguments)]
+// Internal modules
+use crate::linux::if_link::RtnlLinkStats64;
+use crate::lldpdu::PortId;
+use crate::{
+    artifact_service::client::ArtifactClient,
+    cmdu_codec::{
+        CMDUFragmentation, DeviceIdentificationType, Ieee1905ProfileVersion, LinkMetricQuery,
+        MediaType, MediaTypeSpecialInfo, Profile2ApCapability, SupportedFreqBand,
+    },
+};
+use crate::{artifact_service::client::ArtifactClientFactory, interface_manager::get_interfaces};
+use crate::{
+    cmdu::IEEE1905Neighbor, interface_manager::get_forwarding_interface_mac, next_task_id,
+};
 // External crates
 use crossterm::{
     event::{self, KeyCode},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use indexmap::IndexMap;
+use neli::consts::rtnl::Iff;
+use parking_lot::Mutex;
 use pnet::datalink::MacAddr;
 use ratatui::{
-    Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Row, Table},
+    Terminal,
 };
 use tokio::{
     sync::RwLock,
@@ -389,6 +406,7 @@ impl From<&Ieee1905NodeInternal> for Ieee1905Node {
 pub struct Ieee1905NodeInternal {
     pub metadata: Ieee1905NodeInfo,
     pub device_data: Ieee1905DeviceData,
+    artifact_client: Option<ArtifactClient>,
     link_metrics_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
 }
 
@@ -398,6 +416,7 @@ impl Ieee1905NodeInternal {
         Self {
             metadata,
             device_data,
+            artifact_client: None,
             link_metrics_query_cancellation_token: None,
         }
     }
@@ -430,6 +449,45 @@ impl Ieee1905NodeInternal {
             cancellation_token,
         ))
     }
+
+    fn update_artifact_client(
+        &mut self,
+        remote_address: Option<Ipv6Addr>,
+        client_factory: Option<ArtifactClientFactory>,
+    ) {
+        if let Some(client) = self.artifact_client.as_ref()
+            && remote_address != Some(client.remote_address())
+        {
+            info!(
+                al_mac = %self.device_data.al_mac,
+                address = %client.remote_address(),
+                "artifact client stopped",
+            );
+            self.artifact_client = None;
+        }
+
+        if self.artifact_client.is_none()
+            && let Some(remote_address) = remote_address
+            && let Some(client_factory) = client_factory
+        {
+            match client_factory.start(self.device_data.al_mac, remote_address) {
+                Ok(e) => {
+                    info!(
+                        al_mac = %self.device_data.al_mac,
+                        address = %remote_address,
+                        "artifact client started",
+                    );
+                    self.artifact_client = Some(e);
+                }
+                Err(e) => error!(
+                    al_mac = %self.device_data.al_mac,
+                    address = %remote_address,
+                    %e,
+                    "failed to start artifact client",
+                ),
+            }
+        }
+    }
 }
 
 static TOPOLOGY_DATABASE: OnceLock<Arc<TopologyDatabase>> = OnceLock::new();
@@ -442,6 +500,7 @@ pub struct TopologyDatabase {
     pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905LocalInterface>>>>,
     pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905NodeInternal>>>,
     pub local_role: Arc<RwLock<Option<Role>>>,
+    artifact_client_factory: Mutex<Option<ArtifactClientFactory>>,
     artifact_server_ip_address: Mutex<Option<Ipv6Addr>>,
 }
 
@@ -462,6 +521,7 @@ impl TopologyDatabase {
             local_interface_list: Arc::new(RwLock::new(None)),
             nodes: Arc::new(RwLock::new(IndexMap::new())),
             local_role: Arc::new(RwLock::new(None)),
+            artifact_client_factory: Default::default(),
             artifact_server_ip_address: Default::default(),
         });
         tokio::spawn(this.clone().refresh_topology_worker());
@@ -484,11 +544,19 @@ impl TopologyDatabase {
         *mac_guard
     }
 
+    pub fn get_artifact_client_factory(&self) -> Option<ArtifactClientFactory> {
+        self.artifact_client_factory.lock().clone()
+    }
+
+    pub fn set_artifact_client_factory(&self, factory: ArtifactClientFactory) {
+        *self.artifact_client_factory.lock() = Some(factory);
+    }
+
     pub fn get_artifact_server_ip_address(&self) -> Option<Ipv6Addr> {
         *self.artifact_server_ip_address.lock()
     }
 
-    pub fn set_artifact_server_address(&self, address: Option<Ipv6Addr>) {
+    pub fn set_artifact_server_ip_address(&self, address: Option<Ipv6Addr>) {
         *self.artifact_server_ip_address.lock() = address;
     }
 
@@ -783,6 +851,11 @@ impl TopologyDatabase {
                                     "Comparing local_interface_list"
                                 );
 
+                                node.update_artifact_client(
+                                    device_data.artifact_server_address,
+                                    self.get_artifact_client_factory(),
+                                );
+
                                 if node.device_data.has_changed(&device_data) {
                                     debug!("Device data changed local_interface_list)");
 
@@ -866,6 +939,7 @@ impl TopologyDatabase {
                         },
                         device_data,
                         link_metrics_query_cancellation_token: None,
+                        artifact_client: None,
                     };
 
                     let node_was_created;
@@ -1204,9 +1278,9 @@ impl TopologyDatabase {
 
 #[cfg(test)]
 mod tests {
-    use crate::TopologyDatabase;
     use crate::cmdu_codec::MediaType;
     use crate::topology_manager::{Ieee1905DeviceData, Ieee1905InterfaceData, UpdateType};
+    use crate::TopologyDatabase;
     use pnet::datalink::MacAddr;
 
     #[tokio::test]
