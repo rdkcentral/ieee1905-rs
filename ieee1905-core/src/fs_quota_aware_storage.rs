@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
     time::SystemTime,
 };
-
+use std::cmp::Reverse;
 use anyhow::bail;
 use tracing::{error, info};
 
@@ -55,7 +55,7 @@ impl FsQuotaAwareStorage {
             bail!("failed to enforce quota: {e}");
         }
 
-        let target_file = self.dir.join(&source_file_name);
+        let target_file = self.dir.join(source_file_name);
         info!(src = ?source_file, dst = ?target_file, "moving file");
         tokio::fs::rename(source_file, target_file).await?;
 
@@ -69,7 +69,7 @@ impl FsQuotaAwareStorage {
 
         let mut current_files = self.collect_files().await?;
         let mut current_size = current_files.iter().map(|e| e.size).sum::<u64>();
-        current_files.sort_by(|a, b| b.modified.cmp(&a.modified));
+        current_files.sort_by_key(|e| Reverse(e.modified));
 
         while (current_size > max_total_size || current_files.len() > max_files_count)
             && let Some(file_to_remove) = current_files.pop()

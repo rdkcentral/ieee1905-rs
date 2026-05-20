@@ -4,12 +4,12 @@ mod put_artifact;
 
 use crate::artifact_service::common::ArtifactConfig;
 use crate::interface_manager::{
-    InterfaceInfo, call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64,
+    call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64, InterfaceInfo,
 };
-use crate::{TopologyDatabase, next_task_id};
-use axum::Router;
+use crate::{next_task_id, TopologyDatabase};
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, put};
+use axum::Router;
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -112,7 +112,7 @@ impl ArtifactServerInstance {
             ip_address = %ip_address,
             "server successfully started",
         );
-        topo_db.set_artifact_server_address(Some(ip_address));
+        topo_db.set_artifact_server_ip_address(Some(ip_address));
 
         Ok(ArtifactServerInstance {
             topo_db,
@@ -126,7 +126,7 @@ impl ArtifactServerInstance {
 
 impl Drop for ArtifactServerInstance {
     fn drop(&mut self) {
-        self.topo_db.set_artifact_server_address(None);
+        self.topo_db.set_artifact_server_ip_address(None);
         self.runtime.spawn(call_rt_remove_address_v6(
             self.if_info.if_index,
             self.ip_address,

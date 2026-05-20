@@ -9,8 +9,9 @@ use std::time::UNIX_EPOCH;
 use tracing::warn;
 
 impl ArtifactServerInstanceActor {
-    pub async fn get_artifact_list(Query(query): Query<ArtifactFilter>) -> Response {
+    pub async fn get_artifact_list(Query(mut query): Query<ArtifactFilter>) -> Response {
         let config = ArtifactConfig::get();
+        query.mac.make_ascii_lowercase();
 
         let mut file_groups = HashMap::<String, Vec<ArtifactInfo>>::new();
         for artifact_type in config.s2c_artifact_types.iter() {
