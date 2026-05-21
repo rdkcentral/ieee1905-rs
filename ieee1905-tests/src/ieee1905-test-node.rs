@@ -33,12 +33,12 @@ enum NodeRole {
     Controller,
     /// Agent role: sends AP autoconfig search every 10 seconds
     Agent,
-    /// Agent role: sends AP autoconfig search plus small and huge test traffic
-    AgentWithTraffic,
-    /// Backward-compatible receiver role
-    Receiver,
-    /// Backward-compatible transmitter role
-    Transmitter,
+    /// Rogue agent role: sends malformed AP autoconfig search with invalid searched role
+    #[value(name = "rogue_agent")]
+    RogueAgent,
+    /// Fast rogue agent role: sends malformed AP autoconfig search three times per second
+    #[value(name = "rogue-agent-fast")]
+    RogueAgentFast,
 }
 
 #[derive(Parser)]
@@ -63,18 +63,6 @@ struct Args {
     /// Ethernet interface to be shown by the topology text UI
     #[arg(long, short, default_value_t = String::from("eth0"))]
     interface: String,
-
-    /// Transmitter test number to run. Agent role always uses test 5.
-    #[clap(short = 't', long, default_value_t = 4)]
-    test_num: u8,
-
-    /// Transmitter connect/register timeout in 0.1s units (10 = 1 second)
-    #[clap(short = 'n', long, default_value_t = 100)]
-    connect: u8,
-
-    /// Transmitter read/send timeout in 0.1s units (10 = 1 second)
-    #[clap(short = 'r', long, default_value_t = 100)]
-    read: u8,
 }
 
 #[tokio::main]
@@ -92,16 +80,6 @@ async fn main() -> anyhow::Result<()> {
             )
             .await
         }
-        NodeRole::Receiver => {
-            functional_tests_receiver::run_with_config(
-                &args.control_path,
-                &args.data_path,
-                &args.interface,
-                args.topology_ui,
-                ServiceType::EasyMeshAgent,
-            )
-            .await
-        }
         NodeRole::Agent => {
             functional_tests_transmitter::run_with_config(
                 &args.control_path,
@@ -109,32 +87,32 @@ async fn main() -> anyhow::Result<()> {
                 &args.interface,
                 args.topology_ui,
                 5,
-                args.read,
-                args.connect,
+                100,
+                100,
             )
             .await
         }
-        NodeRole::AgentWithTraffic => {
+        NodeRole::RogueAgent => {
             functional_tests_transmitter::run_with_config(
                 &args.control_path,
                 &args.data_path,
                 &args.interface,
                 args.topology_ui,
-                6,
-                args.read,
-                args.connect,
+                7,
+                100,
+                100,
             )
             .await
         }
-        NodeRole::Transmitter => {
+        NodeRole::RogueAgentFast => {
             functional_tests_transmitter::run_with_config(
                 &args.control_path,
                 &args.data_path,
                 &args.interface,
                 args.topology_ui,
-                args.test_num,
-                args.read,
-                args.connect,
+                8,
+                100,
+                100,
             )
             .await
         }

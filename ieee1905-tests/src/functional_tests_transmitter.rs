@@ -25,6 +25,7 @@ use ieee1905::registration_codec::{
     AlServiceRegistrationRequest, AlServiceRegistrationResponse, ServiceOperation, ServiceType,
 };
 use ieee1905::sdu_codec::SDU;
+use ieee1905::tlv_cmdu_codec::TLVTrait;
 use ieee1905::topology_manager::{Ieee1905DeviceData, TopologyDatabase, UpdateType};
 use pnet::datalink::*;
 use std::process::exit;
@@ -74,6 +75,14 @@ fn prepare_ap_autoconfig_request_sdu(
     r: &AlServiceRegistrationResponse,
     message_id: u16,
 ) -> Vec<u8> {
+    prepare_ap_autoconfig_request_sdu_with_searched_role(r, message_id, 0x00)
+}
+
+fn prepare_ap_autoconfig_request_sdu_with_searched_role(
+    r: &AlServiceRegistrationResponse,
+    message_id: u16,
+    searched_role: u8,
+) -> Vec<u8> {
     let src_mac_addr = r.al_mac_address_local;
     let mut payload = Vec::new();
     payload.extend(
@@ -83,7 +92,19 @@ fn prepare_ap_autoconfig_request_sdu(
         )
         .serialize(),
     );
-    payload.extend(build_tlv(IEEE1905TLVType::SearchedRole, Some(vec![0x00])).serialize());
+    payload.extend(build_tlv(IEEE1905TLVType::SearchedRole, Some(vec![searched_role])).serialize());
+    payload.extend(
+        build_tlv(
+            IEEE1905TLVType::SupportedService,
+            Some(
+                SupportedService {
+                    services: vec![SupportedServiceType::Agent],
+                }
+                .serialize(),
+            ),
+        )
+        .serialize(),
+    );
     payload.extend(build_tlv(IEEE1905TLVType::EndOfMessage, None).serialize());
 
     let cmdu = CMDU {
@@ -108,20 +129,39 @@ fn prepare_ap_autoconfig_request_sdu(
 }
 
 fn is_ap_autoconfig_response(sdu: &SDU) -> bool {
-    let Ok((_, cmdu)) = CMDU::parse(&sdu.payload) else {
-        return false;
-    };
+    validate_ap_autoconfig_response(sdu).is_ok()
+}
+
+fn validate_ap_autoconfig_response(sdu: &SDU) -> Result<CMDU, &'static str> {
+    let cmdu = CMDU::parse(&sdu.payload)
+        .map(|(_, cmdu)| cmdu)
+        .map_err(|_| "failed to parse CMDU")?;
 
     if cmdu.message_type != CMDUType::ApAutoConfigResponse.to_u16() {
-        return false;
+        return Err("unexpected CMDU message type");
     }
 
-    let Ok(tlvs) = cmdu.get_tlvs() else {
-        return false;
-    };
+    let tlvs = cmdu.get_tlvs().map_err(|_| "failed to parse TLVs")?;
 
-    tlvs.iter()
-        .any(|tlv| tlv.tlv_type == IEEE1905TLVType::SupportedFreqBand.to_u8())
+    let Some(supported_role) = SupportedRole::find(&tlvs) else {
+        return Err("missing or invalid SupportedRole TLV");
+    };
+    if supported_role.role != 0x00 {
+        return Err("SupportedRole TLV is not registrar");
+    }
+
+    let Some(supported_service) = SupportedService::find(&tlvs) else {
+        return Err("missing or invalid SupportedService TLV");
+    };
+    if !supported_service
+        .services
+        .iter()
+        .any(|service| matches!(service, SupportedServiceType::Controller))
+    {
+        return Err("SupportedService TLV does not contain Controller");
+    }
+
+    Ok(cmdu)
 }
 
 fn _prepare_test_packet_with_payload(
@@ -1919,11 +1959,9 @@ async fn test1(
     interface_name: &str,
     topology_ui: bool,
 ) -> anyhow::Result<()> {
-    // Modify this filter for your tracing during run time
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("trace")); //add 'tokio=trace' to debug the runtime
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
-    // To show logs in stdout
-    let fmt_layer = fmt::layer().with_target(true).with_level(true);
+    let fmt_layer = fmt::layer().with_target(false).with_level(true);
 
     tracing_subscriber::registry()
         .with(filter)
@@ -2200,8 +2238,33 @@ async fn send_ap_autoconfig_request(
     message_id: u16,
     topology_db: Option<&Arc<TopologyDatabase>>,
 ) -> anyhow::Result<Vec<u8>> {
+    send_ap_autoconfig_request_with_searched_role(
+        framed_data_socket,
+        reg_resp,
+        message_id,
+        0x00,
+        topology_db,
+    )
+    .await
+}
+
+async fn send_ap_autoconfig_request_with_searched_role(
+    framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
+    reg_resp: &AlServiceRegistrationResponse,
+    message_id: u16,
+    searched_role: u8,
+    topology_db: Option<&Arc<TopologyDatabase>>,
+) -> anyhow::Result<Vec<u8>> {
+    let sdu_ap_autoconfig_request =
+        prepare_ap_autoconfig_request_sdu_with_searched_role(reg_resp, message_id, searched_role);
+    tracing::info!(
+        source = %reg_resp.al_mac_address_local,
+        destination = %IEEE1905_CONTROL_ADDRESS,
+        message_id,
+        searched_role,
+        "AGENT: sending AP autoconfig search"
+    );
     println!("AGENT: sending AP autoconfig search");
-    let sdu_ap_autoconfig_request = prepare_ap_autoconfig_request_sdu(reg_resp, message_id);
     update_observed_topology_from_bytes(topology_db, &sdu_ap_autoconfig_request).await;
 
     framed_data_socket
@@ -2209,6 +2272,13 @@ async fn send_ap_autoconfig_request(
         .await
         .map_err(|err| anyhow::anyhow!("Sending AP autoconfig request failed: {err}"))?;
 
+    tracing::info!(
+        source = %reg_resp.al_mac_address_local,
+        destination = %IEEE1905_CONTROL_ADDRESS,
+        message_id,
+        searched_role,
+        "AGENT: sent AP autoconfig search"
+    );
     println!("AGENT: sent AP autoconfig search");
     Ok(sdu_ap_autoconfig_request)
 }
@@ -2217,7 +2287,7 @@ async fn read_data(
     framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
     topology_db: Option<&Arc<TopologyDatabase>>,
 ) -> anyhow::Result<SDU> {
-    println!("Waiting for any data");
+    tracing::debug!("AGENT: waiting for data");
 
     let mut assembled_payload = Vec::new();
     let mut fragment_id_expected = 0;
@@ -2309,15 +2379,39 @@ async fn read_ap_autoconfig_response_sdu(
     framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
     topology_db: Option<&Arc<TopologyDatabase>>,
 ) -> anyhow::Result<SDU> {
-    let sdu = read_data(framed_data_socket, topology_db).await?;
+    loop {
+        let sdu = read_data(framed_data_socket, topology_db).await?;
 
-    if is_ap_autoconfig_response(&sdu) {
-        println!("AGENT: received AP autoconfig response");
-        Ok(sdu)
-    } else {
-        Err(anyhow::anyhow!(
-            "Received data, but it was not an AP autoconfig response"
-        ))
+        let message_type = CMDU::parse(&sdu.payload)
+            .map(|(_, cmdu)| (cmdu.message_type, cmdu.message_id))
+            .map_or_else(
+                |_| (String::from("unparseable"), String::from("unknown")),
+                |(message_type, message_id)| (message_type.to_string(), message_id.to_string()),
+            );
+
+        match validate_ap_autoconfig_response(&sdu) {
+            Ok(cmdu) => {
+                tracing::info!(
+                    source = %sdu.source_al_mac_address,
+                    destination = %sdu.destination_al_mac_address,
+                    message_type = cmdu.message_type,
+                    message_id = cmdu.message_id,
+                    "AGENT: AP autoconfig response validation succeeded"
+                );
+                println!("AGENT: received AP autoconfig response");
+                return Ok(sdu);
+            }
+            Err(reason) => {
+                tracing::debug!(
+                    source = %sdu.source_al_mac_address,
+                    destination = %sdu.destination_al_mac_address,
+                    message_type = %message_type.0,
+                    message_id = %message_type.1,
+                    reason,
+                    "AGENT: ignored non AP autoconfig response"
+                );
+            }
+        }
     }
 }
 
@@ -2888,6 +2982,93 @@ async fn test5_ap_autoconfig_request_loop(
     }
 }
 
+async fn test7_rogue_agent_malformed_searched_role_loop(
+    sap_control_path: &str,
+    sap_data_path: &str,
+    interface_name: &str,
+    topology_ui: bool,
+) -> anyhow::Result<()> {
+    println!("Starting test7 rogue agent");
+
+    let (mut framed_control_socket, mut framed_data_socket) =
+        connect_with_retry(sap_control_path, sap_data_path).await;
+
+    let reg_resp = register(&mut framed_control_socket).await?;
+    let topology_db = topology_ui.then(|| {
+        let db = TopologyDatabase::get_instance(reg_resp.al_mac_address_local, interface_name);
+        tokio::task::spawn(db.clone().start_topology_cli());
+        db
+    });
+
+    let mut message_id = 1_u16;
+    loop {
+        send_ap_autoconfig_request_with_searched_role(
+            &mut framed_data_socket,
+            &reg_resp,
+            message_id,
+            0x03,
+            topology_db.as_ref(),
+        )
+        .await?;
+
+        match timeout(
+            Duration::from_secs(5),
+            read_ap_autoconfig_response(&mut framed_data_socket, topology_db.as_ref()),
+        )
+        .await
+        {
+            Ok(Ok(())) => println!("ROGUE_AGENT: unexpectedly received AP autoconfig response"),
+            Ok(Err(e)) => tracing::debug!(error = ?e, "ROGUE_AGENT: response validation failed"),
+            Err(_) => println!("ROGUE_AGENT: no AP autoconfig response received as expected"),
+        }
+
+        message_id = if message_id == u16::MAX {
+            1
+        } else {
+            message_id + 1
+        };
+        sleep(Duration::from_secs(10)).await;
+    }
+}
+
+async fn test8_rogue_agent_fast_malformed_searched_role_loop(
+    sap_control_path: &str,
+    sap_data_path: &str,
+    interface_name: &str,
+    topology_ui: bool,
+) -> anyhow::Result<()> {
+    println!("Starting test8 rogue agent fast");
+
+    let (mut framed_control_socket, mut framed_data_socket) =
+        connect_with_retry(sap_control_path, sap_data_path).await;
+
+    let reg_resp = register(&mut framed_control_socket).await?;
+    let topology_db = topology_ui.then(|| {
+        let db = TopologyDatabase::get_instance(reg_resp.al_mac_address_local, interface_name);
+        tokio::task::spawn(db.clone().start_topology_cli());
+        db
+    });
+
+    let mut message_id = 1_u16;
+    loop {
+        send_ap_autoconfig_request_with_searched_role(
+            &mut framed_data_socket,
+            &reg_resp,
+            message_id,
+            0x03,
+            topology_db.as_ref(),
+        )
+        .await?;
+
+        message_id = if message_id == u16::MAX {
+            1
+        } else {
+            message_id + 1
+        };
+        sleep(Duration::from_millis(333)).await;
+    }
+}
+
 async fn test6_ap_autoconfig_request_with_traffic_loop(
     sap_control_path: &str,
     sap_data_path: &str,
@@ -3076,6 +3257,26 @@ pub async fn run_with_config(
 
     if test == 6 {
         t = test6_ap_autoconfig_request_with_traffic_loop(
+            sap_control_path,
+            sap_data_path,
+            interface_name,
+            topology_ui,
+        )
+        .await;
+    }
+
+    if test == 7 {
+        t = test7_rogue_agent_malformed_searched_role_loop(
+            sap_control_path,
+            sap_data_path,
+            interface_name,
+            topology_ui,
+        )
+        .await;
+    }
+
+    if test == 8 {
+        t = test8_rogue_agent_fast_malformed_searched_role_loop(
             sap_control_path,
             sap_data_path,
             interface_name,

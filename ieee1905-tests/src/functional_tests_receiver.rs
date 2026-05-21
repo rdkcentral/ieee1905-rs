@@ -18,11 +18,15 @@
 */
 use futures::{SinkExt, StreamExt};
 use ieee1905::cmdu::CMDU;
-use ieee1905::cmdu_codec::{CMDUType, IEEE1905TLVType, MessageVersion, SupportedFreqBand};
+use ieee1905::cmdu_codec::{
+    AlMacAddress, CMDUType, IEEE1905TLVType, MessageVersion, SearchedRole, SupportedRole,
+    SupportedService, SupportedServiceType,
+};
 use ieee1905::registration_codec::{
     AlServiceRegistrationRequest, AlServiceRegistrationResponse, ServiceOperation, ServiceType,
 };
 use ieee1905::sdu_codec::SDU;
+use ieee1905::tlv_cmdu_codec::TLVTrait;
 use ieee1905::topology_manager::{Ieee1905DeviceData, TopologyDatabase, UpdateType};
 use std::process::exit;
 use std::sync::Arc;
@@ -59,16 +63,34 @@ fn build_tlv(tlv_type: IEEE1905TLVType, value: Option<Vec<u8>>) -> ieee1905::cmd
 }
 
 fn build_ap_autoconfig_response(
-    request: &SDU,
+    requester_al_mac: pnet::datalink::MacAddr,
     request_cmdu: &CMDU,
     local_al_mac: pnet::datalink::MacAddr,
 ) -> SDU {
-    let supported_freq_band = SupportedFreqBand::Band_802_11_5;
+    tracing::debug!(
+        source = %local_al_mac,
+        destination = %requester_al_mac,
+        message_id = request_cmdu.message_id,
+        "CONTROLLER: building AP autoconfig response"
+    );
+
     let mut payload = Vec::new();
     payload.extend(
         build_tlv(
-            IEEE1905TLVType::SupportedFreqBand,
-            Some(vec![supported_freq_band.to_u8()]),
+            IEEE1905TLVType::SupportedRole,
+            Some(SupportedRole { role: 0x00 }.serialize()),
+        )
+        .serialize(),
+    );
+    payload.extend(
+        build_tlv(
+            IEEE1905TLVType::SupportedService,
+            Some(
+                SupportedService {
+                    services: vec![SupportedServiceType::Controller],
+                }
+                .serialize(),
+            ),
         )
         .serialize(),
     );
@@ -86,12 +108,45 @@ fn build_ap_autoconfig_response(
 
     SDU {
         source_al_mac_address: local_al_mac,
-        destination_al_mac_address: request.source_al_mac_address,
+        destination_al_mac_address: requester_al_mac,
         is_fragment: 0,
         is_last_fragment: 1,
         fragment_id: 0,
         payload: response_cmdu.serialize(),
     }
+}
+
+fn validate_ap_autoconfig_search(cmdu: &CMDU) -> Result<pnet::datalink::MacAddr, &'static str> {
+    if cmdu.message_type != CMDUType::ApAutoConfigSearch.to_u16() {
+        return Err("unexpected CMDU message type");
+    }
+
+    let tlvs = cmdu.get_tlvs().map_err(|_| "failed to parse TLVs")?;
+
+    let Some(al_mac) = AlMacAddress::find(&tlvs) else {
+        return Err("missing or invalid AlMacAddress TLV");
+    };
+    let requester_al_mac = al_mac.al_mac_address;
+
+    let Some(searched_role) = SearchedRole::find(&tlvs) else {
+        return Err("missing or invalid SearchedRole TLV");
+    };
+    if searched_role.role != 0x00 {
+        return Err("SearchedRole TLV is not registrar");
+    }
+
+    let Some(supported_service) = SupportedService::find(&tlvs) else {
+        return Err("missing or invalid SupportedService TLV");
+    };
+    if !supported_service
+        .services
+        .iter()
+        .any(|service| matches!(service, SupportedServiceType::Agent))
+    {
+        return Err("SupportedService TLV does not contain Agent");
+    }
+
+    Ok(requester_al_mac)
 }
 
 async fn connect_unix_socket_with_retry(path: &str, socket_name: &str) -> UnixStream {
@@ -124,72 +179,92 @@ async fn send_echoed_packet(
             update_observed_topology(topology_db, &res.1).await;
             let source_mac = res.1.source_al_mac_address;
             let destination_mac = res.1.destination_al_mac_address;
-            let mut payload = res.1.payload;
-            let mut traffic_kind = "unknown";
+            let payload = res.1.payload;
 
             let cmdu_with_payload = CMDU::parse(&payload[..]);
             match cmdu_with_payload {
                 Ok(res) => {
-                    let mut cmdu = res.1;
+                    let cmdu = res.1;
+                    tracing::debug!(
+                        source = %source_mac,
+                        destination = %destination_mac,
+                        message_type = cmdu.message_type,
+                        message_id = cmdu.message_id,
+                        payload_len = cmdu.payload.len(),
+                        "CONTROLLER: received CMDU"
+                    );
+
                     if cmdu.message_type == CMDUType::ApAutoConfigSearch.to_u16() {
-                        println!("CONTROLLER: received AP autoconfig search");
-                        let sdu = build_ap_autoconfig_response(
-                            &SDU {
-                                source_al_mac_address: source_mac,
-                                destination_al_mac_address: destination_mac,
-                                is_fragment: 0,
-                                is_last_fragment: 1,
-                                fragment_id: 0,
-                                payload,
-                            },
-                            &cmdu,
-                            local_al_mac,
+                        let requester_al_mac = match validate_ap_autoconfig_search(&cmdu) {
+                            Ok(requester_al_mac) => requester_al_mac,
+                            Err(reason) => {
+                                tracing::warn!(
+                                    source = %source_mac,
+                                    destination = %destination_mac,
+                                    message_id = cmdu.message_id,
+                                    reason,
+                                    "CONTROLLER: ignored malformed AP autoconfig search"
+                                );
+                                println!(
+                                    "CONTROLLER: ignored malformed AP autoconfig search: {reason}"
+                                );
+                                return;
+                            }
+                        };
+
+                        tracing::info!(
+                            source = %source_mac,
+                            destination = %destination_mac,
+                            requester_al_mac = %requester_al_mac,
+                            message_id = cmdu.message_id,
+                            "CONTROLLER: AP autoconfig search validation succeeded"
                         );
+                        println!("CONTROLLER: received AP autoconfig search");
+                        let sdu =
+                            build_ap_autoconfig_response(requester_al_mac, &cmdu, local_al_mac);
                         let s = socket.send(bytes::Bytes::from(sdu.serialize())).await;
                         match s {
-                            Ok(()) => println!("CONTROLLER: sent AP autoconfig response"),
+                            Ok(()) => {
+                                tracing::info!(
+                                    source = %local_al_mac,
+                                    destination = %requester_al_mac,
+                                    message_id = cmdu.message_id,
+                                    "CONTROLLER: sent AP autoconfig response"
+                                );
+                                println!("CONTROLLER: sent AP autoconfig response");
+                            }
                             Err(e) => {
+                                tracing::error!(
+                                    source = %local_al_mac,
+                                    destination = %requester_al_mac,
+                                    message_id = cmdu.message_id,
+                                    error = ?e,
+                                    "CONTROLLER: failed to send AP autoconfig response"
+                                );
                                 println!("CONTROLLER: failed to send AP autoconfig response: {e:?}")
                             }
                         }
                         return;
                     }
 
-                    traffic_kind = if cmdu.payload.len() > 1000 {
-                        "long"
-                    } else {
-                        "short"
-                    };
-                    println!("CONTROLLER: received {traffic_kind} SDU");
-
-                    // Workaround: enforce using Version2013 message in CMDU to get proper
-                    // interpretation of vendor specific message on remote side (current
-                    // implementation of CMDU handler needs this to invoke handle_sdu_from_cmdu_reception)
-                    cmdu.message_version = MessageVersion::Version2013.to_u8();
-
-                    payload = cmdu.serialize();
+                    tracing::debug!(
+                        source = %source_mac,
+                        destination = %destination_mac,
+                        message_type = cmdu.message_type,
+                        message_id = cmdu.message_id,
+                        "CONTROLLER: ignored non AP autoconfig CMDU"
+                    );
+                    return;
                 }
                 Err(e) => {
-                    println!("Got parse error: {:?}", e);
+                    tracing::debug!(
+                        source = %source_mac,
+                        destination = %destination_mac,
+                        error = ?e,
+                        "CONTROLLER: ignored SDU with unparseable CMDU"
+                    );
+                    return;
                 }
-            }
-
-            let sdu = SDU {
-                source_al_mac_address: source_mac,
-                destination_al_mac_address: destination_mac,
-                is_fragment: 0,
-                is_last_fragment: 1,
-                fragment_id: 0,
-                payload,
-            };
-
-            // Assertion for proper SDU delivery to transmitter
-            assert_eq!(sdu.payload[0], MessageVersion::Version2013.to_u8());
-
-            let s = socket.send(bytes::Bytes::from(sdu.serialize())).await;
-            match s {
-                Ok(()) => println!("CONTROLLER: looped back {traffic_kind} SDU"),
-                Err(e) => println!("CONTROLLER: failed to loop back SDU: {e:?}"),
             }
         }
         Err(e) => {
@@ -205,11 +280,9 @@ pub async fn run_with_config(
     topology_ui: bool,
     service_type: ServiceType,
 ) -> anyhow::Result<()> {
-    // Modify this filter for your tracing during run time
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("trace")); //add 'tokio=trace' to debug the runtime
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
-    // To show logs in stdout
-    let fmt_layer = fmt::layer().with_target(true).with_level(true);
+    let fmt_layer = fmt::layer().with_target(false).with_level(true);
 
     tracing_subscriber::registry()
         .with(filter)
