@@ -37,18 +37,18 @@ use crate::{
 use crossterm::{
     event::{self, KeyCode},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use indexmap::IndexMap;
 use neli::consts::rtnl::Iff;
 use parking_lot::Mutex;
 use pnet::datalink::MacAddr;
 use ratatui::{
+    Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Row, Table},
-    Terminal,
 };
 use std::net::Ipv6Addr;
 use std::ops::Deref;
@@ -59,7 +59,7 @@ use tokio::task::JoinSet;
 use tokio::{
     sync::RwLock,
     task::yield_now,
-    time::{interval, Duration, Instant},
+    time::{Duration, Instant, interval},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument};
@@ -1227,9 +1227,9 @@ impl TopologyDatabase {
 
 #[cfg(test)]
 mod tests {
+    use crate::TopologyDatabase;
     use crate::cmdu_codec::MediaType;
     use crate::topology_manager::{Ieee1905DeviceData, Ieee1905InterfaceData, UpdateType};
-    use crate::TopologyDatabase;
     use pnet::datalink::MacAddr;
 
     #[tokio::test]
