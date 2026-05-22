@@ -436,7 +436,7 @@ impl Ieee1905NodeInternal {
     fn update_artifact_client(
         &mut self,
         remote_address: Option<Ipv6Addr>,
-        client_factory: Option<ArtifactClientFactory>,
+        client_factory: Option<&ArtifactClientFactory>,
     ) {
         if let Some(client) = self.artifact_client.as_ref()
             && remote_address != Some(client.remote_address())
@@ -529,10 +529,6 @@ impl TopologyDatabase {
     pub async fn get_forwarding_interface_mac(&self) -> MacAddr {
         let mac_guard = self.local_mac.read().await;
         *mac_guard
-    }
-
-    pub fn get_artifact_client_factory(&self) -> Option<ArtifactClientFactory> {
-        self.artifact_client_factory.lock().clone()
     }
 
     pub fn set_artifact_client_factory(&self, factory: ArtifactClientFactory) {
@@ -840,7 +836,7 @@ impl TopologyDatabase {
 
                                 node.update_artifact_client(
                                     device_data.artifact_server_address,
-                                    self.get_artifact_client_factory(),
+                                    self.artifact_client_factory.lock().as_ref(),
                                 );
 
                                 if node.device_data.has_changed(&device_data) {
