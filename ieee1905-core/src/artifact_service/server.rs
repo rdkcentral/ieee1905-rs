@@ -126,6 +126,12 @@ impl ArtifactServerInstance {
 
 impl Drop for ArtifactServerInstance {
     fn drop(&mut self) {
+        debug!(
+            if_name = self.if_info.if_name,
+            mac = %self.if_info.mac,
+            ip_address = %self.ip_address,
+            "clearing ip address to the interface",
+        );
         self.topo_db.set_artifact_server_ip_address(None);
         self.runtime.spawn(call_rt_remove_address_v6(
             self.if_info.if_index,
