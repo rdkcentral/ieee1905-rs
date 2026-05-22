@@ -1,8 +1,8 @@
 use crate::artifact_service::common::{
-    format_mac_as_file_prefix, is_file_name_sanitized, ArtifactConfig, ArtifactFilter, ArtifactInfo,
+    ArtifactConfig, ArtifactFilter, ArtifactInfo, format_mac_as_file_prefix, is_file_name_sanitized,
 };
 use crate::interface_manager::{
-    call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64, InterfaceInfo,
+    InterfaceInfo, call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64,
 };
 use crate::next_task_id;
 use futures::StreamExt;
@@ -160,7 +160,7 @@ impl ArtifactClientActor {
         let filter_mac = format_mac_as_file_prefix(self.remote_mac_address);
 
         let Ok(mut tx_files) = tokio::fs::read_dir(&in_flight_dir).await else {
-            return warn!("failed to read tx folder: {in_flight_dir:?}");
+            return debug!("tx folder is not available: {in_flight_dir:?}");
         };
 
         while let Ok(Some(entry)) = tx_files.next_entry().await {
@@ -223,7 +223,7 @@ impl ArtifactClientActor {
         for artifact in artifacts {
             debug!("downloading artifact: {artifact:#?}");
 
-            if config.s2c_artifact_types.contains(&artifact.kind.as_str()) {
+            if !config.s2c_artifact_types.contains(&artifact.kind.as_str()) {
                 warn!("skipping unsupported group {}", artifact.kind);
                 continue;
             }
@@ -246,7 +246,7 @@ impl ArtifactClientActor {
                 continue;
             }
 
-            if let Ok(metadata) = artifact_path.metadata()
+            if let Ok(metadata) = tokio::fs::metadata(&artifact_path).await
                 && let Ok(modified) = metadata.modified()
                 && let Ok(modified) = modified.duration_since(UNIX_EPOCH)
                 && artifact.ts_secs == modified.as_secs()
@@ -276,7 +276,7 @@ impl ArtifactClientActor {
     async fn get_artifact_list(&self) -> anyhow::Result<Vec<ArtifactInfo>> {
         let url = format!("{}/artifacts", self.base_url);
         let filter = ArtifactFilter {
-            mac: self.if_info.mac.to_string().replace(':', "-"),
+            mac: format_mac_as_file_prefix(self.if_info.mac),
         };
 
         let response = self.client.get(url).query(&filter).send().await?;
@@ -332,7 +332,8 @@ impl ArtifactClientActor {
             .post(url)
             .body(reqwest::Body::wrap_stream(stream))
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
 
         Ok(())
     }

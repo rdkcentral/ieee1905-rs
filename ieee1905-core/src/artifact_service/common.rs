@@ -96,3 +96,40 @@ pub fn is_file_name_sanitized(name: impl AsRef<Path>) -> bool {
         (Some(Component::Normal(_)), None),
     )
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Tests
+////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_file_name_sanitized() {
+        assert!(is_file_name_sanitized("artifact.bin"));
+        assert!(is_file_name_sanitized("logs.tar.gz"));
+        assert!(is_file_name_sanitized("with-dashes_and.dots"));
+        assert!(is_file_name_sanitized("binaries"));
+
+        assert!(!is_file_name_sanitized(""));
+        assert!(!is_file_name_sanitized("."));
+        assert!(!is_file_name_sanitized(".."));
+        assert!(!is_file_name_sanitized("/etc/passwd"));
+        assert!(!is_file_name_sanitized("a/b"));
+        assert!(!is_file_name_sanitized("../secret"));
+        assert!(!is_file_name_sanitized("foo/../bar"));
+        assert!(!is_file_name_sanitized("dir/sub/file"));
+    }
+
+    #[test]
+    fn test_format_mac_as_file_prefix_uses_lowercase_dashes() {
+        let mac = MacAddr(0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff);
+        assert_eq!(format_mac_as_file_prefix(mac), "aa-bb-cc-dd-ee-ff");
+    }
+
+    #[test]
+    fn test_format_mac_as_file_prefix_zero_pads_each_octet() {
+        let mac = MacAddr(0x01, 0x02, 0x03, 0x00, 0x0a, 0x0f);
+        assert_eq!(format_mac_as_file_prefix(mac), "01-02-03-00-0a-0f");
+    }
+}

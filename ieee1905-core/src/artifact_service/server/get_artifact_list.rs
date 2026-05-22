@@ -4,7 +4,6 @@ use axum::Json;
 use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use std::collections::HashMap;
 use std::time::UNIX_EPOCH;
 use tracing::warn;
 
@@ -13,21 +12,15 @@ impl ArtifactServerInstanceActor {
         let config = ArtifactConfig::get();
         query.mac.make_ascii_lowercase();
 
-        let mut file_groups = HashMap::<String, Vec<ArtifactInfo>>::new();
+        let mut files = Vec::new();
         for artifact_type in config.s2c_artifact_types.iter() {
-            let files = file_groups.entry(artifact_type.to_string()).or_default();
-
             let tx_folder = config.tx_folder.join(artifact_type);
-            let Ok(tx_files) = tx_folder.read_dir() else {
+            let Ok(mut tx_files) = tokio::fs::read_dir(&tx_folder).await else {
                 warn!("failed to read tx folder: {}", tx_folder.display());
                 continue;
             };
 
-            for entry in tx_files {
-                let Ok(entry) = entry else {
-                    continue;
-                };
-
+            while let Ok(Some(entry)) = tx_files.next_entry().await {
                 let file_name = entry.file_name();
                 let Some(file_name) = file_name.to_str() else {
                     warn!("invalid file name: {}", file_name.display());
@@ -38,7 +31,7 @@ impl ArtifactServerInstanceActor {
                     continue;
                 }
 
-                let Ok(metadata) = entry.metadata() else {
+                let Ok(metadata) = entry.metadata().await else {
                     warn!("invalid metadata: {file_name}");
                     continue;
                 };
@@ -54,6 +47,6 @@ impl ArtifactServerInstanceActor {
             }
         }
 
-        (StatusCode::OK, Json(file_groups)).into_response()
+        (StatusCode::OK, Json(files)).into_response()
     }
 }
