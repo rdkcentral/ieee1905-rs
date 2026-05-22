@@ -4,12 +4,12 @@ mod put_artifact;
 
 use crate::artifact_service::common::ArtifactConfig;
 use crate::interface_manager::{
-    call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64, InterfaceInfo,
+    InterfaceInfo, call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64,
 };
-use crate::{next_task_id, TopologyDatabase};
+use crate::{TopologyDatabase, next_task_id};
+use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, put};
-use axum::Router;
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
 use tokio::net::TcpListener;

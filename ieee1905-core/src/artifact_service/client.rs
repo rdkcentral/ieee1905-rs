@@ -187,6 +187,7 @@ impl ArtifactClientActor {
             };
 
             if !file_name.starts_with(&filter_mac) {
+                debug!("skipping file, different target mac: {file_name:?}");
                 continue;
             }
 
@@ -334,7 +335,7 @@ impl ArtifactClientActor {
         let stream = ReaderStream::new(file);
 
         self.client
-            .post(url)
+            .put(url)
             .body(reqwest::Body::wrap_stream(stream))
             .send()
             .await?
