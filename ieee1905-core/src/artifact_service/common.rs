@@ -72,15 +72,6 @@ pub struct ArtifactFilter {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ArtifactInfo {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub name: String,
-    pub ts_secs: u64,
-}
-
-////////////////////////////////////////////////////////////////////////////////
 pub fn format_mac_as_file_prefix(mac: MacAddr) -> String {
     format!(
         "{:02x}-{:02x}-{:02x}-{:02x}-{:02x}-{:02x}",

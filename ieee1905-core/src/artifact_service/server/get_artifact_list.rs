@@ -1,10 +1,10 @@
-use crate::artifact_service::common::{ArtifactConfig, ArtifactFilter, ArtifactInfo};
+use crate::artifact_service::common::{ArtifactConfig, ArtifactFilter};
 use crate::artifact_service::server::ArtifactServerInstanceActor;
 use axum::Json;
 use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use std::time::UNIX_EPOCH;
+use std::collections::HashMap;
 use tracing::warn;
 
 impl ArtifactServerInstanceActor {
@@ -12,8 +12,10 @@ impl ArtifactServerInstanceActor {
         let config = ArtifactConfig::get();
         query.mac.make_ascii_lowercase();
 
-        let mut files = Vec::new();
+        let mut file_groups = HashMap::<String, Vec<String>>::new();
         for artifact_type in config.s2c_artifact_types.iter() {
+            let files = file_groups.entry(artifact_type.to_string()).or_default();
+
             let tx_folder = config.tx_folder.join(artifact_type);
             let Ok(mut tx_files) = tokio::fs::read_dir(&tx_folder).await else {
                 warn!("failed to read tx folder: {}", tx_folder.display());
@@ -31,22 +33,10 @@ impl ArtifactServerInstanceActor {
                     continue;
                 }
 
-                let Ok(metadata) = entry.metadata().await else {
-                    warn!("invalid metadata: {file_name}");
-                    continue;
-                };
-
-                let modified = metadata.modified().ok();
-                let modified = modified.and_then(|e| e.duration_since(UNIX_EPOCH).ok());
-
-                files.push(ArtifactInfo {
-                    kind: artifact_type.to_string(),
-                    name: file_name.to_string(),
-                    ts_secs: modified.map_or(0, |e| e.as_secs()),
-                });
+                files.push(file_name.to_string());
             }
         }
 
-        (StatusCode::OK, Json(files)).into_response()
+        (StatusCode::OK, Json(file_groups)).into_response()
     }
 }
