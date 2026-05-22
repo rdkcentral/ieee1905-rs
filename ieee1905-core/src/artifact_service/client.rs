@@ -19,7 +19,7 @@ use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, trace, warn};
 
 ////////////////////////////////////////////////////////////////////////////////
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ArtifactClientFactory {
     runtime: Handle,
     if_info: InterfaceInfo,
@@ -32,6 +32,13 @@ impl ArtifactClientFactory {
         let config = ArtifactConfig::get();
         let runtime = Handle::try_current()?;
         let local_ip_address = convert_mac_to_eui64(if_info.mac);
+
+        debug!(
+            if_name = if_info.if_name,
+            mac = %if_info.mac,
+            ip_address = %local_ip_address,
+            "assigning ip address to the interface",
+        );
         call_rt_new_address_v6(if_info.if_index, local_ip_address).await?;
 
         if let Err(e) = tokio::fs::remove_dir_all(&config.rx_folder).await {
@@ -58,6 +65,12 @@ impl ArtifactClientFactory {
 impl Drop for ArtifactClientFactory {
     ////////////////////////////////////////////////////////////////////////////////
     fn drop(&mut self) {
+        debug!(
+            if_name = self.if_info.if_name,
+            mac = %self.if_info.mac,
+            ip_address = %self.local_ip_address,
+            "clearing ip address to the interface",
+        );
         self.runtime.spawn(call_rt_remove_address_v6(
             self.if_info.if_index,
             self.local_ip_address,
