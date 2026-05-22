@@ -1,5 +1,5 @@
 use crate::artifact_service::common::{
-    ArtifactConfig, ArtifactFilter, ArtifactInfo, format_mac_as_file_prefix, is_file_name_sanitized,
+    ArtifactConfig, ArtifactFilter, format_mac_as_file_prefix, is_file_name_sanitized,
 };
 use crate::interface_manager::{
     InterfaceInfo, call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64,
@@ -7,11 +7,11 @@ use crate::interface_manager::{
 use crate::next_task_id;
 use futures::StreamExt;
 use pnet::util::MacAddr;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::net::Ipv6Addr;
-use std::ops::Add;
 use std::path::Path;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -219,49 +219,45 @@ impl ArtifactClientActor {
             Err(e) => return error!(%e, "failed to fetch artifact list"),
         };
 
+        let artifacts = artifacts
+            .iter()
+            .flat_map(|(k, v)| v.iter().map(move |e| (k, e)))
+            .collect::<Vec<_>>();
+
         trace!("all available artifacts: {artifacts:#?}");
-        for artifact in artifacts {
-            debug!("downloading artifact: {artifact:#?}");
+        for (kind, name) in artifacts {
+            debug!("downloading artifact: {kind}/{name}");
 
-            if !config.s2c_artifact_types.contains(&artifact.kind.as_str()) {
-                warn!("skipping unsupported group {}", artifact.kind);
+            if !config.s2c_artifact_types.contains(&kind.as_str()) {
+                warn!("skipping unsupported group {kind}");
                 continue;
             }
 
-            if !is_file_name_sanitized(&artifact.kind) {
-                warn!("invalid file group {}", artifact.kind);
+            if !is_file_name_sanitized(&kind) {
+                warn!("invalid file group {kind}");
                 continue;
             }
 
-            if !is_file_name_sanitized(&artifact.name) {
-                warn!("invalid file name {}", artifact.name);
+            if !is_file_name_sanitized(&name) {
+                warn!("invalid file name {name}");
                 continue;
             }
 
-            let artifact_dir = config.rx_folder.join(&artifact.kind);
-            let artifact_path = artifact_dir.join(&artifact.name);
+            let artifact_dir = config.rx_folder.join(&kind);
+            let artifact_path = artifact_dir.join(&name);
 
             if let Err(e) = tokio::fs::create_dir_all(&artifact_dir).await {
                 error!(%e, "failed to create artifact dir: {artifact_dir:?}");
                 continue;
             }
 
-            if let Ok(metadata) = tokio::fs::metadata(&artifact_path).await
-                && let Ok(modified) = metadata.modified()
-                && let Ok(modified) = modified.duration_since(UNIX_EPOCH)
-                && artifact.ts_secs == modified.as_secs()
-            {
-                info!("skipping up-to-date artifact: {artifact_path:?}");
-                continue;
-            }
-
-            if let Err(e) = self.get_artifact(&artifact, &artifact_path).await {
-                error!(%e, "failed to fetch an artifact: {artifact:#?}");
+            if let Err(e) = self.get_artifact(&kind, &name, &artifact_path).await {
+                error!(%e, "failed to fetch an artifact: {kind}/{name}");
                 let _ = tokio::fs::remove_file(&artifact_path).await;
                 continue;
             }
 
-            let mut storage = config.get_rx_archive_storage(&artifact.kind);
+            let mut storage = config.get_rx_archive_storage(&kind);
             if let Err(e) = storage.store(&artifact_path).await {
                 error!(%e, "failed to archive an artifact {artifact_path:?}");
                 let _ = tokio::fs::remove_file(&artifact_path).await;
@@ -273,7 +269,7 @@ impl ArtifactClientActor {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    async fn get_artifact_list(&self) -> anyhow::Result<Vec<ArtifactInfo>> {
+    async fn get_artifact_list(&self) -> anyhow::Result<HashMap<String, Vec<String>>> {
         let url = format!("{}/artifacts", self.base_url);
         let filter = ArtifactFilter {
             mac: format_mac_as_file_prefix(self.if_info.mac),
@@ -281,19 +277,18 @@ impl ArtifactClientActor {
 
         let response = self.client.get(url).query(&filter).send().await?;
         let response = response.error_for_status()?;
-        Ok(response.json::<Vec<ArtifactInfo>>().await?)
+        Ok(response.json().await?)
     }
 
     ////////////////////////////////////////////////////////////////////////////////
     async fn get_artifact(
         &self,
-        artifact: &ArtifactInfo,
+        artifact_kind: &str,
+        artifact_name: &str,
         target: impl AsRef<Path>,
     ) -> anyhow::Result<()> {
-        let url = format!(
-            "{}/artifacts/{}/{}",
-            self.base_url, artifact.kind, artifact.name,
-        );
+        let base_url = &self.base_url;
+        let url = format!("{base_url}/artifacts/{artifact_kind}/{artifact_name}");
 
         let response = self.client.get(url).send().await?;
         let response = response.error_for_status()?;
@@ -305,10 +300,7 @@ impl ArtifactClientActor {
         while let Some(chunk) = input.next().await {
             output.write_all_buf(&mut chunk?).await?;
         }
-
-        let ts = SystemTime::UNIX_EPOCH.add(Duration::from_secs(artifact.ts_secs));
-        let file = output.into_inner().into_std().await;
-        file.set_modified(ts)?;
+        output.flush().await?;
 
         Ok(())
     }
