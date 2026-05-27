@@ -381,7 +381,7 @@ impl Ipv6Entry {
         vec.extend(&self.mac_address.octets());
         vec.extend(&self.link_local_address.octets());
         vec.extend((self.other_addresses.len() as u8).to_be_bytes());
-        vec.extend(self.other_addresses.iter().map(|e| e.serialize()).flatten());
+        vec.extend(self.other_addresses.iter().flat_map(|e| e.serialize()));
         vec
     }
 }
@@ -405,7 +405,7 @@ impl TLVTrait for Ipv6 {
     fn serialize(&self) -> Vec<u8> {
         let mut vec = Vec::new();
         vec.extend((self.entries.len() as u8).to_be_bytes());
-        vec.extend(self.entries.iter().map(|e| e.serialize()).flatten());
+        vec.extend(self.entries.iter().flat_map(|e| e.serialize()));
         vec
     }
 }
