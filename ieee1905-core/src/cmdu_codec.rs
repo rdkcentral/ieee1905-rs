@@ -417,25 +417,32 @@ impl IPv4AddressType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum IPv6AddressType {
-    Unknown = 0,
-    DHCP = 1,
-    Static = 2,
-    SLAAC = 3,
+    Unknown,
+    DHCP,
+    Static,
+    SLAAC,
+    Reserved(u8),
 }
 
 impl IPv6AddressType {
-    pub fn from_u8(value: u8) -> Option<Self> {
+    pub fn from_u8(value: u8) -> Self {
         match value {
-            0 => Some(Self::Unknown),
-            1 => Some(Self::DHCP),
-            2 => Some(Self::Static),
-            3 => Some(Self::SLAAC),
-            _ => None,
+            0 => Self::Unknown,
+            1 => Self::DHCP,
+            2 => Self::Static,
+            3 => Self::SLAAC,
+            _ => Self::Reserved(value),
         }
     }
 
     pub fn to_u8(self) -> u8 {
-        self as u8
+        match self {
+            IPv6AddressType::Unknown => 0,
+            IPv6AddressType::DHCP => 1,
+            IPv6AddressType::Static => 2,
+            IPv6AddressType::SLAAC => 3,
+            IPv6AddressType::Reserved(e) => e,
+        }
     }
 }
 
@@ -447,67 +454,88 @@ pub struct Ipv6AddressEntry {
     pub ipv6_originator: Ipv6Addr,
 }
 
+impl Ipv6AddressEntry {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, address_type) = be_u8(input)?;
+        let (input, ipv6_address) = take_ipv6_addr(input)?;
+        let (input, ipv6_originator) = take_ipv6_addr(input)?;
+
+        let this = Self {
+            address_type: IPv6AddressType::from_u8(address_type),
+            ipv6_address,
+            ipv6_originator,
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::with_capacity(33);
+        vec.extend(self.address_type.to_u8().to_be_bytes());
+        vec.extend(self.ipv6_address.octets());
+        vec.extend(self.ipv6_originator.octets());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct Ipv6Entry {
+    pub mac_address: MacAddr,
+    pub link_local_address: Ipv6Addr,
+    pub other_addresses: Vec<Ipv6AddressEntry>,
+}
+
+impl Ipv6Entry {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, mac_address) = take_mac_addr(input)?;
+        let (input, link_local_address) = take_ipv6_addr(input)?;
+        let (input, other_count) = be_u8(input)?;
+        let (input, other) = count(Ipv6AddressEntry::parse, other_count as usize).parse(input)?;
+
+        let this = Self {
+            mac_address,
+            link_local_address,
+            other_addresses: other,
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::with_capacity(23 + self.other_addresses.len() * 33);
+        vec.extend(&self.mac_address.octets());
+        vec.extend(&self.link_local_address.octets());
+        vec.extend((self.other_addresses.len() as u8).to_be_bytes());
+        vec.extend(self.other_addresses.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq)]
 pub struct Ipv6 {
-    pub al_mac_address: MacAddr,
-    pub link_local_ipv6_address: Ipv6Addr,
-    pub additional_ipv6_addresses: Vec<Ipv6AddressEntry>,
+    pub entries: Vec<Ipv6Entry>,
 }
 
 impl TLVTrait for Ipv6 {
     const TYPE: IEEE1905TLVType = IEEE1905TLVType::Ipv6;
 
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, al_mac_address) = take_mac_addr(input)?;
-        let (input, link_local_ipv6_address) = take_ipv6_addr(input)?;
-        let (input, num_ipv6_addresses) = be_u8(input)?;
-        let (input, additional_ipv6_addresses) = count(
-            |input| {
-                let (input, address_type_raw) = be_u8(input)?;
-                let address_type = IPv6AddressType::from_u8(address_type_raw)
-                    .ok_or_else(|| NomErr::Failure(Error::new(input, ErrorKind::Alt)))?;
-                let (input, ipv6_address) = take_ipv6_addr(input)?;
-                let (input, ipv6_originator) = take_ipv6_addr(input)?;
+        let (input, entries_count) = be_u8(input)?;
+        let (input, entries) = count(Ipv6Entry::parse, entries_count as usize).parse(input)?;
 
-                Ok((
-                    input,
-                    Ipv6AddressEntry {
-                        address_type,
-                        ipv6_address,
-                        ipv6_originator,
-                    },
-                ))
-            },
-            num_ipv6_addresses as usize,
-        )
-        .parse(input)?;
-
-        Ok((
-            input,
-            Self {
-                al_mac_address,
-                link_local_ipv6_address,
-                additional_ipv6_addresses,
-            },
-        ))
+        Ok((input, Self { entries }))
     }
 
     fn serialize(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(23 + self.additional_ipv6_addresses.len() * 33);
-
-        out.extend_from_slice(&self.al_mac_address.octets());
-        out.extend_from_slice(&self.link_local_ipv6_address.octets());
-        out.push(self.additional_ipv6_addresses.len() as u8);
-        for entry in &self.additional_ipv6_addresses {
-            out.push(entry.address_type.to_u8());
-            out.extend_from_slice(&entry.ipv6_address.octets());
-            out.extend_from_slice(&entry.ipv6_originator.octets());
-        }
-
-        out
+        let mut vec = Vec::new();
+        vec.extend((self.entries.len() as u8).to_be_bytes());
+        vec.extend(self.entries.iter().flat_map(|e| e.serialize()));
+        vec
     }
 }
+
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct LocalInterface {
@@ -3577,24 +3605,22 @@ pub mod tests {
     // Verify parsing and serializing IPv6 TLV payload (AL MAC + link-local IPv6 + count)
     #[test]
     fn test_ipv6_parse_and_serialize() {
-        let al_mac = MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02);
-        let ipv6 = Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0042, 0xc0ff, 0xfea8, 0x6402);
-        let additional_ipv6_addresses = vec![Ipv6AddressEntry {
-            address_type: IPv6AddressType::SLAAC,
-            ipv6_address: Ipv6Addr::new(0x2001, 0x0db8, 0, 1, 0, 0, 0, 1),
-            ipv6_originator: Ipv6Addr::new(0x2001, 0x0db8, 0, 2, 0, 0, 0, 1),
-        }];
-
-        let ipv6_tlv = Ipv6 {
-            al_mac_address: al_mac,
-            link_local_ipv6_address: ipv6,
-            additional_ipv6_addresses,
+        let original = Ipv6 {
+            entries: vec![Ipv6Entry {
+                mac_address: MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02),
+                link_local_address: Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0042, 0xc0ff, 0xfea8, 0x6402),
+                other_addresses: vec![Ipv6AddressEntry {
+                    address_type: IPv6AddressType::SLAAC,
+                    ipv6_address: Ipv6Addr::new(0x2001, 0x0db8, 0, 1, 0, 0, 0, 1),
+                    ipv6_originator: Ipv6Addr::new(0x2001, 0x0db8, 0, 2, 0, 0, 0, 1),
+                }],
+            }],
         };
 
-        let serialized = ipv6_tlv.serialize();
+        let serialized = original.serialize();
         let parsed = Ipv6::parse(&serialized).unwrap().1;
 
-        assert_eq!(parsed, ipv6_tlv);
+        assert_eq!(parsed, original);
         assert_eq!(parsed.serialize(), serialized);
     }
 
@@ -3602,10 +3628,8 @@ pub mod tests {
     #[test]
     fn test_ipv6_parse_not_enough_data() {
         let mut data = Vec::new();
-        data.extend_from_slice(&MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02).octets());
-        data.extend_from_slice(
-            &Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0042, 0xc0ff, 0xfea8, 0x6402).octets(),
-        );
+        data.extend(MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02).octets());
+        data.extend(Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0042, 0xc0ff, 0xfea8, 0x6402).octets());
         // Missing 1 byte: number of additional IPv6 addresses
         assert!(Ipv6::parse(&data).is_err());
     }
