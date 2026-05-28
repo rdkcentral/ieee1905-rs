@@ -33,7 +33,7 @@ use nom::combinator::{all_consuming, cond};
 use nom::multi::{count, length_count, many0};
 use pnet::datalink::MacAddr;
 use std::fmt::{Debug, Display, Formatter};
-use std::net::Ipv6Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 // Internal modules
 use crate::cmdu_reassembler::CmduReassemblyError;
 use crate::tlv_cmdu_codec::{TLV, TLVTrait};
@@ -57,6 +57,8 @@ pub enum CMDUType {
     ApAutoConfigWCS,
     GenericPhyQuery,
     GenericPhyResponse,
+    HigherLayerQuery,
+    HigherLayerResponse,
     ApCapabilityQuery,
     ApCapabilityReport,
     Unknown(u16), // To handle unknown or unsupported CMDU types
@@ -77,6 +79,8 @@ impl CMDUType {
             0x0009 => CMDUType::ApAutoConfigWCS,
             0x0011 => CMDUType::GenericPhyQuery,
             0x0012 => CMDUType::GenericPhyResponse,
+            0x000D => CMDUType::HigherLayerQuery,
+            0x000E => CMDUType::HigherLayerResponse,
             0x8001 => CMDUType::ApCapabilityQuery,
             0x8002 => CMDUType::ApCapabilityReport,
             _ => CMDUType::Unknown(value), // For unrecognized CMDU types
@@ -97,6 +101,8 @@ impl CMDUType {
             CMDUType::ApAutoConfigWCS => 0x0009,
             CMDUType::GenericPhyQuery => 0x0011,
             CMDUType::GenericPhyResponse => 0x0012,
+            CMDUType::HigherLayerQuery => 0x000D,
+            CMDUType::HigherLayerResponse => 0x000E,
             CMDUType::ApCapabilityQuery => 0x8001,
             CMDUType::ApCapabilityReport => 0x8002,
             CMDUType::Unknown(value) => value, // Return the unknown value as-is
@@ -157,8 +163,10 @@ pub enum IEEE1905TLVType {
     SupportedRole,
     GenericPhyDeviceInformation,
     SupportedFreqBand,
+    Ipv4,
     Ipv6,
     DeviceIdentificationType,
+    ControlUrl,
     Ieee1905ProfileVersion,
     SupportedService,
     ClientAssociation,
@@ -188,8 +196,10 @@ impl IEEE1905TLVType {
             0x0f => IEEE1905TLVType::SupportedRole,
             0x14 => IEEE1905TLVType::GenericPhyDeviceInformation,
             0x10 => IEEE1905TLVType::SupportedFreqBand,
+            0x17 => IEEE1905TLVType::Ipv4,
             0x18 => IEEE1905TLVType::Ipv6,
             0x15 => IEEE1905TLVType::DeviceIdentificationType,
+            0x16 => IEEE1905TLVType::ControlUrl,
             0x1a => IEEE1905TLVType::Ieee1905ProfileVersion,
             0x80 => IEEE1905TLVType::SupportedService,
             0x92 => IEEE1905TLVType::ClientAssociation,
@@ -218,9 +228,11 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::SearchedRole => 0x0d,
             IEEE1905TLVType::SupportedRole => 0x0f,
             IEEE1905TLVType::GenericPhyDeviceInformation => 0x14,
+            IEEE1905TLVType::Ipv4 => 0x17,
             IEEE1905TLVType::Ipv6 => 0x18,
             IEEE1905TLVType::SupportedFreqBand => 0x10,
             IEEE1905TLVType::DeviceIdentificationType => 0x15,
+            IEEE1905TLVType::ControlUrl => 0x16,
             IEEE1905TLVType::Ieee1905ProfileVersion => 0x1a,
             IEEE1905TLVType::SupportedService => 0x80,
             IEEE1905TLVType::ClientAssociation => 0x92,
@@ -287,6 +299,120 @@ impl TLVTrait for MacAddress {
         self.mac_address.octets().to_vec()
     }
 }
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct Ipv4 {
+    pub entries: Vec<Ipv4Entry>,
+}
+
+impl TLVTrait for Ipv4 {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::Ipv4;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, entry_count) = be_u8(input)?;
+        let (input, entries) = count(Ipv4Entry::parse, entry_count as usize).parse(input)?;
+
+        Ok((input, Self { entries }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend((self.entries.len() as u8).to_be_bytes());
+        vec.extend(self.entries.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct Ipv4Entry {
+    pub mac: MacAddr,
+    pub addresses: Vec<Ipv4Address>,
+}
+
+impl Ipv4Entry {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, mac) = take_mac_addr(input)?;
+        let (input, address_count) = be_u8(input)?;
+        let (input, addresses) = count(Ipv4Address::parse, address_count as usize).parse(input)?;
+
+        Ok((input, Self { mac, addresses }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.mac.octets());
+        vec.extend((self.addresses.len() as u8).to_be_bytes());
+        vec.extend(self.addresses.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct Ipv4Address {
+    pub kind: IPv4AddressType,
+    pub address: Ipv4Addr,
+    pub dhcp_server: Ipv4Addr,
+}
+
+impl Ipv4Address {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, kind) = be_u8(input)?;
+        let (input, address) = take_n_bytes::<4>(input)?;
+        let (input, dhcp_server) = take_n_bytes::<4>(input)?;
+
+        Ok((
+            input,
+            Self {
+                kind: IPv4AddressType::from_u8(kind),
+                address: Ipv4Addr::from(*address),
+                dhcp_server: Ipv4Addr::from(*dhcp_server),
+            },
+        ))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.push(self.kind.to_u8());
+        vec.extend(self.address.octets());
+        vec.extend(self.dhcp_server.octets());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub enum IPv4AddressType {
+    Unknown,
+    DHCP,
+    Static,
+    AutoIP,
+    Reserved(u8),
+}
+
+impl IPv4AddressType {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::Unknown,
+            1 => Self::DHCP,
+            2 => Self::Static,
+            3 => Self::AutoIP,
+            _ => Self::Reserved(value),
+        }
+    }
+
+    fn to_u8(&self) -> u8 {
+        match self {
+            Self::Unknown => 0,
+            Self::DHCP => 1,
+            Self::Static => 2,
+            Self::AutoIP => 3,
+            Self::Reserved(v) => *v,
+        }
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -930,6 +1056,25 @@ impl TLVTrait for DeviceIdentificationType {
         push_utf8(&mut buf, &self.manufacturer_name);
         push_utf8(&mut buf, &self.manufacturer_model);
         buf
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct ControlUrl {
+    pub url: String,
+}
+
+impl TLVTrait for ControlUrl {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::ControlUrl;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, url) = take_utf8(input, input.len())?;
+        Ok((input, Self { url }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        self.url.as_bytes().to_vec()
     }
 }
 
@@ -2180,6 +2325,8 @@ pub mod tests {
         assert_eq!(CMDUType::from_u16(9), CMDUType::ApAutoConfigWCS);
         assert_eq!(CMDUType::from_u16(0x11), CMDUType::GenericPhyQuery);
         assert_eq!(CMDUType::from_u16(0x12), CMDUType::GenericPhyResponse);
+        assert_eq!(CMDUType::from_u16(0x0D), CMDUType::HigherLayerQuery);
+        assert_eq!(CMDUType::from_u16(0x0E), CMDUType::HigherLayerResponse);
         assert_eq!(CMDUType::from_u16(0x8001), CMDUType::ApCapabilityQuery);
         assert_eq!(CMDUType::from_u16(0x8002), CMDUType::ApCapabilityReport);
     }
@@ -2213,6 +2360,8 @@ pub mod tests {
         assert_eq!(CMDUType::ApAutoConfigWCS.to_u16(), 9);
         assert_eq!(CMDUType::GenericPhyQuery.to_u16(), 0x11);
         assert_eq!(CMDUType::GenericPhyResponse.to_u16(), 0x12);
+        assert_eq!(CMDUType::HigherLayerQuery.to_u16(), 0x0D);
+        assert_eq!(CMDUType::HigherLayerResponse.to_u16(), 0x0E);
         assert_eq!(CMDUType::ApCapabilityQuery.to_u16(), 0x8001);
         assert_eq!(CMDUType::ApCapabilityReport.to_u16(), 0x8002);
     }
@@ -2281,6 +2430,18 @@ pub mod tests {
         assert_eq!(
             IEEE1905TLVType::from_u8(0x10),
             IEEE1905TLVType::SupportedFreqBand
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x16),
+            IEEE1905TLVType::ControlUrl
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x17),
+            IEEE1905TLVType::Ipv4
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x18),
+            IEEE1905TLVType::Ipv6
         );
         assert_eq!(
             IEEE1905TLVType::from_u8(0x14),
@@ -2379,6 +2540,9 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::SupportedRole.to_u8(), 0x0f);
         assert_eq!(IEEE1905TLVType::GenericPhyDeviceInformation.to_u8(), 0x14);
         assert_eq!(IEEE1905TLVType::SupportedFreqBand.to_u8(), 0x10);
+        assert_eq!(IEEE1905TLVType::ControlUrl.to_u8(), 0x16);
+        assert_eq!(IEEE1905TLVType::Ipv4.to_u8(), 0x17);
+        assert_eq!(IEEE1905TLVType::Ipv6.to_u8(), 0x18);
         assert_eq!(IEEE1905TLVType::DeviceIdentificationType.to_u8(), 0x15);
         assert_eq!(IEEE1905TLVType::Ieee1905ProfileVersion.to_u8(), 0x1a);
         assert_eq!(IEEE1905TLVType::SupportedService.to_u8(), 0x80);
@@ -2921,6 +3085,82 @@ pub mod tests {
         assert_eq!(cmdu_topology_response, parsed_response);
     }
 
+    // Verify parsing and serializing of HigherLayerQuery CMDU
+    #[test]
+    fn test_higher_layer_query_cmdu_parse_and_serialize() {
+        let input = [
+            0x00, 0x00, // message_version, reserved
+            0x00, 0x0D, // message_type: HigherLayerQuery
+            0xDB, 0x9E, // message_id
+            0x00, 0x80, // fragment, flags
+            0x00, 0x00, 0x00, // EndOfMessage TLV
+        ];
+
+        let (remaining, parsed) = CMDU::parse(&input).unwrap();
+        assert!(remaining.is_empty());
+        assert_eq!(parsed.message_type, CMDUType::HigherLayerQuery.to_u16());
+        assert_eq!(parsed.message_id, 0xDB9E);
+        assert_eq!(parsed.fragment, 0);
+        assert_eq!(parsed.flags, 0x80);
+        assert_eq!(parsed.payload, &[0x00, 0x00, 0x00]);
+        assert_eq!(parsed.serialize(), input);
+    }
+
+    // Verify parsing and serializing of HigherLayerResponse CMDU.
+    #[test]
+    fn test_higher_layer_response_cmdu_parse_and_serialize() {
+        // DeviceIdentificationType value: 3 × 64 bytes (Friendly Name, Manufacturer, Model)
+        let mut device_id = [0u8; 192];
+        device_id[..12].copy_from_slice(b"FriendlyName");
+        device_id[64..76].copy_from_slice(b"Manufacturer");
+        device_id[128..137].copy_from_slice(b"ModelName");
+
+        let input: Vec<u8> = [
+            [0x00, 0x00, 0x00, 0x0E, 0xDB, 0x9E, 0x00, 0x80].as_slice(), // CMDU header
+            &[0x01, 0x00, 0x06, 0x02, 0x42, 0xC0, 0xA8, 0x64, 0x02], // AlMacAddress TLV
+            &[0x1A, 0x00, 0x01, 0x01], // Ieee1905ProfileVersion TLV (0x01 = 1905.1a)
+            &[0x15, 0x00, 0xC0],       // DeviceIdentificationType TLV (length=192)
+            device_id.as_slice(),
+            &[                         // ControlUrl TLV (type=0x16, length=26)
+                0x16, 0x00, 0x1A,      // type, length
+                b'h', b't', b't', b'p', b':', b'/', b'/', // "http://"
+                b'1', b'9', b'2', b'.', b'1', b'6', b'8', b'.', b'1', b'.', b'0', // "192.168.1.0"
+                b'/', b't', b'e', b's', b't', b'u', b'r', b'l', // "/testurl"
+            ],
+            &[                         // Ipv4 TLV (type=0x17, length=17)
+                0x17, 0x00, 0x11,      // type, length
+                0x01,                  // k=1 interface entry
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, // MAC: 01:02:03:04:05:06
+                0x01,                  // j=1 address
+                0x01,                  // address type: DHCP
+                0x10, 0x11, 0x12, 0x13, // IPv4 address
+                0x20, 0x21, 0x22, 0x23, // DHCP server
+            ],
+            &[                         // Ipv6 TLV (type=0x18, length=56)
+                0x18, 0x00, 0x38,      // type, length
+                0x02, 0x42, 0xC0, 0xA8, 0x64, 0x02, // AL MAC: 02:42:c0:a8:64:02
+                0xFE, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x42, 0xC0, 0xFF, 0xFE, 0xA8, 0x64, 0x02, // link-local: fe80::42:c0ff:fea8:6402
+                0x01,                  // count=1 additional address
+                0x03,                  // address type: SLAAC
+                0x20, 0x01, 0x0D, 0xB8, 0x00, 0x00, 0x00, 0x01,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, // address: 2001:db8:0:1::1
+                0x20, 0x01, 0x0D, 0xB8, 0x00, 0x00, 0x00, 0x02,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, // originator: 2001:db8:0:2::1
+            ],
+            &[0x00, 0x00, 0x00],       // EndOfMessage TLV
+        ]
+        .concat();
+
+        let (remaining, parsed) = CMDU::parse(&input).unwrap();
+        assert!(remaining.is_empty());
+        assert_eq!(parsed.message_type, CMDUType::HigherLayerResponse.to_u16());
+        assert_eq!(parsed.message_id, 0xDB9E);
+        assert_eq!(parsed.fragment, 0);
+        assert_eq!(parsed.flags, 0x80);
+        assert_eq!(parsed.serialize(), input);
+    }
+
     // Verify serializing and parsing of AP autoconfig search CMDU
     #[test]
     fn test_ap_autoconfig_search_cmdus() {
@@ -3323,6 +3563,43 @@ pub mod tests {
 
         // Expect success comparing parsed and then serialized MAC address with original one
         assert_eq!(parsed.serialize(), mac);
+    }
+
+    #[test]
+    fn test_ipv4_parse_and_serialize() {
+        let input = [
+            0x01, // entries count
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, // mac
+            0x01, // addresses count
+            0x01, // IPv4 addr type: DHCP
+            0x10, 0x11, 0x12, 0x13, // IPv4 addr
+            0x20, 0x21, 0x22, 0x23, // DHCP server
+        ];
+
+        let (remaining, parsed) = Ipv4::parse(&input).unwrap();
+        assert!(remaining.is_empty());
+        assert_eq!(parsed.entries.len(), 1);
+
+        let entry = &parsed.entries[0];
+        assert_eq!(entry.mac.octets(), [0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
+        assert_eq!(entry.addresses.len(), 1);
+
+        let address = &entry.addresses[0];
+        assert_eq!(address.kind, IPv4AddressType::DHCP);
+        assert_eq!(address.address.octets(), [0x10, 0x11, 0x12, 0x13]);
+        assert_eq!(address.dhcp_server.octets(), [0x20, 0x21, 0x22, 0x23]);
+
+        assert_eq!(parsed.serialize(), input.as_slice());
+    }
+
+    #[test]
+    fn test_control_url_parse_and_serialize() {
+        let input = *b"http://192.168.1.0/testurl";
+
+        let (remaining, parsed) = ControlUrl::parse(&input).unwrap();
+        assert!(remaining.is_empty());
+        assert_eq!(parsed.url, "http://192.168.1.0/testurl");
+        assert_eq!(parsed.serialize(), input);
     }
 
     // Verify parsing and serializing IPv6 TLV payload (AL MAC + link-local IPv6 + count)
