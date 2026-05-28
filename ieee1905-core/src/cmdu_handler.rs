@@ -470,9 +470,10 @@ impl CMDUHandler {
             }
             if info.vendor_data.info_type == VendorSpecificInfoType::ArtifactService
                 && info.vendor_data.role == VendorSpecificInfoRole::Server
-                && let Some(address) = Ipv6::find(tlvs)
+                && let Some(ipv6) = Ipv6::find(tlvs)
+                && let Some(entry) = ipv6.entries.first()
             {
-                artifact_server_address = Some(address.link_local_ipv6_address);
+                artifact_server_address = Some(entry.link_local_address);
             }
         }
 

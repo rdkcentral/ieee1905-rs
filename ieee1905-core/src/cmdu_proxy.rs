@@ -421,9 +421,11 @@ async fn inject_topology_response_tlvs(
             },
         }));
         vec.push(TLV::from(Ipv6 {
-            al_mac_address: db.al_mac_address,
-            link_local_ipv6_address: address,
-            additional_ipv6_addresses: vec![],
+            entries: vec![Ipv6Entry {
+                mac_address: db.al_mac_address,
+                link_local_address: address,
+                other_addresses: vec![],
+            }],
         }));
     } else {
         vec.push(TLV::from(VendorSpecificInfo {
