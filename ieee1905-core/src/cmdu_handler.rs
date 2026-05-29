@@ -25,7 +25,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::MessageIdGenerator;
 use crate::al_sap::{AlServiceAccessPoint, service_access_point_data_indication};
-use crate::cmdu::{CMDU, CMDUType};
+use crate::cmdu::{CMDU, CMDUType, DeviceInformation};
 use crate::cmdu_codec::*;
 use crate::cmdu_proxy::*;
 use crate::cmdu_reassembler::CmduReassembler;
@@ -208,6 +208,11 @@ impl CMDUHandler {
                 self.handle_higher_layer_query(message_id, source_mac, local_interface_mac)
                     .await;
                 handled = true;
+            }
+            CMDUType::HigherLayerResponse => {
+                handled = self
+                    .handle_higher_layer_response(&tlvs, message_id, source_mac)
+                    .await;
             }
             _ => handled = false,
         };
@@ -865,6 +870,46 @@ impl CMDUHandler {
             .await;
 
         info!(source = %source_mac, "ApAutoConfigWCS Processed");
+    }
+
+    #[instrument(skip_all, name = "higher_layer_response")]
+    async fn handle_higher_layer_response(
+        &self,
+        tlvs: &[TLV],
+        message_id: u16,
+        source_mac: MacAddr,
+    ) -> bool {
+        debug!(
+            source = %source_mac,
+            msg_id = message_id,
+            interface = self.interface_name,
+            "Handling HigherLayerResponse CMDU",
+        );
+
+        if EndOfMessage::find(tlvs).is_none() {
+            error!("HigherLayerResponse CMDU missing EndOfMessage TLV");
+            return true;
+        };
+
+        let Some(al_mac) = AlMacAddress::find(tlvs) else {
+            error!("HigherLayerResponse CMDU missing AlMacAddress TLV");
+            return true;
+        };
+
+        let Some(device_identification) = DeviceIdentificationType::find(tlvs) else {
+            error!("HigherLayerResponse CMDU missing DeviceIdentificationType TLV");
+            return true;
+        };
+
+        let al_mac = al_mac.al_mac_address;
+        let control_url = ControlUrl::find(tlvs);
+
+        let result = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
+            .handle_higher_layer_response(al_mac, device_identification, control_url)
+            .await;
+
+        info!(source = %source_mac, "HigherLayerResponse Processed");
+        result
     }
 
     #[instrument(skip_all, name = "sdu_from_cmdu")]

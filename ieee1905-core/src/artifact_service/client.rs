@@ -7,8 +7,10 @@ use crate::interface_manager::{
 use crate::next_task_id;
 use futures::StreamExt;
 use pnet::util::MacAddr;
+use reqwest::Url;
+use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::net::Ipv6Addr;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -56,9 +58,9 @@ impl ArtifactClientFactory {
     pub fn start(
         &self,
         remote_mac_address: MacAddr,
-        remote_ip_address: Ipv6Addr,
+        base_url: &str,
     ) -> anyhow::Result<ArtifactClient> {
-        ArtifactClient::new(self.if_info.clone(), remote_mac_address, remote_ip_address)
+        ArtifactClient::new(self.if_info.clone(), remote_mac_address, base_url)
     }
 }
 
@@ -80,7 +82,7 @@ impl Drop for ArtifactClientFactory {
 
 ////////////////////////////////////////////////////////////////////////////////
 pub struct ArtifactClient {
-    remote_ip_address: Ipv6Addr,
+    base_url: String,
     _join_set: JoinSet<()>,
 }
 
@@ -89,16 +91,21 @@ impl ArtifactClient {
     fn new(
         if_info: InterfaceInfo,
         remote_mac_address: MacAddr,
-        remote_ip_address: Ipv6Addr,
+        base_url: &str,
     ) -> anyhow::Result<Self> {
-        debug!(mac = %remote_mac_address, ip = %remote_ip_address, "creating client");
+        let mut base_url_str = Cow::Borrowed(base_url);
+        if !base_url_str.ends_with('/') {
+            base_url_str.to_mut().push('/');
+        }
+
+        let base_url = Url::parse(&base_url_str)?;
+        debug!(mac = %remote_mac_address, %base_url, "creating client");
 
         let client = reqwest::Client::builder()
             .interface(&if_info.if_name)
             .build()?;
 
-        let base_url = format!("http://[{remote_ip_address}]:{}", ArtifactConfig::PORT);
-        info!(mac = %remote_mac_address, base_url, "client created");
+        info!(mac = %remote_mac_address, %base_url, "client created");
 
         let actor = ArtifactClientActor {
             if_info,
@@ -111,21 +118,20 @@ impl ArtifactClient {
         join_set.spawn(actor.worker());
 
         Ok(Self {
+            base_url: base_url_str.into_owned(),
             _join_set: join_set,
-            remote_ip_address,
         })
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    pub fn remote_address(&self) -> Ipv6Addr {
-        self.remote_ip_address
+    pub fn format_base_url(ipv6: Ipv6Addr) -> String {
+        format!("http://[{ipv6}]:{}/", ArtifactConfig::PORT)
     }
 }
 
 impl Debug for ArtifactClient {
-    ////////////////////////////////////////////////////////////////////////////////
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ArtifactClient({})", self.remote_ip_address)
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ArtifactClient({})", self.base_url)
     }
 }
 
@@ -133,7 +139,7 @@ impl Debug for ArtifactClient {
 struct ArtifactClientActor {
     if_info: InterfaceInfo,
     remote_mac_address: MacAddr,
-    base_url: String,
+    base_url: Url,
     client: reqwest::Client,
 }
 
@@ -284,7 +290,7 @@ impl ArtifactClientActor {
 
     ////////////////////////////////////////////////////////////////////////////////
     async fn get_artifact_list(&self) -> anyhow::Result<HashMap<String, Vec<String>>> {
-        let url = format!("{}/artifacts", self.base_url);
+        let url = self.base_url.join("artifacts")?;
         let filter = ArtifactFilter {
             mac: format_mac_as_file_prefix(self.if_info.mac),
         };
@@ -301,8 +307,8 @@ impl ArtifactClientActor {
         artifact_name: &str,
         target: impl AsRef<Path>,
     ) -> anyhow::Result<()> {
-        let base_url = &self.base_url;
-        let url = format!("{base_url}/artifacts/{artifact_kind}/{artifact_name}");
+        let relative_url = format!("artifacts/{artifact_kind}/{artifact_name}");
+        let url = self.base_url.join(&relative_url)?;
 
         let response = self.client.get(url).send().await?;
         let response = response.error_for_status()?;
@@ -326,10 +332,8 @@ impl ArtifactClientActor {
         artifact_name: &str,
         source: impl AsRef<Path>,
     ) -> anyhow::Result<()> {
-        let url = format!(
-            "{}/artifacts/{artifact_type}/{artifact_name}",
-            self.base_url,
-        );
+        let relative_url = format!("artifacts/{artifact_type}/{artifact_name}");
+        let url = self.base_url.join(&relative_url)?;
 
         let file = tokio::fs::File::open(source).await?;
         let stream = ReaderStream::new(file);
