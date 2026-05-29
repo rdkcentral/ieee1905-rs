@@ -18,6 +18,7 @@
 */
 use crate::SDU;
 use crate::al_sap::AlServiceAccessPoint;
+use crate::artifact_service::server::ArtifactServer;
 use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
@@ -300,112 +301,6 @@ pub fn cmdu_topology_response_transmission(
             }
         }
             .instrument(info_span!(parent: None, "cmdu_response_transmission", task = next_task_id())),
-    );
-}
-
-pub async fn cmdu_higher_layer_query_transmission_worker(
-    sender: Arc<EthernetSender>,
-    message_id_generator: Arc<MessageIdGenerator>,
-    interface_mac_address: MacAddr,
-    destination_mac: MacAddr,
-    cancellation_token: CancellationToken,
-) {
-    let mut ticker = interval(Duration::from_secs(30));
-
-    loop {
-        tokio::select! {
-            _ = ticker.tick() => (),
-            _ = cancellation_token.cancelled() => return,
-        }
-
-        let message_id = message_id_generator.next_id();
-        debug!(%destination_mac, message_id, "Creating CMDU Higher Layer Query");
-
-        let payload = [TLV::from(EndOfMessage)];
-        let cmdu = CMDU {
-            message_version: MessageVersion::Version2013.to_u8(),
-            reserved: 0,
-            message_type: CMDUType::HigherLayerQuery.to_u16(),
-            message_id,
-            fragment: 0,
-            flags: 0x80,
-            payload: payload.iter().flat_map(TLV::serialize).collect(),
-        };
-
-        match sender
-            .enqueue_frame(destination_mac, interface_mac_address, EthernetSender::ETHER_TYPE, cmdu.serialize())
-            .await
-        {
-            Ok(()) => info!(%destination_mac, message_id, "CMDU Higher Layer Query sent successfully"),
-            Err(e) => error!(message_id, "Failed to send CMDU Higher Layer Query: {e}"),
-        }
-    }
-}
-
-pub fn cmdu_higher_layer_response_transmission(
-    interface: String,
-    sender: Arc<EthernetSender>,
-    local_al_mac_address: MacAddr,
-    remote_al_mac_address: MacAddr,
-    interface_mac_address: MacAddr,
-    message_id: u16,
-) {
-    tokio::spawn(
-        async move {
-            trace!(
-                interface = %interface,
-                message_id = message_id,
-                "Creating CMDU Higher Layer Response"
-            );
-
-            let topology_db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
-            let Some(node) = topology_db.get_device(remote_al_mac_address).await else {
-                warn!(
-                    "Could not find node in topology database for AL_MAC={}",
-                    remote_al_mac_address
-                );
-                return;
-            };
-
-            let destination_mac = node.device_data.destination_frame_mac;
-
-            let payload = vec![
-                TLV::from(AlMacAddress { al_mac_address: local_al_mac_address }),
-                TLV::from(Ieee1905ProfileVersion::Ieee1905_1a),
-                TLV::from(DeviceIdentificationType {
-                    friendly_name: String::from("ArtifactService"),
-                    manufacturer_name: String::new(),
-                    manufacturer_model: String::new(),
-                }),
-                TLV::from(EndOfMessage),
-            ];
-
-            let cmdu = CMDU {
-                message_version: MessageVersion::Version2013.to_u8(),
-                reserved: 0,
-                message_type: CMDUType::HigherLayerResponse.to_u16(),
-                message_id,
-                fragment: 0,
-                flags: 0x80,
-                payload: payload.iter().flat_map(TLV::serialize).collect(),
-            };
-
-            match sender
-                .enqueue_frame(destination_mac, interface_mac_address, EthernetSender::ETHER_TYPE, cmdu.serialize())
-                .await
-            {
-                Ok(()) => info!(
-                    interface = %interface,
-                    message_id = message_id,
-                    "CMDU Higher Layer Response sent successfully"
-                ),
-                Err(e) => error!(
-                    message_id = message_id,
-                    "Failed to send CMDU Higher Layer Response: {e}"
-                ),
-            }
-        }
-        .instrument(info_span!(parent: None, "cmdu_higher_layer_response_transmission", task = next_task_id())),
     );
 }
 
@@ -834,6 +729,128 @@ pub async fn cmdu_link_metric_response_transmission(
             message_id,
             al_mac = %local_al_mac_address,
             "Failed to send CMDU Link Metric Response: {e}",
+        ),
+    }
+}
+
+pub async fn cmdu_higher_layer_query_transmission_worker(
+    sender: Arc<EthernetSender>,
+    message_id_generator: Arc<MessageIdGenerator>,
+    interface_mac_address: MacAddr,
+    destination_mac: MacAddr,
+    cancellation_token: CancellationToken,
+) {
+    let mut ticker = interval(Duration::from_secs(30));
+
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => (),
+            _ = cancellation_token.cancelled() => return,
+        }
+
+        let message_id = message_id_generator.next_id();
+        debug!(%destination_mac, message_id, "Creating CMDU Higher Layer Query");
+
+        let cmdu = CMDU {
+            message_version: MessageVersion::Version2013.to_u8(),
+            reserved: 0,
+            message_type: CMDUType::HigherLayerQuery.to_u16(),
+            message_id,
+            fragment: 0,
+            flags: 0x80,
+            payload: TLV::from(EndOfMessage).serialize(),
+        };
+
+        match sender
+            .enqueue_frame(
+                destination_mac,
+                interface_mac_address,
+                EthernetSender::ETHER_TYPE,
+                cmdu.serialize(),
+            )
+            .await
+        {
+            Ok(()) => {
+                info!(%destination_mac, message_id, "CMDU Higher Layer Query sent successfully")
+            }
+            Err(e) => error!(message_id, "Failed to send CMDU Higher Layer Query: {e}"),
+        }
+    }
+}
+
+#[instrument(skip_all, name = "cmdu_higher_layer_response_transmission", fields(task = next_task_id()))]
+pub async fn cmdu_higher_layer_response_transmission(
+    interface: String,
+    sender: Arc<EthernetSender>,
+    local_al_mac_address: MacAddr,
+    remote_al_mac_address: MacAddr,
+    interface_mac_address: MacAddr,
+    message_id: u16,
+) {
+    trace!(
+        interface = %interface,
+        message_id = message_id,
+        "Creating CMDU Higher Layer Response",
+    );
+
+    let db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
+    let Some(server_address) = db.get_artifact_server_ip_address() else {
+        return info!("skipping, artifact server is not present");
+    };
+    let Some(node) = db.get_device(remote_al_mac_address).await else {
+        return warn!(al_mac = %remote_al_mac_address, "Node not found");
+    };
+
+    let payload = [
+        TLV::from(AlMacAddress {
+            al_mac_address: local_al_mac_address,
+        }),
+        TLV::from(Ieee1905ProfileVersion::Ieee1905_1a),
+        TLV::from(DeviceIdentificationType {
+            friendly_name: TopologyDatabase::HLE_ARTIFACT_SERVICE.to_string(),
+            manufacturer_name: Default::default(),
+            manufacturer_model: Default::default(),
+        }),
+        TLV::from(ControlUrl {
+            url: ArtifactServer::format_base_url(server_address),
+        }),
+        TLV::from(Ipv6 {
+            entries: vec![Ipv6Entry {
+                mac_address: node.device_data.al_mac,
+                link_local_address: server_address,
+                other_addresses: Default::default(),
+            }],
+        }),
+        TLV::from(EndOfMessage),
+    ];
+
+    let cmdu = CMDU {
+        message_version: MessageVersion::Version2013.to_u8(),
+        reserved: 0,
+        message_type: CMDUType::HigherLayerResponse.to_u16(),
+        message_id,
+        fragment: 0,
+        flags: 0x80,
+        payload: payload.iter().flat_map(TLV::serialize).collect(),
+    };
+
+    match sender
+        .enqueue_frame(
+            node.device_data.destination_frame_mac,
+            interface_mac_address,
+            EthernetSender::ETHER_TYPE,
+            cmdu.serialize(),
+        )
+        .await
+    {
+        Ok(()) => info!(
+            interface = %interface,
+            message_id = message_id,
+            "CMDU Higher Layer Response sent successfully"
+        ),
+        Err(e) => error!(
+            message_id = message_id,
+            "Failed to send CMDU Higher Layer Response: {e}"
         ),
     }
 }

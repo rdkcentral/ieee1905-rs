@@ -39,6 +39,11 @@ impl ArtifactServer {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
+    pub fn format_base_url(ipv6: Ipv6Addr) -> String {
+        format!("http://[{ipv6}]:{}/", ArtifactConfig::PORT)
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
     pub fn if_info(&self) -> &InterfaceInfo {
         &self.if_info
     }

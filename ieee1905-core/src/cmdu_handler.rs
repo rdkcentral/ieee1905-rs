@@ -205,8 +205,7 @@ impl CMDUHandler {
                 handled = false;
             }
             CMDUType::HigherLayerQuery => {
-                self.handle_higher_layer_query(message_id, source_mac, local_interface_mac)
-                    .await;
+                self.handle_higher_layer_query(message_id, source_mac).await;
                 handled = true;
             }
             CMDUType::HigherLayerResponse => {
@@ -303,18 +302,16 @@ impl CMDUHandler {
                     forwarding_interface_mac,
                 )
                 .await;
-
-                if let TransmissionEvent::StartHigherLayerQueryWorker((dest, token)) =
-                    topology_db.take_higher_layer_query_worker(destination_al_mac).await
-                {
-                    tokio::spawn(cmdu_higher_layer_query_transmission_worker(
-                        Arc::clone(&self.sender),
-                        Arc::clone(&self.message_id_generator),
-                        forwarding_interface_mac,
-                        dest,
-                        token,
-                    ));
-                }
+            }
+            TransmissionEvent::StartHigherLayerQueryWorker((destination, token)) => {
+                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+                tokio::spawn(cmdu_higher_layer_query_transmission_worker(
+                    self.sender.clone(),
+                    self.message_id_generator.clone(),
+                    forwarding_interface_mac,
+                    destination,
+                    token,
+                ));
             }
             TransmissionEvent::None => {
                 debug!(
@@ -872,6 +869,30 @@ impl CMDUHandler {
         info!(source = %source_mac, "ApAutoConfigWCS Processed");
     }
 
+    #[instrument(skip_all, name = "higher_layer_query")]
+    async fn handle_higher_layer_query(&self, message_id: u16, source_mac: MacAddr) {
+        debug!(
+            source = %source_mac,
+            msg_id = message_id,
+            interface = self.interface_name,
+            "Handling HigherLayerQuery CMDU",
+        );
+
+        let topology_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
+        let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+
+        tokio::spawn(cmdu_higher_layer_response_transmission(
+            self.interface_name.clone(),
+            self.sender.clone(),
+            self.local_al_mac,
+            source_mac,
+            forwarding_interface_mac,
+            message_id,
+        ));
+
+        info!(source = %source_mac, "HigherLayerQuery Processed");
+    }
+
     #[instrument(skip_all, name = "higher_layer_response")]
     async fn handle_higher_layer_response(
         &self,
@@ -1000,63 +1021,6 @@ impl CMDUHandler {
             trace!("Cannot find device for {source_mac} topology_db");
         }
     }
-
-    #[instrument(skip_all, name = "higher_layer_query")]
-    async fn handle_higher_layer_query(
-        &self,
-        message_id: u16,
-        source_mac: MacAddr,
-        local_interface_mac: MacAddr,
-    ) {
-        debug!(
-            source = %source_mac,
-            msg_id = message_id,
-            interface = self.interface_name,
-            "Handling Higher Layer Query CMDU",
-        );
-
-        let topology_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
-
-        let Some(mut node) = topology_db.find_device_by_port(source_mac).await else {
-            warn!("Higher Layer Query: node not found for REMOTE_PORT_MAC={source_mac}");
-            return;
-        };
-        node.device_data.destination_frame_mac = source_mac;
-        node.device_data.local_interface_mac = local_interface_mac;
-        let device_data = node.device_data;
-        let remote_al_mac = device_data.al_mac;
-
-        let transmission_event = topology_db
-            .update_ieee1905_topology(
-                device_data,
-                UpdateType::HigherLayerQueryReceived,
-                None,
-                Some(message_id),
-                None,
-            )
-            .await;
-
-        match transmission_event {
-            TransmissionEvent::SendHigherLayerResponse(destination) => {
-                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
-                cmdu_higher_layer_response_transmission(
-                    self.interface_name.clone(),
-                    Arc::clone(&self.sender),
-                    self.local_al_mac,
-                    destination,
-                    forwarding_interface_mac,
-                    message_id,
-                );
-            }
-            _ => {
-                warn!(
-                    remote = %remote_al_mac,
-                    "Unexpected TransmissionEvent in handle_higher_layer_query"
-                );
-            }
-        }
-    }
-
 }
 
 #[cfg(test)]
