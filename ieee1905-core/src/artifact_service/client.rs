@@ -122,11 +122,6 @@ impl ArtifactClient {
             _join_set: join_set,
         })
     }
-
-    ////////////////////////////////////////////////////////////////////////////////
-    pub fn format_base_url(ipv6: Ipv6Addr) -> String {
-        format!("http://[{ipv6}]:{}/", ArtifactConfig::PORT)
-    }
 }
 
 impl Debug for ArtifactClient {

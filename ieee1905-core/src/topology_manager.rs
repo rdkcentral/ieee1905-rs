@@ -35,6 +35,7 @@ use crate::{
     cmdu::IEEE1905Neighbor, interface_manager::get_forwarding_interface_mac, next_task_id,
 };
 // External crates
+use crate::artifact_service::server::ArtifactServer;
 use crossterm::{
     event::{self, KeyCode},
     execute,
@@ -89,7 +90,6 @@ pub enum UpdateType {
     ResponseSent,
     ResponseReceived,
     ApAutoConfigSearch,
-    HigherLayerQueryReceived,
 }
 
 pub enum TransmissionEvent {
@@ -98,7 +98,6 @@ pub enum TransmissionEvent {
     SendTopologyNotification(MacAddr),
     StartLinkMetricQueryWorker((MacAddr, CancellationToken)),
     StartHigherLayerQueryWorker((MacAddr, CancellationToken)),
-    SendHigherLayerResponse(MacAddr),
     None,
 }
 
@@ -445,7 +444,7 @@ impl Ieee1905NodeInternal {
         ))
     }
 
-    fn prepare_higher_layer_query_worker_if_needed(&mut self) -> TransmissionEvent {
+    fn prepare_higher_layer_query_transmission_event_if_needed(&mut self) -> TransmissionEvent {
         if self.higher_layer_query_cancellation_token.is_some() {
             return TransmissionEvent::None;
         }
@@ -524,6 +523,8 @@ pub struct TopologyDatabase {
 }
 
 impl TopologyDatabase {
+    pub const HLE_ARTIFACT_SERVICE: &'static str = "ArtifactService";
+
     /// **Creates a new `TopologyDatabase` instance**
     pub fn new(al_mac_address: MacAddr, interface_name: String) -> Arc<Self> {
         debug!(al_mac = %al_mac_address, "Database initialized");
@@ -595,14 +596,6 @@ impl TopologyDatabase {
     pub async fn get_device(&self, al_mac: MacAddr) -> Option<Ieee1905Node> {
         let nodes = self.nodes.read().await;
         Some(nodes.get(&al_mac)?.into())
-    }
-
-    pub async fn take_higher_layer_query_worker(&self, al_mac: MacAddr) -> TransmissionEvent {
-        let mut nodes = self.nodes.write().await;
-        let Some(node) = nodes.get_mut(&al_mac) else {
-            return TransmissionEvent::None;
-        };
-        node.prepare_higher_layer_query_worker_if_needed()
     }
 
     /// **Retrieves a device node from the database**
@@ -820,7 +813,7 @@ impl TopologyDatabase {
                             if local_state == StateLocal::Idle {
                                 TransmissionEvent::SendTopologyQuery(al_mac)
                             } else {
-                                TransmissionEvent::None
+                                node.prepare_higher_layer_query_transmission_event_if_needed()
                             }
                         }
                         UpdateType::NotificationReceived => {
@@ -882,7 +875,7 @@ impl TopologyDatabase {
                                     self.artifact_client_factory.lock().as_ref(),
                                     ArtifactClientSource::Ipv6,
                                     device_data.artifact_server_address.map(|e| {
-                                        return ArtifactClient::format_base_url(e);
+                                        return ArtifactServer::format_base_url(e);
                                     }),
                                 );
 
@@ -949,11 +942,6 @@ impl TopologyDatabase {
                         }
                         UpdateType::ApAutoConfigSearch => {
                             node.prepare_link_metrics_query_transmission_event_if_needed()
-                        }
-
-                        UpdateType::HigherLayerQueryReceived => {
-                            debug!("Event: Send Higher Layer Response");
-                            TransmissionEvent::SendHigherLayerResponse(al_mac)
                         }
                     };
                 }
@@ -1105,7 +1093,7 @@ impl TopologyDatabase {
             return false;
         };
 
-        if device_information.friendly_name == "ArtifactServer" {
+        if device_information.friendly_name == Self::HLE_ARTIFACT_SERVICE {
             node.update_artifact_client(
                 self.artifact_client_factory.lock().as_ref(),
                 ArtifactClientSource::ControlUrl,
