@@ -34,7 +34,7 @@ enum NodeRole {
     /// Agent role: sends AP autoconfig search every 10 seconds
     Agent,
     /// Rogue agent role: sends malformed AP autoconfig search with invalid searched role
-    #[value(name = "rogue_agent")]
+    #[value(name = "rogue-agent")]
     RogueAgent,
     /// Fast rogue agent role: sends malformed AP autoconfig search three times per second
     #[value(name = "rogue-agent-fast")]

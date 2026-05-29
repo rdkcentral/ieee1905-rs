@@ -71,13 +71,6 @@ fn build_tlv(tlv_type: IEEE1905TLVType, value: Option<Vec<u8>>) -> ieee1905::cmd
     }
 }
 
-fn prepare_ap_autoconfig_request_sdu(
-    r: &AlServiceRegistrationResponse,
-    message_id: u16,
-) -> Vec<u8> {
-    prepare_ap_autoconfig_request_sdu_with_searched_role(r, message_id, 0x00)
-}
-
 fn prepare_ap_autoconfig_request_sdu_with_searched_role(
     r: &AlServiceRegistrationResponse,
     message_id: u16,
@@ -128,8 +121,108 @@ fn prepare_ap_autoconfig_request_sdu_with_searched_role(
     .serialize()
 }
 
-fn is_ap_autoconfig_response(sdu: &SDU) -> bool {
-    validate_ap_autoconfig_response(sdu).is_ok()
+fn prepare_ap_autoconfig_request_sdu_with_wrong_tlv_length(
+    r: &AlServiceRegistrationResponse,
+    message_id: u16,
+) -> Vec<u8> {
+    let src_mac_addr = r.al_mac_address_local;
+    let mut payload = Vec::new();
+    payload.extend(
+        build_tlv(
+            IEEE1905TLVType::AlMacAddress,
+            Some(src_mac_addr.octets().to_vec()),
+        )
+        .serialize(),
+    );
+    payload.extend(
+        ieee1905::cmdu::TLV {
+            tlv_type: IEEE1905TLVType::SearchedRole.to_u8(),
+            tlv_length: 2,
+            tlv_value: Some(vec![0x00]),
+        }
+        .serialize(),
+    );
+    payload.extend(
+        build_tlv(
+            IEEE1905TLVType::SupportedService,
+            Some(
+                SupportedService {
+                    services: vec![SupportedServiceType::Agent],
+                }
+                .serialize(),
+            ),
+        )
+        .serialize(),
+    );
+    payload.extend(build_tlv(IEEE1905TLVType::EndOfMessage, None).serialize());
+
+    let cmdu = CMDU {
+        message_version: MessageVersion::Version2013.to_u8(),
+        reserved: 0,
+        message_type: CMDUType::ApAutoConfigSearch.to_u16(),
+        message_id,
+        fragment: 0,
+        flags: 0x80,
+        payload,
+    };
+
+    SDU {
+        source_al_mac_address: src_mac_addr,
+        destination_al_mac_address: IEEE1905_CONTROL_ADDRESS,
+        is_fragment: 0,
+        is_last_fragment: 1,
+        fragment_id: 0,
+        payload: cmdu.serialize(),
+    }
+    .serialize()
+}
+
+fn prepare_ap_autoconfig_request_sdu_without_end_of_message(
+    r: &AlServiceRegistrationResponse,
+    message_id: u16,
+) -> Vec<u8> {
+    let src_mac_addr = r.al_mac_address_local;
+    let mut payload = Vec::new();
+    payload.extend(
+        build_tlv(
+            IEEE1905TLVType::AlMacAddress,
+            Some(src_mac_addr.octets().to_vec()),
+        )
+        .serialize(),
+    );
+    payload.extend(build_tlv(IEEE1905TLVType::SearchedRole, Some(vec![0x00])).serialize());
+    payload.extend(
+        build_tlv(
+            IEEE1905TLVType::SupportedService,
+            Some(
+                SupportedService {
+                    services: vec![SupportedServiceType::Agent],
+                }
+                .serialize(),
+            ),
+        )
+        .serialize(),
+    );
+
+    let cmdu = CMDU {
+        message_version: MessageVersion::Version2013.to_u8(),
+        reserved: 0,
+        message_type: CMDUType::ApAutoConfigSearch.to_u16(),
+        message_id,
+        fragment: 0,
+        flags: 0x80,
+        payload,
+    };
+
+    SDU {
+        source_al_mac_address: src_mac_addr,
+        destination_al_mac_address: IEEE1905_CONTROL_ADDRESS,
+        is_fragment: 0,
+        is_last_fragment: 1,
+        fragment_id: 0,
+        payload: cmdu.serialize(),
+    }
+    .serialize()
 }
 
 fn validate_ap_autoconfig_response(sdu: &SDU) -> Result<CMDU, &'static str> {
@@ -2283,6 +2376,70 @@ async fn send_ap_autoconfig_request_with_searched_role(
     Ok(sdu_ap_autoconfig_request)
 }
 
+async fn send_ap_autoconfig_request_with_wrong_tlv_length(
+    framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
+    reg_resp: &AlServiceRegistrationResponse,
+    message_id: u16,
+    topology_db: Option<&Arc<TopologyDatabase>>,
+) -> anyhow::Result<Vec<u8>> {
+    let sdu_ap_autoconfig_request =
+        prepare_ap_autoconfig_request_sdu_with_wrong_tlv_length(reg_resp, message_id);
+    tracing::info!(
+        source = %reg_resp.al_mac_address_local,
+        destination = %IEEE1905_CONTROL_ADDRESS,
+        message_id,
+        "AGENT: sending AP autoconfig search with malformed TLV length"
+    );
+    println!("AGENT: sending AP autoconfig search with malformed TLV length");
+    update_observed_topology_from_bytes(topology_db, &sdu_ap_autoconfig_request).await;
+
+    framed_data_socket
+        .send(Bytes::from(sdu_ap_autoconfig_request.clone()))
+        .await
+        .map_err(|err| anyhow::anyhow!("Sending AP autoconfig request failed: {err}"))?;
+
+    tracing::info!(
+        source = %reg_resp.al_mac_address_local,
+        destination = %IEEE1905_CONTROL_ADDRESS,
+        message_id,
+        "AGENT: sent AP autoconfig search with malformed TLV length"
+    );
+    println!("AGENT: sent AP autoconfig search with malformed TLV length");
+    Ok(sdu_ap_autoconfig_request)
+}
+
+async fn send_ap_autoconfig_request_without_end_of_message(
+    framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
+    reg_resp: &AlServiceRegistrationResponse,
+    message_id: u16,
+    topology_db: Option<&Arc<TopologyDatabase>>,
+) -> anyhow::Result<Vec<u8>> {
+    let sdu_ap_autoconfig_request =
+        prepare_ap_autoconfig_request_sdu_without_end_of_message(reg_resp, message_id);
+    tracing::info!(
+        source = %reg_resp.al_mac_address_local,
+        destination = %IEEE1905_CONTROL_ADDRESS,
+        message_id,
+        "AGENT: sending AP autoconfig search without EndOfMessage TLV"
+    );
+    println!("AGENT: sending AP autoconfig search without EndOfMessage TLV");
+    update_observed_topology_from_bytes(topology_db, &sdu_ap_autoconfig_request).await;
+
+    framed_data_socket
+        .send(Bytes::from(sdu_ap_autoconfig_request.clone()))
+        .await
+        .map_err(|err| anyhow::anyhow!("Sending AP autoconfig request failed: {err}"))?;
+
+    tracing::info!(
+        source = %reg_resp.al_mac_address_local,
+        destination = %IEEE1905_CONTROL_ADDRESS,
+        message_id,
+        "AGENT: sent AP autoconfig search without EndOfMessage TLV"
+    );
+    println!("AGENT: sent AP autoconfig search without EndOfMessage TLV");
+    Ok(sdu_ap_autoconfig_request)
+}
+
 async fn read_data(
     framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
     topology_db: Option<&Arc<TopologyDatabase>>,
@@ -3001,15 +3158,63 @@ async fn test7_rogue_agent_malformed_searched_role_loop(
     });
 
     let mut message_id = 1_u16;
+    let mut malformed_variant = 0_u8;
     loop {
-        send_ap_autoconfig_request_with_searched_role(
+        send_ap_autoconfig_request(
             &mut framed_data_socket,
             &reg_resp,
             message_id,
-            0x03,
             topology_db.as_ref(),
         )
         .await?;
+
+        match timeout(
+            Duration::from_secs(5),
+            read_ap_autoconfig_response(&mut framed_data_socket, topology_db.as_ref()),
+        )
+        .await
+        {
+            Ok(Ok(())) => println!("ROGUE_AGENT: baseline AP autoconfig response received"),
+            Ok(Err(e)) => println!("ROGUE_AGENT: baseline response validation failed: {e:?}"),
+            Err(_) => println!("ROGUE_AGENT: timed out waiting for baseline AP autoconfig response"),
+        }
+
+        message_id = if message_id == u16::MAX {
+            1
+        } else {
+            message_id + 1
+        };
+
+        match malformed_variant {
+            0 => {
+                send_ap_autoconfig_request_with_searched_role(
+                    &mut framed_data_socket,
+                    &reg_resp,
+                    message_id,
+                    0x03,
+                    topology_db.as_ref(),
+                )
+                .await?;
+            }
+            1 => {
+                send_ap_autoconfig_request_with_wrong_tlv_length(
+                    &mut framed_data_socket,
+                    &reg_resp,
+                    message_id,
+                    topology_db.as_ref(),
+                )
+                .await?;
+            }
+            _ => {
+                send_ap_autoconfig_request_without_end_of_message(
+                    &mut framed_data_socket,
+                    &reg_resp,
+                    message_id,
+                    topology_db.as_ref(),
+                )
+                .await?;
+            }
+        }
 
         match timeout(
             Duration::from_secs(5),
@@ -3022,6 +3227,7 @@ async fn test7_rogue_agent_malformed_searched_role_loop(
             Err(_) => println!("ROGUE_AGENT: no AP autoconfig response received as expected"),
         }
 
+        malformed_variant = (malformed_variant + 1) % 3;
         message_id = if message_id == u16::MAX {
             1
         } else {
@@ -3050,16 +3256,80 @@ async fn test8_rogue_agent_fast_malformed_searched_role_loop(
     });
 
     let mut message_id = 1_u16;
+    let mut malformed_variant = 0_u8;
     loop {
-        send_ap_autoconfig_request_with_searched_role(
+        send_ap_autoconfig_request(
             &mut framed_data_socket,
             &reg_resp,
             message_id,
-            0x03,
             topology_db.as_ref(),
         )
         .await?;
 
+        match timeout(
+            Duration::from_secs(5),
+            read_ap_autoconfig_response(&mut framed_data_socket, topology_db.as_ref()),
+        )
+        .await
+        {
+            Ok(Ok(())) => println!("ROGUE_AGENT_FAST: baseline AP autoconfig response received"),
+            Ok(Err(e)) => println!("ROGUE_AGENT_FAST: baseline response validation failed: {e:?}"),
+            Err(_) => {
+                println!("ROGUE_AGENT_FAST: timed out waiting for baseline AP autoconfig response")
+            }
+        }
+
+        message_id = if message_id == u16::MAX {
+            1
+        } else {
+            message_id + 1
+        };
+
+        match malformed_variant {
+            0 => {
+                send_ap_autoconfig_request_with_searched_role(
+                    &mut framed_data_socket,
+                    &reg_resp,
+                    message_id,
+                    0x03,
+                    topology_db.as_ref(),
+                )
+                .await?;
+            }
+            1 => {
+                send_ap_autoconfig_request_with_wrong_tlv_length(
+                    &mut framed_data_socket,
+                    &reg_resp,
+                    message_id,
+                    topology_db.as_ref(),
+                )
+                .await?;
+            }
+            _ => {
+                send_ap_autoconfig_request_without_end_of_message(
+                    &mut framed_data_socket,
+                    &reg_resp,
+                    message_id,
+                    topology_db.as_ref(),
+                )
+                .await?;
+            }
+        }
+
+        match timeout(
+            Duration::from_secs(5),
+            read_ap_autoconfig_response(&mut framed_data_socket, topology_db.as_ref()),
+        )
+        .await
+        {
+            Ok(Ok(())) => println!("ROGUE_AGENT_FAST: unexpectedly received AP autoconfig response"),
+            Ok(Err(e)) => {
+                tracing::debug!(error = ?e, "ROGUE_AGENT_FAST: response validation failed")
+            }
+            Err(_) => println!("ROGUE_AGENT_FAST: no AP autoconfig response received as expected"),
+        }
+
+        malformed_variant = (malformed_variant + 1) % 3;
         message_id = if message_id == u16::MAX {
             1
         } else {
