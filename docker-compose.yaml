@@ -7,6 +7,8 @@ services:
     container_name: ieee1905_node1
     cap_add: [NET_ADMIN, NET_RAW]
     privileged: true
+    stdin_open: true
+    tty: true
     command: ["sleep", "infinity"]
     ports:
       - "6669:6669"
@@ -23,6 +25,8 @@ services:
     container_name: ieee1905_node2
     cap_add: [NET_ADMIN, NET_RAW]
     privileged: true
+    stdin_open: true
+    tty: true
     command: ["sleep", "infinity"]
     ports:
       - "6670:6669"
@@ -36,6 +40,7 @@ services:
 
 networks:
   ieee1905_network:
+    name: ieee1905_network
     driver: bridge
     driver_opts:
       com.docker.network.bridge.name: ieee1905_bridge

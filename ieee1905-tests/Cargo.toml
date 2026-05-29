@@ -29,3 +29,7 @@ path="src/functional_tests_transmitter.rs"
 [[bin]]
 name="functional_tests_receiver"
 path="src/functional_tests_receiver.rs"
+
+[[bin]]
+name="ieee1905-test-node"
+path="src/ieee1905-test-node.rs"

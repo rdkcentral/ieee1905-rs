@@ -892,6 +892,40 @@ you can use [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild).
 Please check the `cargo-zigbuild` homepage for installation instructions, as you will also need
 the Zig programming language compiler.
 
+Example 1: build a 32-bit ARM binary linked with MUSL (`armv7-unknown-linux-musleabihf`):
+
+1. Install Zig and make sure it is available on your `PATH`:
+
+```sh
+$ zig version
+```
+
+2. Install `cargo-zigbuild`:
+
+```sh
+$ cargo install --locked cargo-zigbuild
+```
+
+3. Add the Rust target:
+
+```sh
+$ rustup target add armv7-unknown-linux-musleabihf
+```
+
+4. Build the `ieee1905` package:
+
+```sh
+$ cargo zigbuild -p ieee1905 --release --target armv7-unknown-linux-musleabihf
+```
+
+5. Verify the resulting binary:
+
+```sh
+$ file target/armv7-unknown-linux-musleabihf/release/ieee1905
+```
+
+Example 2: build a 64-bit ARM binary linked with GLIBC (`aarch64-unknown-linux-gnu`).
+
 On the **TARGET**, check what glibc version is installed:
 
 ```sh
