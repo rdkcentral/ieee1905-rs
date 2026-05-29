@@ -19,6 +19,7 @@
 
 #![deny(warnings)]
 #![allow(clippy::too_many_arguments)]
+use crate::cmdu_codec::ControlUrl;
 // Internal modules
 use crate::linux::if_link::RtnlLinkStats64;
 use crate::lldpdu::PortId;
@@ -388,11 +389,17 @@ impl From<&Ieee1905NodeInternal> for Ieee1905Node {
     }
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum ArtifactClientSource {
+    Ipv6,
+    ControlUrl,
+}
+
 #[derive(Debug)]
 pub struct Ieee1905NodeInternal {
     pub metadata: Ieee1905NodeInfo,
     pub device_data: Ieee1905DeviceData,
-    artifact_client: Option<ArtifactClient>,
+    artifact_client: Option<(ArtifactClientSource, String, ArtifactClient)>,
     link_metrics_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
     higher_layer_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
 }
@@ -455,36 +462,45 @@ impl Ieee1905NodeInternal {
 
     fn update_artifact_client(
         &mut self,
-        remote_address: Option<Ipv6Addr>,
         client_factory: Option<&ArtifactClientFactory>,
+        source: ArtifactClientSource,
+        base_url: Option<String>,
     ) {
-        if let Some(client) = self.artifact_client.as_ref()
-            && remote_address != Some(client.remote_address())
-        {
+        if let Some((current_source, current_base_url, _)) = self.artifact_client.as_ref() {
+            if base_url.as_ref() == Some(current_base_url) {
+                return; // url didn't change, keep the client
+            }
+
+            if *current_source == ArtifactClientSource::ControlUrl
+                && source == ArtifactClientSource::Ipv6
+            {
+                return; // priority goes to url-based creation, it gives more info
+            }
+
             info!(
                 al_mac = %self.device_data.al_mac,
-                address = %client.remote_address(),
+                base_url = current_base_url,
                 "artifact client stopped",
             );
             self.artifact_client = None;
         }
 
         if self.artifact_client.is_none()
-            && let Some(remote_address) = remote_address
             && let Some(client_factory) = client_factory
+            && let Some(base_url) = base_url
         {
-            match client_factory.start(self.device_data.al_mac, remote_address) {
+            match client_factory.start(self.device_data.al_mac, &base_url) {
                 Ok(e) => {
                     info!(
                         al_mac = %self.device_data.al_mac,
-                        address = %remote_address,
+                        address = %base_url,
                         "artifact client started",
                     );
-                    self.artifact_client = Some(e);
+                    self.artifact_client = Some((source, base_url, e));
                 }
                 Err(e) => error!(
                     al_mac = %self.device_data.al_mac,
-                    address = %remote_address,
+                    address = %base_url,
                     %e,
                     "failed to start artifact client",
                 ),
@@ -863,8 +879,11 @@ impl TopologyDatabase {
                                 );
 
                                 node.update_artifact_client(
-                                    device_data.artifact_server_address,
                                     self.artifact_client_factory.lock().as_ref(),
+                                    ArtifactClientSource::Ipv6,
+                                    device_data.artifact_server_address.map(|e| {
+                                        return ArtifactClient::format_base_url(e);
+                                    }),
                                 );
 
                                 if node.device_data.has_changed(&device_data) {
@@ -992,7 +1011,6 @@ impl TopologyDatabase {
                         if let Some(vec) = interfaces.as_mut() {
                             Self::update_local_neighbours_ieee1905_compatibility(vec, &nodes);
                         }
-
                     }
                 }
             };
@@ -1073,6 +1091,29 @@ impl TopologyDatabase {
                 node.device_data.al_mac
             );
         }
+    }
+
+    pub async fn handle_higher_layer_response(
+        &self,
+        al_mac: MacAddr,
+        device_information: DeviceIdentificationType,
+        control_url: Option<ControlUrl>,
+    ) -> bool {
+        let mut nodes = self.nodes.write().await;
+        let Some(node) = Self::find_node_by_port_mut(nodes.values_mut(), al_mac) else {
+            debug!(%al_mac, "higher_layer_response — node not found");
+            return false;
+        };
+
+        if device_information.friendly_name == "ArtifactServer" {
+            node.update_artifact_client(
+                self.artifact_client_factory.lock().as_ref(),
+                ArtifactClientSource::ControlUrl,
+                control_url.map(|e| e.url),
+            );
+            return true;
+        }
+        false
     }
 
     pub async fn start_topology_cli(self: Arc<Self>) -> io::Result<()> {
