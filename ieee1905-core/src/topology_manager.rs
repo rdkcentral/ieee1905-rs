@@ -103,6 +103,7 @@ pub enum UpdateType {
     ResponseSent,
     ResponseReceived,
     ApAutoConfigSearch,
+    HigherLayerQueryReceived,
 }
 
 pub enum TransmissionEvent {
@@ -110,6 +111,8 @@ pub enum TransmissionEvent {
     SendTopologyResponse(MacAddr),
     SendTopologyNotification(MacAddr),
     StartLinkMetricQueryWorker((MacAddr, CancellationToken)),
+    StartHigherLayerQueryWorker((MacAddr, CancellationToken)),
+    SendHigherLayerResponse(MacAddr),
     None,
 }
 
@@ -408,6 +411,7 @@ pub struct Ieee1905NodeInternal {
     pub device_data: Ieee1905DeviceData,
     artifact_client: Option<ArtifactClient>,
     link_metrics_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
+    higher_layer_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
 }
 
 impl Ieee1905NodeInternal {
@@ -418,6 +422,7 @@ impl Ieee1905NodeInternal {
             device_data,
             artifact_client: None,
             link_metrics_query_cancellation_token: None,
+            higher_layer_query_cancellation_token: None,
         }
     }
 
@@ -445,6 +450,21 @@ impl Ieee1905NodeInternal {
         self.link_metrics_query_cancellation_token = Some(drop_guard);
 
         TransmissionEvent::StartLinkMetricQueryWorker((
+            self.device_data.destination_frame_mac,
+            cancellation_token,
+        ))
+    }
+
+    fn prepare_higher_layer_query_worker_if_needed(&mut self) -> TransmissionEvent {
+        if self.higher_layer_query_cancellation_token.is_some() {
+            return TransmissionEvent::None;
+        }
+
+        let cancellation_token = CancellationToken::new();
+        let drop_guard = cancellation_token.clone().drop_guard();
+        self.higher_layer_query_cancellation_token = Some(drop_guard);
+
+        TransmissionEvent::StartHigherLayerQueryWorker((
             self.device_data.destination_frame_mac,
             cancellation_token,
         ))
@@ -572,6 +592,14 @@ impl TopologyDatabase {
     pub async fn get_device(&self, al_mac: MacAddr) -> Option<Ieee1905Node> {
         let nodes = self.nodes.read().await;
         Some(nodes.get(&al_mac)?.into())
+    }
+
+    pub async fn take_higher_layer_query_worker(&self, al_mac: MacAddr) -> TransmissionEvent {
+        let mut nodes = self.nodes.write().await;
+        let Some(node) = nodes.get_mut(&al_mac) else {
+            return TransmissionEvent::None;
+        };
+        node.prepare_higher_layer_query_worker_if_needed()
     }
 
     /// **Retrieves a device node from the database**
@@ -916,6 +944,11 @@ impl TopologyDatabase {
                         UpdateType::ApAutoConfigSearch => {
                             node.prepare_link_metrics_query_transmission_event_if_needed()
                         }
+
+                        UpdateType::HigherLayerQueryReceived => {
+                            debug!("Event: Send Higher Layer Response");
+                            TransmissionEvent::SendHigherLayerResponse(al_mac)
+                        }
                     };
                 }
                 None => {
@@ -935,6 +968,7 @@ impl TopologyDatabase {
                         },
                         device_data,
                         link_metrics_query_cancellation_token: None,
+                        higher_layer_query_cancellation_token: None,
                         artifact_client: None,
                     };
 
@@ -972,6 +1006,7 @@ impl TopologyDatabase {
                         if let Some(vec) = interfaces.as_mut() {
                             Self::update_local_neighbours_ieee1905_compatibility(vec, &nodes);
                         }
+
                     }
                 }
             };
