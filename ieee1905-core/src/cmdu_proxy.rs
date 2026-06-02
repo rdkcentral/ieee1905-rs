@@ -811,7 +811,7 @@ pub async fn cmdu_higher_layer_response_transmission(
         }),
         TLV::from(Ipv6 {
             entries: vec![Ipv6Entry {
-                mac_address: node.device_data.al_mac,
+                mac_address: local_al_mac_address,
                 link_local_address: server_address,
                 other_addresses: Default::default(),
             }],
