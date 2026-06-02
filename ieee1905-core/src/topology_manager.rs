@@ -24,18 +24,21 @@ use crate::cmdu_codec::ControlUrl;
 use crate::linux::if_link::RtnlLinkStats64;
 use crate::lldpdu::PortId;
 use crate::{
-    artifact_service::client::ArtifactClient,
+    artifact_exchange_service::client::ArtifactExchangeClient,
     cmdu_codec::{
         CMDUFragmentation, DeviceIdentificationType, Ieee1905ProfileVersion, LinkMetricQuery,
         MediaType, MediaTypeSpecialInfo, Profile2ApCapability, SupportedFreqBand,
     },
 };
-use crate::{artifact_service::client::ArtifactClientFactory, interface_manager::get_interfaces};
+use crate::{
+    artifact_exchange_service::client::ArtifactExchangeClientFactory,
+    interface_manager::get_interfaces,
+};
 use crate::{
     cmdu::IEEE1905Neighbor, interface_manager::get_forwarding_interface_mac, next_task_id,
 };
 // External crates
-use crate::artifact_service::server::ArtifactServer;
+use crate::artifact_exchange_service::server::ArtifactExchangeServer;
 use crossterm::{
     event::{self, KeyCode},
     execute,
@@ -305,7 +308,7 @@ pub struct Ieee1905DeviceData {
     pub supported_freq_band: Option<SupportedFreqBand>,
     pub ieee1905profile_version: Option<Ieee1905ProfileVersion>,
     pub device_identification_type: Option<DeviceIdentificationType>,
-    pub artifact_server_address: Option<Ipv6Addr>,
+    pub artifact_exchange_server_address: Option<Ipv6Addr>,
 }
 
 impl Ieee1905DeviceData {
@@ -329,7 +332,7 @@ impl Ieee1905DeviceData {
             supported_freq_band: None,
             ieee1905profile_version: None,
             device_identification_type: None,
-            artifact_server_address: None,
+            artifact_exchange_server_address: None,
         }
     }
 
@@ -389,7 +392,7 @@ impl From<&Ieee1905NodeInternal> for Ieee1905Node {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum ArtifactClientSource {
+enum ArtifactExchangeClientSource {
     Ipv6,
     ControlUrl,
 }
@@ -398,7 +401,7 @@ enum ArtifactClientSource {
 pub struct Ieee1905NodeInternal {
     pub metadata: Ieee1905NodeInfo,
     pub device_data: Ieee1905DeviceData,
-    artifact_client: Option<(ArtifactClientSource, String, ArtifactClient)>,
+    artifact_exchange_client: Option<(ArtifactExchangeClientSource, String, ArtifactExchangeClient)>,
     link_metrics_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
     higher_layer_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
 }
@@ -409,7 +412,7 @@ impl Ieee1905NodeInternal {
         Self {
             metadata,
             device_data,
-            artifact_client: None,
+            artifact_exchange_client: None,
             link_metrics_query_cancellation_token: None,
             higher_layer_query_cancellation_token: None,
         }
@@ -459,19 +462,19 @@ impl Ieee1905NodeInternal {
         ))
     }
 
-    fn update_artifact_client(
+    fn update_artifact_exchange_client(
         &mut self,
-        client_factory: Option<&ArtifactClientFactory>,
-        source: ArtifactClientSource,
+        client_factory: Option<&ArtifactExchangeClientFactory>,
+        source: ArtifactExchangeClientSource,
         base_url: Option<String>,
     ) {
-        if let Some((current_source, current_base_url, _)) = self.artifact_client.as_ref() {
+        if let Some((current_source, current_base_url, _)) = self.artifact_exchange_client.as_ref() {
             if base_url.as_ref() == Some(current_base_url) {
                 return; // url didn't change, keep the client
             }
 
-            if *current_source == ArtifactClientSource::ControlUrl
-                && source == ArtifactClientSource::Ipv6
+            if *current_source == ArtifactExchangeClientSource::ControlUrl
+                && source == ArtifactExchangeClientSource::Ipv6
             {
                 return; // priority goes to url-based creation, it gives more info
             }
@@ -479,12 +482,12 @@ impl Ieee1905NodeInternal {
             info!(
                 al_mac = %self.device_data.al_mac,
                 base_url = current_base_url,
-                "artifact client stopped",
+                "artifact exchange client stopped",
             );
-            self.artifact_client = None;
+            self.artifact_exchange_client = None;
         }
 
-        if self.artifact_client.is_none()
+        if self.artifact_exchange_client.is_none()
             && let Some(client_factory) = client_factory
             && let Some(base_url) = base_url
         {
@@ -493,15 +496,15 @@ impl Ieee1905NodeInternal {
                     info!(
                         al_mac = %self.device_data.al_mac,
                         address = %base_url,
-                        "artifact client started",
+                        "artifact exchange client started",
                     );
-                    self.artifact_client = Some((source, base_url, e));
+                    self.artifact_exchange_client = Some((source, base_url, e));
                 }
                 Err(e) => error!(
                     al_mac = %self.device_data.al_mac,
                     address = %base_url,
                     %e,
-                    "failed to start artifact client",
+                    "failed to start artifact exchange client",
                 ),
             }
         }
@@ -518,12 +521,12 @@ pub struct TopologyDatabase {
     pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905LocalInterface>>>>,
     pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905NodeInternal>>>,
     pub local_role: Arc<RwLock<Option<Role>>>,
-    artifact_client_factory: Mutex<Option<ArtifactClientFactory>>,
-    artifact_server_ip_address: Mutex<Option<Ipv6Addr>>,
+    artifact_exchange_client_factory: Mutex<Option<ArtifactExchangeClientFactory>>,
+    artifact_exchange_server_ip_address: Mutex<Option<Ipv6Addr>>,
 }
 
 impl TopologyDatabase {
-    pub const HLE_ARTIFACT_SERVICE: &'static str = "ArtifactService";
+    pub const HLE_ARTIFACT_EXCHANGE_SERVICE: &'static str = "ArtifactExchangeService";
 
     /// **Creates a new `TopologyDatabase` instance**
     pub fn new(al_mac_address: MacAddr, interface_name: String) -> Arc<Self> {
@@ -541,8 +544,8 @@ impl TopologyDatabase {
             local_interface_list: Arc::new(RwLock::new(None)),
             nodes: Arc::new(RwLock::new(IndexMap::new())),
             local_role: Arc::new(RwLock::new(None)),
-            artifact_client_factory: Default::default(),
-            artifact_server_ip_address: Default::default(),
+            artifact_exchange_client_factory: Default::default(),
+            artifact_exchange_server_ip_address: Default::default(),
         })
     }
 
@@ -568,16 +571,16 @@ impl TopologyDatabase {
         *mac_guard
     }
 
-    pub fn set_artifact_client_factory(&self, factory: ArtifactClientFactory) {
-        *self.artifact_client_factory.lock() = Some(factory);
+    pub fn set_artifact_exchange_client_factory(&self, factory: ArtifactExchangeClientFactory) {
+        *self.artifact_exchange_client_factory.lock() = Some(factory);
     }
 
-    pub fn get_artifact_server_ip_address(&self) -> Option<Ipv6Addr> {
-        *self.artifact_server_ip_address.lock()
+    pub fn get_artifact_exchange_server_ip_address(&self) -> Option<Ipv6Addr> {
+        *self.artifact_exchange_server_ip_address.lock()
     }
 
-    pub fn set_artifact_server_ip_address(&self, address: Option<Ipv6Addr>) {
-        *self.artifact_server_ip_address.lock() = address;
+    pub fn set_artifact_exchange_server_ip_address(&self, address: Option<Ipv6Addr>) {
+        *self.artifact_exchange_server_ip_address.lock() = address;
     }
 
     /// **Returns a globally shared `TopologyDatabase` instance (async)**
@@ -871,11 +874,11 @@ impl TopologyDatabase {
                                     "Comparing local_interface_list"
                                 );
 
-                                node.update_artifact_client(
-                                    self.artifact_client_factory.lock().as_ref(),
-                                    ArtifactClientSource::Ipv6,
-                                    device_data.artifact_server_address.map(|e| {
-                                        ArtifactServer::format_base_url(e)
+                                node.update_artifact_exchange_client(
+                                    self.artifact_exchange_client_factory.lock().as_ref(),
+                                    ArtifactExchangeClientSource::Ipv6,
+                                    device_data.artifact_exchange_server_address.map(|e| {
+                                        ArtifactExchangeServer::format_base_url(e)
                                     }),
                                 );
 
@@ -962,7 +965,7 @@ impl TopologyDatabase {
                         device_data,
                         link_metrics_query_cancellation_token: None,
                         higher_layer_query_cancellation_token: None,
-                        artifact_client: None,
+                        artifact_exchange_client: None,
                     };
 
                     let node_was_created;
@@ -1093,10 +1096,10 @@ impl TopologyDatabase {
             return false;
         };
 
-        if device_information.friendly_name == Self::HLE_ARTIFACT_SERVICE {
-            node.update_artifact_client(
-                self.artifact_client_factory.lock().as_ref(),
-                ArtifactClientSource::ControlUrl,
+        if device_information.friendly_name == Self::HLE_ARTIFACT_EXCHANGE_SERVICE {
+            node.update_artifact_exchange_client(
+                self.artifact_exchange_client_factory.lock().as_ref(),
+                ArtifactExchangeClientSource::ControlUrl,
                 control_url.map(|e| e.url),
             );
             return true;

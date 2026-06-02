@@ -1020,7 +1020,7 @@ Artifacts can be transferred automatically between the controller and the agent 
 
 This mechanism will rely on topology convergence to synchronize the controller's IPv6 address so that agents can discover where to pull artifacts from and where to push artifacts to. The goal is to reuse topology knowledge already maintained by IEEE1905 instead of introducing a separate discovery mechanism.
 
-On the controller side, we will implement an HTTP artifact service using `axum`. On the client side, we will use `reqwest` so an AL entity can push artifacts to a remote controller or pull artifacts from it when required.
+On the controller side, we will implement an HTTP artifact exchange service using `axum`. On the client side, we will use `reqwest` so an AL entity can push artifacts to a remote controller or pull artifacts from it when required.
 
 ### Artifact Types
 
@@ -1035,11 +1035,11 @@ We will provide three different kinds of artifacts to be exchanged between contr
 When launching the `ieee1905` binary, artifact synchronization must be enabled with the following argument:
 
 ```text
---artifact-sync <ARTIFACT_SYNC>
-        Enables artifact server [possible values: server, client]
+--artifact-exchange <ARTIFACT_EXCHANGE>
+        Enables artifact exchange server [possible values: server, client]
 ```
 
-Use `server` when the node must expose the artifact HTTP service, and use `client` when the node must push or pull artifacts from the controller.
+Use `server` when the node must expose the artifact exchange HTTP service, and use `client` when the node must push or pull artifacts from the controller.
 
 ### Artifact Naming Convention
 
@@ -1057,10 +1057,10 @@ Example:
 
 ### Artifact Storage Layout
 
-The artifact service will use the following directory structure:
+The artifact exchange service will use the following directory structure:
 
 ```text
-/tmp/artifacts/                                  (artifact service root directory)
+/tmp/artifacts/                                  (artifact exchange service root directory)
 ├── tx/                                          (artifacts prepared to be transmitted to a remote AL entity)
 │   ├── logs/                                    (log artifacts to send)
 │   │   └── 11-22-33-44-55-66__2026-04-29T12-30-00Z__telemetry.log

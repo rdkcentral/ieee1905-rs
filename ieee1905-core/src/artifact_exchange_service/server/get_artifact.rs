@@ -1,5 +1,5 @@
-use crate::artifact_service::common::{ArtifactConfig, is_file_name_sanitized};
-use crate::artifact_service::server::ArtifactServerInstanceActor;
+use crate::artifact_exchange_service::common::{ArtifactExchangeConfig, is_file_name_sanitized};
+use crate::artifact_exchange_service::server::ArtifactExchangeServerInstanceActor;
 use axum::body::{Body, Bytes};
 use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
@@ -17,12 +17,12 @@ pub struct PathArgs {
     artifact_name: String,
 }
 
-impl ArtifactServerInstanceActor {
+impl ArtifactExchangeServerInstanceActor {
     pub async fn get_artifact(path: axum::extract::Path<PathArgs>) -> Response {
         let artifact_type = path.artifact_type.as_str();
         let artifact_name = path.artifact_name.as_str();
 
-        let config = ArtifactConfig::get();
+        let config = ArtifactExchangeConfig::get();
         if !config.s2c_artifact_types.contains(&artifact_type) {
             let message = format!("artifact type {artifact_type} is not supported");
             return (StatusCode::NOT_ACCEPTABLE, message).into_response();
@@ -64,7 +64,8 @@ impl ArtifactServerInstanceActor {
         let artifact_type = artifact_type.to_string();
         let archive = futures::stream::once(async move {
             if stream_sent.load(Ordering::Relaxed) {
-                let mut storage = ArtifactConfig::get().get_tx_archive_storage(&artifact_type);
+                let mut storage =
+                    ArtifactExchangeConfig::get().get_tx_archive_storage(&artifact_type);
                 if let Err(e) = storage.store(&file_path).await {
                     error!(?file_path, %e, "failed to archive served artifact");
                     let _ = tokio::fs::remove_file(&file_path).await;

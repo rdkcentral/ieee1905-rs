@@ -18,7 +18,7 @@
 */
 use crate::SDU;
 use crate::al_sap::AlServiceAccessPoint;
-use crate::artifact_service::server::ArtifactServer;
+use crate::artifact_exchange_service::server::ArtifactExchangeServer;
 use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
@@ -412,12 +412,12 @@ async fn inject_topology_response_tlvs(
     }
 
     // injecting VendorInfo and Ipv6
-    if let Some(address) = db.get_artifact_server_ip_address() {
+    if let Some(address) = db.get_artifact_exchange_server_ip_address() {
         vec.push(TLV::from(VendorSpecificInfo {
             oui: COMCAST_OUI,
             vendor_data: VendorSpecificInfoData {
                 version: 0,
-                info_type: VendorSpecificInfoType::ArtifactService,
+                info_type: VendorSpecificInfoType::ArtifactExchangeService,
                 role: VendorSpecificInfoRole::Server,
             },
         }));
@@ -433,7 +433,7 @@ async fn inject_topology_response_tlvs(
             oui: COMCAST_OUI,
             vendor_data: VendorSpecificInfoData {
                 version: 0,
-                info_type: VendorSpecificInfoType::ArtifactService,
+                info_type: VendorSpecificInfoType::ArtifactExchangeService,
                 role: VendorSpecificInfoRole::Client,
             },
         }));
@@ -789,8 +789,8 @@ pub async fn cmdu_higher_layer_response_transmission(
     );
 
     let db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
-    let Some(server_address) = db.get_artifact_server_ip_address() else {
-        return info!("skipping, artifact server is not present");
+    let Some(server_address) = db.get_artifact_exchange_server_ip_address() else {
+        return info!("skipping, artifact exchange server is not present");
     };
     let Some(node) = db.get_device(remote_al_mac_address).await else {
         return warn!(al_mac = %remote_al_mac_address, "Node not found");
@@ -802,12 +802,12 @@ pub async fn cmdu_higher_layer_response_transmission(
         }),
         TLV::from(Ieee1905ProfileVersion::Ieee1905_1a),
         TLV::from(DeviceIdentificationType {
-            friendly_name: TopologyDatabase::HLE_ARTIFACT_SERVICE.to_string(),
+            friendly_name: TopologyDatabase::HLE_ARTIFACT_EXCHANGE_SERVICE.to_string(),
             manufacturer_name: Default::default(),
             manufacturer_model: Default::default(),
         }),
         TLV::from(ControlUrl {
-            url: ArtifactServer::format_base_url(server_address),
+            url: ArtifactExchangeServer::format_base_url(server_address),
         }),
         TLV::from(Ipv6 {
             entries: vec![Ipv6Entry {

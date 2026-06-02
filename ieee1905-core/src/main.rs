@@ -37,8 +37,8 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 //use ieee1905::crypto_engine::CRYPTO_CONTEXT;
 use anyhow::bail;
-use ieee1905::artifact_service::client::ArtifactClientFactory;
-use ieee1905::artifact_service::server::ArtifactServer;
+use ieee1905::artifact_exchange_service::client::ArtifactExchangeClientFactory;
+use ieee1905::artifact_exchange_service::server::ArtifactExchangeServer;
 use sd_notify::NotifyState;
 use std::sync::Arc;
 use std::time::Duration;
@@ -84,13 +84,13 @@ struct CliArgs {
     /// Disable LLDP receivers
     #[arg(long)]
     no_lldp_receivers: bool,
-    /// Enables artifact server
+    /// Enables artifact exchange server
     #[arg(long)]
-    artifact_sync: Option<ArtifactSync>,
+    artifact_exchange: Option<ArtifactExchange>,
 }
 
 #[derive(ValueEnum, Debug, Clone)]
-enum ArtifactSync {
+enum ArtifactExchange {
     Server,
     Client,
 }
@@ -173,20 +173,20 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     //we initilize here the values for LLDP input parameters
     let chassis_id = al_mac;
 
-    let mut _artifact_server = None;
-    match cli.artifact_sync.as_ref() {
-        Some(ArtifactSync::Server) => {
-            tracing::info!("ArtifactsSync server is enabled");
-            let mut server = ArtifactServer::new(topology_db.clone(), if_info.clone());
+    let mut _artifact_exchange_server = None;
+    match cli.artifact_exchange.as_ref() {
+        Some(ArtifactExchange::Server) => {
+            tracing::info!("Artifact exchange server is enabled");
+            let mut server = ArtifactExchangeServer::new(topology_db.clone(), if_info.clone());
             server.start().await?;
-            _artifact_server = Some(server);
+            _artifact_exchange_server = Some(server);
         }
-        Some(ArtifactSync::Client) => {
-            tracing::info!("ArtifactsSync client is enabled");
-            let factory = ArtifactClientFactory::new(if_info.clone()).await?;
-            topology_db.set_artifact_client_factory(factory);
+        Some(ArtifactExchange::Client) => {
+            tracing::info!("Artifact exchange client is enabled");
+            let factory = ArtifactExchangeClientFactory::new(if_info.clone()).await?;
+            topology_db.set_artifact_exchange_client_factory(factory);
         }
-        None => tracing::info!("ArtifactsSync is disabled"),
+        None => tracing::info!("ArtifactExchangeSync is disabled"),
     }
 
     tracing::debug!("Topology Database initialized with AL MAC: {:?}", al_mac);

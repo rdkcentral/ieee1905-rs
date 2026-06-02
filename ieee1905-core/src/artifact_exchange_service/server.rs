@@ -2,7 +2,7 @@ mod get_artifact;
 mod get_artifact_list;
 mod put_artifact;
 
-use crate::artifact_service::common::ArtifactConfig;
+use crate::artifact_exchange_service::common::ArtifactExchangeConfig;
 use crate::interface_manager::{
     InterfaceInfo, call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64,
 };
@@ -19,14 +19,14 @@ use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, instrument};
 
 ////////////////////////////////////////////////////////////////////////////////
-pub struct ArtifactServer {
+pub struct ArtifactExchangeServer {
     topo_db: Arc<TopologyDatabase>,
     if_info: InterfaceInfo,
     ip_address: Ipv6Addr,
-    instance: Option<ArtifactServerInstance>,
+    instance: Option<ArtifactExchangeServerInstance>,
 }
 
-impl ArtifactServer {
+impl ArtifactExchangeServer {
     pub fn new(topo_db: Arc<TopologyDatabase>, if_info: InterfaceInfo) -> Self {
         let ip_address = convert_mac_to_eui64(if_info.mac);
 
@@ -40,7 +40,7 @@ impl ArtifactServer {
 
     ////////////////////////////////////////////////////////////////////////////////
     pub fn format_base_url(ipv6: Ipv6Addr) -> String {
-        format!("http://[{ipv6}]:{}/", ArtifactConfig::PORT)
+        format!("http://[{ipv6}]:{}/", ArtifactExchangeConfig::PORT)
     }
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -54,7 +54,7 @@ impl ArtifactServer {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    #[instrument(skip_all, "artifact_server")]
+    #[instrument(skip_all, "artifact_exchange_server")]
     pub async fn start(&mut self) -> anyhow::Result<()> {
         debug!("starting server");
 
@@ -74,7 +74,7 @@ impl ArtifactServer {
         self.instance = Some({
             let topo_db = self.topo_db.clone();
             let if_info = self.if_info.clone();
-            ArtifactServerInstance::new(topo_db, if_info, self.ip_address).await?
+            ArtifactExchangeServerInstance::new(topo_db, if_info, self.ip_address).await?
         });
         info!("server started");
         Ok(())
@@ -88,7 +88,7 @@ impl ArtifactServer {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-pub struct ArtifactServerInstance {
+pub struct ArtifactExchangeServerInstance {
     topo_db: Arc<TopologyDatabase>,
     runtime: Handle,
     if_info: InterfaceInfo,
@@ -96,7 +96,7 @@ pub struct ArtifactServerInstance {
     _join_set: JoinSet<()>,
 }
 
-impl ArtifactServerInstance {
+impl ArtifactExchangeServerInstance {
     async fn new(
         topo_db: Arc<TopologyDatabase>,
         if_info: InterfaceInfo,
@@ -104,22 +104,22 @@ impl ArtifactServerInstance {
     ) -> anyhow::Result<Self> {
         debug!("starting tcp listener");
         let runtime = Handle::try_current()?;
-        let port = ArtifactConfig::PORT;
+        let port = ArtifactExchangeConfig::PORT;
         let so_address = SocketAddrV6::new(ip_address, port, 0, if_info.if_index);
         let listener = TcpListener::bind(so_address).await?;
 
         debug!("starting server worker");
         let mut join_set = JoinSet::new();
-        join_set.spawn(ArtifactServerInstanceActor.worker(listener));
+        join_set.spawn(ArtifactExchangeServerInstanceActor.worker(listener));
 
         info!(
             if_name = if_info.if_name,
             ip_address = %ip_address,
             "server successfully started",
         );
-        topo_db.set_artifact_server_ip_address(Some(ip_address));
+        topo_db.set_artifact_exchange_server_ip_address(Some(ip_address));
 
-        Ok(ArtifactServerInstance {
+        Ok(ArtifactExchangeServerInstance {
             topo_db,
             runtime,
             if_info,
@@ -129,7 +129,7 @@ impl ArtifactServerInstance {
     }
 }
 
-impl Drop for ArtifactServerInstance {
+impl Drop for ArtifactExchangeServerInstance {
     fn drop(&mut self) {
         debug!(
             if_name = self.if_info.if_name,
@@ -137,7 +137,7 @@ impl Drop for ArtifactServerInstance {
             ip_address = %self.ip_address,
             "clearing ip address to the interface",
         );
-        self.topo_db.set_artifact_server_ip_address(None);
+        self.topo_db.set_artifact_exchange_server_ip_address(None);
         self.runtime.spawn(call_rt_remove_address_v6(
             self.if_info.if_index,
             self.ip_address,
@@ -146,13 +146,13 @@ impl Drop for ArtifactServerInstance {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-pub(crate) struct ArtifactServerInstanceActor;
+pub(crate) struct ArtifactExchangeServerInstanceActor;
 
-impl ArtifactServerInstanceActor {
+impl ArtifactExchangeServerInstanceActor {
     ////////////////////////////////////////////////////////////////////////////////
-    #[instrument(skip_all, "artifact_server/worker", fields(task = next_task_id()))]
+    #[instrument(skip_all, "artifact_exchange_server/worker", fields(task = next_task_id()))]
     async fn worker(self, listener: TcpListener) {
-        let config = ArtifactConfig::get();
+        let config = ArtifactExchangeConfig::get();
 
         debug!("cleanup");
         if let Err(e) = tokio::fs::remove_dir_all(&config.rx_folder).await {

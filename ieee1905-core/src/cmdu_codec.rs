@@ -143,7 +143,7 @@ impl MessageVersion {
 pub const COMCAST_OUI: [u8; 3] = [0xD8, 0x9C, 0x8E];
 pub const COMCAST_QUERY_TAG: VendorSpecificInfoData = VendorSpecificInfoData {
     version: 0x00,
-    info_type: VendorSpecificInfoType::ArtifactService,
+    info_type: VendorSpecificInfoType::ArtifactExchangeService,
     role: VendorSpecificInfoRole::Client,
 };
 ///////////////////////////////////////////////////////////////////////////
@@ -908,21 +908,21 @@ pub struct VendorSpecificInfo {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VendorSpecificInfoType {
-    ArtifactService,
+    ArtifactExchangeService,
     Reserved(u8),
 }
 
 impl VendorSpecificInfoType {
     pub fn from_u8(input: u8) -> Self {
         match input {
-            0x01 => Self::ArtifactService,
+            0x01 => Self::ArtifactExchangeService,
             x => Self::Reserved(x),
         }
     }
 
     pub fn to_u8(self) -> u8 {
         match self {
-            Self::ArtifactService => 0x01,
+            Self::ArtifactExchangeService => 0x01,
             Self::Reserved(value) => value,
         }
     }
@@ -3758,7 +3758,7 @@ pub mod tests {
     fn test_vendor_specific_info_known_values_serialize_to_expected_bytes() {
         let vendor_data = VendorSpecificInfoData {
             version: 0x00,
-            info_type: VendorSpecificInfoType::ArtifactService,
+            info_type: VendorSpecificInfoType::ArtifactExchangeService,
             role: VendorSpecificInfoRole::Server,
         };
 
