@@ -757,7 +757,7 @@ pub async fn cmdu_higher_layer_query_transmission_worker(
             message_type: CMDUType::HigherLayerQuery.to_u16(),
             message_id,
             fragment: 0,
-            flags: 0x80,
+            flags: CMDU::FLAG_LAST_FRAGMENT,
             payload: TLV::from(EndOfMessage).serialize(),
         };
 
@@ -830,7 +830,7 @@ pub async fn cmdu_higher_layer_response_transmission(
         message_type: CMDUType::HigherLayerResponse.to_u16(),
         message_id,
         fragment: 0,
-        flags: 0x80,
+        flags: CMDU::FLAG_LAST_FRAGMENT,
         payload: payload.iter().flat_map(TLV::serialize).collect(),
     };
 
