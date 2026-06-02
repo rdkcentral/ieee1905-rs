@@ -875,7 +875,7 @@ impl TopologyDatabase {
                                     self.artifact_client_factory.lock().as_ref(),
                                     ArtifactClientSource::Ipv6,
                                     device_data.artifact_server_address.map(|e| {
-                                        return ArtifactServer::format_base_url(e);
+                                        ArtifactServer::format_base_url(e)
                                     }),
                                 );
 
