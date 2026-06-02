@@ -248,31 +248,31 @@ impl ArtifactClientActor {
                 continue;
             }
 
-            if !is_file_name_sanitized(&kind) {
+            if !is_file_name_sanitized(kind) {
                 warn!("invalid file group {kind}");
                 continue;
             }
 
-            if !is_file_name_sanitized(&name) {
+            if !is_file_name_sanitized(name) {
                 warn!("invalid file name {name}");
                 continue;
             }
 
-            let artifact_dir = config.rx_folder.join(&kind);
-            let artifact_path = artifact_dir.join(&name);
+            let artifact_dir = config.rx_folder.join(kind);
+            let artifact_path = artifact_dir.join(name);
 
             if let Err(e) = tokio::fs::create_dir_all(&artifact_dir).await {
                 error!(%e, "failed to create artifact dir: {artifact_dir:?}");
                 continue;
             }
 
-            if let Err(e) = self.get_artifact(&kind, &name, &artifact_path).await {
+            if let Err(e) = self.get_artifact(kind, name, &artifact_path).await {
                 error!(%e, "failed to fetch an artifact: {kind}/{name}");
                 let _ = tokio::fs::remove_file(&artifact_path).await;
                 continue;
             }
 
-            let mut storage = config.get_rx_archive_storage(&kind);
+            let mut storage = config.get_rx_archive_storage(kind);
             if let Err(e) = storage.store(&artifact_path).await {
                 error!(%e, "failed to archive an artifact {artifact_path:?}");
                 let _ = tokio::fs::remove_file(&artifact_path).await;
