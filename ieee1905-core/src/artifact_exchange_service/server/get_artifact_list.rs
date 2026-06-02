@@ -1,5 +1,5 @@
-use crate::artifact_service::common::{ArtifactConfig, ArtifactFilter};
-use crate::artifact_service::server::ArtifactServerInstanceActor;
+use crate::artifact_exchange_service::common::{ArtifactExchangeConfig, ArtifactExchangeFilter};
+use crate::artifact_exchange_service::server::ArtifactExchangeServerInstanceActor;
 use axum::Json;
 use axum::extract::Query;
 use axum::http::StatusCode;
@@ -7,9 +7,9 @@ use axum::response::{IntoResponse, Response};
 use std::collections::HashMap;
 use tracing::warn;
 
-impl ArtifactServerInstanceActor {
-    pub async fn get_artifact_list(Query(mut query): Query<ArtifactFilter>) -> Response {
-        let config = ArtifactConfig::get();
+impl ArtifactExchangeServerInstanceActor {
+    pub async fn get_artifact_list(Query(mut query): Query<ArtifactExchangeFilter>) -> Response {
+        let config = ArtifactExchangeConfig::get();
         query.mac.make_ascii_lowercase();
 
         let mut file_groups = HashMap::<String, Vec<String>>::new();

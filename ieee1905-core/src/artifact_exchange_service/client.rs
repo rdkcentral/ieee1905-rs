@@ -1,5 +1,6 @@
-use crate::artifact_service::common::{
-    ArtifactConfig, ArtifactFilter, format_mac_as_file_prefix, is_file_name_sanitized,
+use crate::artifact_exchange_service::common::{
+    ArtifactExchangeConfig, ArtifactExchangeFilter, format_mac_as_file_prefix,
+    is_file_name_sanitized,
 };
 use crate::interface_manager::{
     InterfaceInfo, call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64,
@@ -22,16 +23,16 @@ use tracing::{debug, error, info, instrument, trace, warn};
 
 ////////////////////////////////////////////////////////////////////////////////
 #[derive(Debug)]
-pub struct ArtifactClientFactory {
+pub struct ArtifactExchangeClientFactory {
     runtime: Handle,
     if_info: InterfaceInfo,
     local_ip_address: Ipv6Addr,
 }
 
-impl ArtifactClientFactory {
+impl ArtifactExchangeClientFactory {
     ////////////////////////////////////////////////////////////////////////////////
     pub async fn new(if_info: InterfaceInfo) -> anyhow::Result<Self> {
-        let config = ArtifactConfig::get();
+        let config = ArtifactExchangeConfig::get();
         let runtime = Handle::try_current()?;
         let local_ip_address = convert_mac_to_eui64(if_info.mac);
 
@@ -59,12 +60,12 @@ impl ArtifactClientFactory {
         &self,
         remote_mac_address: MacAddr,
         base_url: &str,
-    ) -> anyhow::Result<ArtifactClient> {
-        ArtifactClient::new(self.if_info.clone(), remote_mac_address, base_url)
+    ) -> anyhow::Result<ArtifactExchangeClient> {
+        ArtifactExchangeClient::new(self.if_info.clone(), remote_mac_address, base_url)
     }
 }
 
-impl Drop for ArtifactClientFactory {
+impl Drop for ArtifactExchangeClientFactory {
     ////////////////////////////////////////////////////////////////////////////////
     fn drop(&mut self) {
         debug!(
@@ -81,12 +82,12 @@ impl Drop for ArtifactClientFactory {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-pub struct ArtifactClient {
+pub struct ArtifactExchangeClient {
     base_url: String,
     _join_set: JoinSet<()>,
 }
 
-impl ArtifactClient {
+impl ArtifactExchangeClient {
     ////////////////////////////////////////////////////////////////////////////////
     fn new(
         if_info: InterfaceInfo,
@@ -107,7 +108,7 @@ impl ArtifactClient {
 
         info!(mac = %remote_mac_address, %base_url, "client created");
 
-        let actor = ArtifactClientActor {
+        let actor = ArtifactExchangeClientActor {
             if_info,
             remote_mac_address,
             base_url,
@@ -124,27 +125,27 @@ impl ArtifactClient {
     }
 }
 
-impl Debug for ArtifactClient {
+impl Debug for ArtifactExchangeClient {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ArtifactClient({})", self.base_url)
+        write!(f, "ArtifactExchangeClient({})", self.base_url)
     }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-struct ArtifactClientActor {
+struct ArtifactExchangeClientActor {
     if_info: InterfaceInfo,
     remote_mac_address: MacAddr,
     base_url: Url,
     client: reqwest::Client,
 }
 
-impl ArtifactClientActor {
+impl ArtifactExchangeClientActor {
     const UPLOAD_SYNC_INTERVAL: Duration = Duration::from_mins(1);
     const DOWNLOAD_SYNC_INTERVAL: Duration = Duration::from_mins(10);
 
     ////////////////////////////////////////////////////////////////////////////////
     async fn worker(self) {
-        let config = ArtifactConfig::get();
+        let config = ArtifactExchangeConfig::get();
 
         futures::join!(
             self.upload_artifacts_worker(config),
@@ -153,8 +154,8 @@ impl ArtifactClientActor {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    #[instrument(skip_all, "artifact_client/upload", fields(task = next_task_id()))]
-    async fn upload_artifacts_worker(&self, config: &ArtifactConfig) {
+    #[instrument(skip_all, "artifact_exchange_client/upload", fields(task = next_task_id()))]
+    async fn upload_artifacts_worker(&self, config: &ArtifactExchangeConfig) {
         loop {
             let instant = Instant::now();
             info!(remote = %self.remote_mac_address, "upload sync started");
@@ -169,7 +170,7 @@ impl ArtifactClientActor {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    async fn upload_artifacts_by_type(&self, config: &ArtifactConfig, artifact_type: &str) {
+    async fn upload_artifacts_by_type(&self, config: &ArtifactExchangeConfig, artifact_type: &str) {
         let in_flight_dir = config.tx_folder.join(artifact_type);
         let filter_mac = format_mac_as_file_prefix(self.remote_mac_address);
 
@@ -213,8 +214,8 @@ impl ArtifactClientActor {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    #[instrument(skip_all, "artifact_client/download", fields(task = next_task_id()))]
-    async fn download_artifacts_worker(&self, config: &ArtifactConfig) {
+    #[instrument(skip_all, "artifact_exchange_client/download", fields(task = next_task_id()))]
+    async fn download_artifacts_worker(&self, config: &ArtifactExchangeConfig) {
         loop {
             let instant = Instant::now();
             info!(remote = %self.remote_mac_address, "download sync started");
@@ -227,7 +228,7 @@ impl ArtifactClientActor {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    async fn download_artifacts(&self, config: &ArtifactConfig) {
+    async fn download_artifacts(&self, config: &ArtifactExchangeConfig) {
         debug!("fetching artifact list");
         let artifacts = match self.get_artifact_list().await {
             Ok(e) => e,
@@ -286,7 +287,7 @@ impl ArtifactClientActor {
     ////////////////////////////////////////////////////////////////////////////////
     async fn get_artifact_list(&self) -> anyhow::Result<HashMap<String, Vec<String>>> {
         let url = self.base_url.join("artifacts")?;
-        let filter = ArtifactFilter {
+        let filter = ArtifactExchangeFilter {
             mac: format_mac_as_file_prefix(self.if_info.mac),
         };
 

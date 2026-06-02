@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 ////////////////////////////////////////////////////////////////////////////////
-pub struct ArtifactConfig {
+pub struct ArtifactExchangeConfig {
     pub tx_folder: PathBuf,
     pub rx_folder: PathBuf,
     pub failed_folder: PathBuf,
@@ -14,11 +14,11 @@ pub struct ArtifactConfig {
     pub c2s_artifact_types: Vec<&'static str>,
 }
 
-impl ArtifactConfig {
+impl ArtifactExchangeConfig {
     pub const PORT: u16 = 6666;
 
     pub fn get() -> &'static Self {
-        static CELL: OnceLock<ArtifactConfig> = OnceLock::new();
+        static CELL: OnceLock<ArtifactExchangeConfig> = OnceLock::new();
         CELL.get_or_init(|| {
             let base_folder = Path::new("/tmp/artifacts/");
             Self {
@@ -67,7 +67,7 @@ impl ArtifactConfig {
 
 ////////////////////////////////////////////////////////////////////////////////
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ArtifactFilter {
+pub struct ArtifactExchangeFilter {
     pub mac: String,
 }
 

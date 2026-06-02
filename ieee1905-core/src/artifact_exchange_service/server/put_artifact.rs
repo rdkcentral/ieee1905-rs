@@ -1,5 +1,5 @@
-use crate::artifact_service::common::{ArtifactConfig, is_file_name_sanitized};
-use crate::artifact_service::server::ArtifactServerInstanceActor;
+use crate::artifact_exchange_service::common::{ArtifactExchangeConfig, is_file_name_sanitized};
+use crate::artifact_exchange_service::server::ArtifactExchangeServerInstanceActor;
 use axum::body::{Body, BodyDataStream};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -15,12 +15,12 @@ pub struct PathArgs {
     artifact_name: String,
 }
 
-impl ArtifactServerInstanceActor {
+impl ArtifactExchangeServerInstanceActor {
     pub async fn put_artifact(path: axum::extract::Path<PathArgs>, body: Body) -> Response {
         let artifact_type = path.artifact_type.as_str();
         let artifact_name = path.artifact_name.as_str();
 
-        let config = ArtifactConfig::get();
+        let config = ArtifactExchangeConfig::get();
         if !config.c2s_artifact_types.contains(&artifact_type) {
             let message = format!("artifact type {artifact_type} is not supported");
             return (StatusCode::NOT_ACCEPTABLE, message).into_response();
