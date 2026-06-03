@@ -21,7 +21,9 @@
 
 mod logger;
 
+use anyhow::anyhow;
 use clap::Parser;
+use ieee1905::CMDUObserver;
 use ieee1905::al_sap::AlServiceAccessPoint;
 use ieee1905::cmdu_handler::*;
 use ieee1905::cmdu_message_id_generator::get_message_id_generator;
@@ -32,19 +34,12 @@ use ieee1905::interface_manager::*;
 use ieee1905::lldpdu_observer::LLDPObserver;
 use ieee1905::lldpdu_proxy::lldp_discovery_worker;
 use ieee1905::topology_manager::*;
-use ieee1905::{CMDUObserver, next_task_id};
+use sd_notify::NotifyState;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-//use ieee1905::crypto_engine::CRYPTO_CONTEXT;
-use anyhow::anyhow;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Mutex;
-use tokio::sync::oneshot;
-use tracing::instrument;
-
-use sd_notify::NotifyState;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -85,7 +80,8 @@ struct CliArgs {
     no_lldp_receivers: bool,
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = CliArgs::parse();
 
     let _guard = logger::init_logger(&cli);
@@ -106,28 +102,6 @@ fn main() -> anyhow::Result<()> {
         tracing::error!("failed to open RBus connection: {e}");
     });
 
-    loop {
-        tracing::info!("Starting runtime");
-        let runtime = tokio::runtime::Runtime::new()?;
-
-        tracing::info!("Runtime started");
-        if runtime.block_on(run_main_logic(&cli))? {
-            break;
-        }
-
-        tracing::info!("Releasing runtime");
-        // timeout is used for blocking tasks, which in our case are related to datalink channels.
-        // all such tasks are configured to have a 1-second timeout, so will die at most in 1 second.
-        runtime.shutdown_timeout(Duration::from_secs(2));
-        tracing::info!("Runtime released");
-    }
-
-    tracing::info!("Closing app.");
-    Ok(())
-}
-
-#[instrument(skip_all, name = "main", fields(task = next_task_id()))]
-async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     let mut join_sets = Vec::new();
 
     //Set AL MAC & test MAC addresses
@@ -148,7 +122,6 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     // // Initialize Database
 
     let topology_db = TopologyDatabase::get_instance(al_mac, &cli.interface);
-    let _db_workers = topology_db.start_workers();
 
     // Upon every loop restart topology database role can change
     topology_db.set_local_role(None).await;
@@ -188,15 +161,12 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     let sender_clone = Arc::clone(&sender);
     let forwarding_interface_clone = forwarding_interface.clone();
 
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
     // Launch of AL-SAP as independent task
-    tokio::task::spawn(AlServiceAccessPoint::initialize_and_store(
+    tokio::task::spawn(AlServiceAccessPoint::run(
         sap_control_path,
         sap_data_path,
         sender_clone,
         forwarding_interface_clone,
-        shutdown_tx,
     ));
 
     // Initialization of the CMDU handler
@@ -270,18 +240,12 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
 
     // if topology_cli is running
     // you can close app by pressing q
-    let mut exit_service = true;
-
     tokio::select! {
         _ = signal_terminate.recv() => {let _ = sd_notify::notify(true, &[NotifyState::Stopping]);},
         _ = signal_interrupt.recv() => {let _ = sd_notify::notify(true, &[NotifyState::Stopping]);},
-        _ = shutdown_rx => {
-            tracing::info!("Socket closed. Trying to restart.");
-            exit_service = false;
-        }
         _ = topology_db.start_topology_cli(), if cli.topology_ui => {}
     }
-    Ok(exit_service)
+    Ok(())
 }
 
 async fn get_lldp_compatible_interfaces() -> Vec<Ieee1905LocalInterface> {

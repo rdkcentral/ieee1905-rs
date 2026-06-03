@@ -1304,7 +1304,6 @@ dependencies = [
  "either",
  "futures",
  "indexmap",
- "lazy_static",
  "neli",
  "nom 8.0.0",
  "once_cell",

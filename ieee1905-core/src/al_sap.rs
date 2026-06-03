@@ -18,6 +18,8 @@
 */
 
 #![deny(warnings)]
+use crate::cmdu::{CMDUType, TLV};
+use crate::cmdu_codec::{CMDU, CMDUFragmentation, IEEE1905TLVType, Profile2ApCapability};
 use crate::cmdu_message_id_generator::get_message_id_generator;
 use crate::cmdu_proxy::{cmdu_from_sdu_transmission, cmdu_topology_notification_transmission};
 use crate::ethernet_subject_transmission::EthernetSender;
@@ -27,37 +29,31 @@ use crate::registration_codec::{
     ServiceOperation, ServiceType,
 };
 use crate::sdu_codec::SDU;
+use crate::tlv_cmdu_codec::TLVTrait;
 use crate::topology_manager::Role;
 use crate::{TopologyDatabase, next_task_id};
 use anyhow::{Context, Result, bail};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
-use lazy_static::lazy_static;
 use pnet::datalink::MacAddr;
+use sd_notify;
+use sd_notify::NotifyState;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
+use thiserror::Error;
 use tokio::fs;
 use tokio::net::UnixListener;
 use tokio::net::UnixStream;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
-// Internal modules
-use crate::cmdu_codec::{CMDU, CMDUFragmentation, IEEE1905TLVType, Profile2ApCapability};
-use tokio::sync::oneshot;
-
-use once_cell::sync::Lazy;
-
-use crate::cmdu::{CMDUType, TLV};
-use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 
-use crate::tlv_cmdu_codec::TLVTrait;
-use sd_notify;
-use sd_notify::NotifyState;
-
-pub static SAP_INSTANCE: Lazy<Mutex<Option<Arc<Mutex<AlServiceAccessPoint>>>>> =
-    Lazy::new(|| Mutex::new(None));
+type FramedUnix = Framed<UnixStream, LengthDelimitedCodec>;
+static SAP_INSTANCE: Mutex<Option<Arc<Mutex<AlServiceAccessPoint>>>> = Mutex::const_new(None);
+static LAZY_WRITER: Mutex<Option<SplitSink<FramedUnix, Bytes>>> = Mutex::const_new(None);
+static LAZY_READER: Mutex<Option<SplitStream<FramedUnix>>> = Mutex::const_new(None);
 
 #[derive(Error, Debug)]
 pub enum AlSapError {
@@ -79,17 +75,6 @@ async fn get_instance_mut() -> Option<Arc<Mutex<AlServiceAccessPoint>>> {
     lock.clone()
 }
 
-// Define type alias for Framed Unix Stream
-type FramedUnix = Framed<UnixStream, LengthDelimitedCodec>;
-
-// Two halves: read one and write one instead of one AlServiceAccessPoint.data_socket
-lazy_static! {
-    pub static ref LAZY_WRITER: Arc<Mutex<Option<SplitSink<FramedUnix, Bytes>>>> =
-        Arc::new(Mutex::new(None));
-    pub static ref LAZY_READER: Arc<Mutex<Option<SplitStream<FramedUnix>>>> =
-        Arc::new(Mutex::new(None));
-}
-
 pub struct AlServiceAccessPoint {
     framed_control_socket: FramedUnix,
     control_socket_path: PathBuf,
@@ -101,16 +86,33 @@ pub struct AlServiceAccessPoint {
 }
 
 impl AlServiceAccessPoint {
-    #[instrument(skip_all, name = "al_sap_init", fields(task = next_task_id()))]
-    pub async fn initialize_and_store(
+    #[instrument(skip_all, name = "al_sap", fields(task = next_task_id()))]
+    pub async fn run(
         control_socket_path: impl AsRef<Path>,
         data_socket_path: impl AsRef<Path>,
         sender: Arc<EthernetSender>,
         interface_name: String,
-        shutdown_tx: oneshot::Sender<()>,
     ) {
-        SAP_INSTANCE.lock().await.take();
+        loop {
+            Self::run_instance(
+                control_socket_path.as_ref(),
+                data_socket_path.as_ref(),
+                sender.clone(),
+                interface_name.clone(),
+            )
+            .await;
 
+            SAP_INSTANCE.lock().await.take();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    async fn run_instance(
+        control_socket_path: impl AsRef<Path>,
+        data_socket_path: impl AsRef<Path>,
+        sender: Arc<EthernetSender>,
+        interface_name: String,
+    ) {
         let sap = AlServiceAccessPoint::start_server(
             control_socket_path,
             data_socket_path,
@@ -135,7 +137,7 @@ impl AlServiceAccessPoint {
         match result {
             Ok(_) => {
                 tracing::debug!("Received registration request on control unix stream socket");
-                sap_data_request_handler(shutdown_tx).await;
+                sap_data_request_handler().await;
             }
             Err(err) => {
                 tracing::error!("Registration request error: {:?}", err);
@@ -232,7 +234,7 @@ impl AlServiceAccessPoint {
     }
 
     /// Receives a registration request from the socket (from a client)
-    pub async fn service_access_point_registration_request(
+    async fn service_access_point_registration_request(
         &mut self,
     ) -> Result<AlServiceRegistrationRequest> {
         if let Some(result) = self.framed_control_socket.next().await {
@@ -661,7 +663,7 @@ pub async fn service_access_point_data_request() -> Result<SDU, AlSapError> {
 }
 
 // Do the downward forwarding: unix stream socket -> network
-pub async fn sap_data_request_handler(shutdown_tx: oneshot::Sender<()>) {
+async fn sap_data_request_handler() {
     loop {
         match service_access_point_data_request().await {
             Ok(_) => {
@@ -669,7 +671,6 @@ pub async fn sap_data_request_handler(shutdown_tx: oneshot::Sender<()>) {
             }
             Err(AlSapError::SocketClosed) => {
                 tracing::error!("Connection closed. Need to trigger restart!");
-                let _ = shutdown_tx.send(());
                 break;
             }
             Err(e) => {
