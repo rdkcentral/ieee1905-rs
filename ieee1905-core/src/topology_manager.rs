@@ -46,7 +46,6 @@ use std::ops::Deref;
 use std::sync::OnceLock;
 use std::{io, sync::Arc};
 use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
-use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 // Internal modules
 use crate::cmdu_codec::{
@@ -448,21 +447,17 @@ impl TopologyDatabase {
         // Get local MAC address from forwarding interface
         let local_mac = get_forwarding_interface_mac(&interface_name);
 
-        Arc::new(Self {
+        let this = Arc::new(Self {
             al_mac_address,
             interface_name,
             local_mac: Arc::new(RwLock::new(local_mac)),
             local_interface_list: Arc::new(RwLock::new(None)),
             nodes: Arc::new(RwLock::new(IndexMap::new())),
             local_role: Arc::new(RwLock::new(None)),
-        })
-    }
-
-    pub fn start_workers(self: &Arc<Self>) -> JoinSet<()> {
-        let mut set = JoinSet::new();
-        set.spawn(self.clone().refresh_topology_worker());
-        set.spawn(self.clone().refresh_interfaces_worker());
-        set
+        });
+        tokio::spawn(this.clone().refresh_topology_worker());
+        tokio::spawn(this.clone().refresh_interfaces_worker());
+        this
     }
 
     /// ** Returns the local role
