@@ -64,7 +64,7 @@ use tokio::{
     time::{Duration, Instant, interval},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, instrument, trace};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateLocal {
@@ -212,6 +212,7 @@ pub struct Ieee1905NodeInfo {
     /// this excludes response ids, those are always copied from the query
     pub local_message_id: Option<u16>,
     pub local_link_metric_query_message_id: Option<(u16, Instant)>,
+    pub local_hle_query_message_id: Option<(u16, Instant)>,
     /// last msg id received from this node
     /// this excludes response ids, those are always copied from the query
     pub remote_message_id: Option<u16>,
@@ -235,6 +236,7 @@ impl Ieee1905NodeInfo {
             last_seen: Instant::now(), // Set current time at creation
             local_message_id: None,
             local_link_metric_query_message_id: None,
+            local_hle_query_message_id: None,
             remote_message_id: None,
             lldp_neighbor,
             node_state_local,
@@ -955,6 +957,7 @@ impl TopologyDatabase {
                             last_seen: Instant::now(),
                             local_message_id: local_msg_id,
                             local_link_metric_query_message_id: None,
+                            local_hle_query_message_id: None,
                             remote_message_id: remote_msg_id,
                             lldp_neighbor,
                             node_state_local: StateLocal::Idle,
@@ -1063,7 +1066,7 @@ impl TopologyDatabase {
             .take_if(|e| e.0 == message_id && e.1.elapsed() <= Duration::from_secs(1));
 
         if local_link_metric_query_message_id.is_none() {
-            debug!(
+            warn!(
                 %source,
                 got = message_id,
                 exp = ?node.metadata.local_link_metric_query_message_id,
@@ -1118,6 +1121,7 @@ impl TopologyDatabase {
     pub async fn handle_higher_layer_response(
         &self,
         al_mac: MacAddr,
+        message_id: u16,
         device_information: DeviceIdentificationType,
         control_url: Option<ControlUrl>,
     ) -> bool {
@@ -1126,6 +1130,21 @@ impl TopologyDatabase {
             debug!(%al_mac, "higher_layer_response — node not found");
             return false;
         };
+
+        let local_hle_query_message_id = node
+            .metadata
+            .local_hle_query_message_id
+            .take_if(|e| e.0 == message_id && e.1.elapsed() <= Duration::from_secs(1));
+
+        if local_hle_query_message_id.is_none() {
+            warn!(
+                %al_mac,
+                got = message_id,
+                exp = ?node.metadata.local_hle_query_message_id,
+                "higher_layer_response — unexpected message id",
+            );
+            return false;
+        }
 
         if device_information.friendly_name == Self::HLE_ARTIFACT_EXCHANGE_SERVICE {
             node.update_artifact_exchange_client(

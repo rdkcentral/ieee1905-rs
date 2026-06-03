@@ -306,6 +306,7 @@ impl CMDUHandler {
             TransmissionEvent::StartHigherLayerQueryWorker((destination, token)) => {
                 let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
                 tokio::spawn(cmdu_higher_layer_query_transmission_worker(
+                    topology_db.clone(),
                     self.sender.clone(),
                     self.message_id_generator.clone(),
                     forwarding_interface_mac,
@@ -926,7 +927,7 @@ impl CMDUHandler {
         let control_url = ControlUrl::find(tlvs);
 
         let result = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
-            .handle_higher_layer_response(al_mac, device_identification, control_url)
+            .handle_higher_layer_response(al_mac, message_id, device_identification, control_url)
             .await;
 
         info!(source = %source_mac, "HigherLayerResponse Processed");
