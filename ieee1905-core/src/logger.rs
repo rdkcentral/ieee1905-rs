@@ -32,7 +32,9 @@ pub fn init_logger(cli: &CliArgs) -> Option<WorkerGuard> {
             .max_files(cli.file_appender_files_count)
             .max_file_size(cli.file_appender_max_file_size.saturating_mul(BYTES_IN_MB));
 
-        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+        let (non_blocking, guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
+            .buffered_lines_limit(1024)
+            .finish(file_appender);
         file_layer_guard = Some(guard);
 
         tracing_subscriber::fmt::layer()
