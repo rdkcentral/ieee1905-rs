@@ -38,7 +38,7 @@ use tokio::{
     task::yield_now,
     time::{Duration, Instant, interval},
 };
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, trace};
 // Standard library
 use indexmap::IndexMap;
 use neli::consts::rtnl::Iff;
@@ -50,7 +50,8 @@ use tokio_util::sync::CancellationToken;
 // Internal modules
 use crate::cmdu_codec::{
     CMDUFragmentation, DeviceIdentificationType, Ieee1905ProfileVersion, LinkMetricQuery,
-    MediaType, MediaTypeSpecialInfo, Profile2ApCapability, SupportedFreqBand,
+    LinkMetricRx, LinkMetricTx, MediaType, MediaTypeSpecialInfo, Profile2ApCapability,
+    SupportedFreqBand,
 };
 use crate::interface_manager::get_interfaces;
 use crate::linux::if_link::RtnlLinkStats64;
@@ -203,6 +204,7 @@ pub struct Ieee1905NodeInfo {
     /// last msg id sent to this node
     /// this excludes response ids, those are always copied from the query
     pub local_message_id: Option<u16>,
+    pub local_link_metric_query_message_id: Option<(u16, Instant)>,
     /// last msg id received from this node
     /// this excludes response ids, those are always copied from the query
     pub remote_message_id: Option<u16>,
@@ -225,6 +227,7 @@ impl Ieee1905NodeInfo {
             last_update,
             last_seen: Instant::now(), // Set current time at creation
             local_message_id: None,
+            local_link_metric_query_message_id: None,
             remote_message_id: None,
             lldp_neighbor,
             node_state_local,
@@ -841,6 +844,7 @@ impl TopologyDatabase {
                             last_update: operation,
                             last_seen: Instant::now(),
                             local_message_id: local_msg_id,
+                            local_link_metric_query_message_id: None,
                             remote_message_id: remote_msg_id,
                             lldp_neighbor,
                             node_state_local: StateLocal::Idle,
@@ -927,6 +931,39 @@ impl TopologyDatabase {
         };
 
         Some((node_al_mac, neighbors))
+    }
+
+    pub async fn handle_link_metric_response(
+        &self,
+        source: MacAddr,
+        message_id: u16,
+        link_metric_rx: impl IntoIterator<Item = LinkMetricRx>,
+        link_metric_tx: impl IntoIterator<Item = LinkMetricTx>,
+    ) {
+        let mut nodes = self.nodes.write().await;
+        let Some(node) = Self::find_node_by_port_mut(nodes.values_mut(), source) else {
+            return debug!(%source, "node not found");
+        };
+
+        let local_link_metric_query_message_id = node
+            .metadata
+            .local_link_metric_query_message_id
+            .take_if(|e| e.0 == message_id && e.1.elapsed() <= Duration::from_secs(1));
+
+        if local_link_metric_query_message_id.is_none() {
+            debug!(
+                %source,
+                got = message_id,
+                exp = ?node.metadata.local_link_metric_query_message_id,
+                "unexpected message id",
+            );
+            return;
+        }
+
+        if tracing::enabled!(tracing::Level::TRACE) {
+            trace!(%source, "link metric rx stats: {:#?}", Vec::from_iter(link_metric_rx));
+            trace!(%source, "link metric tx stats: {:#?}", Vec::from_iter(link_metric_tx));
+        }
     }
 
     pub async fn handle_ap_auto_config_response(

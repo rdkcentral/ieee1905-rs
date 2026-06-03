@@ -28,7 +28,7 @@ use crate::{MessageIdGenerator, next_task_id};
 use pnet::datalink::MacAddr;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::time::{Duration, interval};
+use tokio::time::{Duration, Instant, interval};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, info, info_span, instrument, trace, warn};
 
@@ -502,6 +502,7 @@ pub fn cmdu_topology_notification_transmission(
 
 #[instrument(skip_all, name = "cmdu_link_metric_query_transmission", fields(task = next_task_id()))]
 pub async fn cmdu_link_metric_query_transmission_worker(
+    topo_db: Arc<TopologyDatabase>,
     sender: Arc<EthernetSender>,
     message_id_generator: Arc<MessageIdGenerator>,
     local_interface_mac: MacAddr,
@@ -518,6 +519,10 @@ pub async fn cmdu_link_metric_query_transmission_worker(
 
         let message_id = message_id_generator.next_id();
         debug!(%destination_mac, message_id, "Creating CMDU");
+
+        if let Some(mut node) = topo_db.lock_node_by_port_mut(destination_mac).await {
+            node.metadata.local_link_metric_query_message_id = Some((message_id, Instant::now()));
+        }
 
         let payload = [
             TLV::from(LinkMetricQuery {

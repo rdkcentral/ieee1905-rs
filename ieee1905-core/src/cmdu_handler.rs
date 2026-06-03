@@ -180,7 +180,8 @@ impl CMDUHandler {
                 handled = true;
             }
             CMDUType::LinkMetricResponse => {
-                info!("Handling Link Metric Response CMDU");
+                self.handle_link_metric_response(&tlvs, message_id, source_mac)
+                    .await;
                 handled = true;
             }
             CMDUType::ApAutoConfigSearch => {
@@ -713,6 +714,34 @@ impl CMDUHandler {
         }
     }
 
+    #[instrument(skip_all, name = "link_metric_response")]
+    async fn handle_link_metric_response(
+        &self,
+        tlvs: &[TLV],
+        message_id: u16,
+        source_mac: MacAddr,
+    ) {
+        debug!(
+            source = %source_mac,
+            msg_id = message_id,
+            interface = self.interface_name,
+            "Handling Link Metric Response CMDU",
+        );
+
+        if EndOfMessage::find(tlvs).is_none() {
+            return warn!("Missing EndOfMessage TLV. Discarding Link Metric Response.");
+        }
+
+        let link_metric_rx = LinkMetricRx::find_all(tlvs);
+        let link_metric_tx = LinkMetricTx::find_all(tlvs);
+
+        TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
+            .handle_link_metric_response(source_mac, message_id, link_metric_rx, link_metric_tx)
+            .await;
+
+        info!(source = %source_mac, "Link Metric Response Processed");
+    }
+
     /// Handles and logs TLVs for AP AutoConfig Search.
     #[instrument(skip_all, name = "auto_config_search")]
     async fn handle_ap_auto_config_search(
@@ -746,16 +775,16 @@ impl CMDUHandler {
             device_identification_type: None,
         };
 
-        let transmission_event =
-            TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
-                .update_ieee1905_topology(
-                    device_data,
-                    UpdateType::ApAutoConfigSearch,
-                    None,
-                    Some(message_id),
-                    None,
-                )
-                .await;
+        let topo_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
+        let transmission_event = topo_db
+            .update_ieee1905_topology(
+                device_data,
+                UpdateType::ApAutoConfigSearch,
+                None,
+                Some(message_id),
+                None,
+            )
+            .await;
 
         match transmission_event {
             TransmissionEvent::StartLinkMetricQueryWorker((destination, cancellation_token)) => {
@@ -765,6 +794,7 @@ impl CMDUHandler {
                     "Topology update started link metric query worker"
                 );
                 tokio::spawn(cmdu_link_metric_query_transmission_worker(
+                    topo_db,
                     self.sender.clone(),
                     self.message_id_generator.clone(),
                     local_interface_mac,
