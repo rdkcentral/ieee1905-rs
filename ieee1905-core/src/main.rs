@@ -21,10 +21,11 @@
 
 mod logger;
 
-use anyhow::anyhow;
 use clap::{Parser, ValueEnum};
 use ieee1905::CMDUObserver;
 use ieee1905::al_sap::AlServiceAccessPoint;
+use ieee1905::artifact_exchange_service::client::ArtifactExchangeClientFactory;
+use ieee1905::artifact_exchange_service::server::ArtifactExchangeServer;
 use ieee1905::cmdu_handler::*;
 use ieee1905::cmdu_message_id_generator::get_message_id_generator;
 use ieee1905::cmdu_proxy::cmdu_topology_discovery_transmission_worker;
@@ -34,11 +35,6 @@ use ieee1905::interface_manager::*;
 use ieee1905::lldpdu_observer::LLDPObserver;
 use ieee1905::lldpdu_proxy::lldp_discovery_worker;
 use ieee1905::topology_manager::*;
-use ieee1905::{CMDUObserver, next_task_id};
-use std::num::NonZeroUsize;
-use std::path::PathBuf;
-use ieee1905::artifact_exchange_service::client::ArtifactExchangeClientFactory;
-use ieee1905::artifact_exchange_service::server::ArtifactExchangeServer;
 use sd_notify::NotifyState;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -130,7 +126,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
     let Some(if_info) = get_interface_info(&cli.interface) else {
-        bail!("failed to get local interface {}", cli.interface);
+        anyhow::bail!("failed to get local interface {}", cli.interface);
     };
 
     let al_mac = if_info.mac;

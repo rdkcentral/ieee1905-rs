@@ -19,8 +19,9 @@
 
 #![deny(warnings)]
 #![allow(clippy::too_many_arguments)]
-use crate::cmdu_codec::ControlUrl;
-// Internal modules
+
+use crate::artifact_exchange_service::server::ArtifactExchangeServer;
+use crate::cmdu_codec::{ControlUrl, LinkMetricRx, LinkMetricTx};
 use crate::linux::if_link::RtnlLinkStats64;
 use crate::lldpdu::PortId;
 use crate::{
@@ -37,8 +38,6 @@ use crate::{
 use crate::{
     cmdu::IEEE1905Neighbor, interface_manager::get_forwarding_interface_mac, next_task_id,
 };
-// External crates
-use crate::artifact_exchange_service::server::ArtifactExchangeServer;
 use crossterm::{
     event::{self, KeyCode},
     execute,
@@ -55,34 +54,17 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Row, Table},
 };
+use std::net::Ipv6Addr;
+use std::ops::Deref;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
 use tokio::{
     sync::RwLock,
     task::yield_now,
     time::{Duration, Instant, interval},
 };
-use tracing::{debug, error, info, instrument, trace};
-// Standard library
-use indexmap::IndexMap;
-use neli::consts::rtnl::Iff;
-use parking_lot::Mutex;
-use std::net::Ipv6Addr;
-use std::ops::Deref;
-use std::sync::OnceLock;
-use std::{io, sync::Arc};
-use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
 use tokio_util::sync::CancellationToken;
-// Internal modules
-use crate::cmdu_codec::{
-    CMDUFragmentation, DeviceIdentificationType, Ieee1905ProfileVersion, LinkMetricQuery,
-    LinkMetricRx, LinkMetricTx, MediaType, MediaTypeSpecialInfo, Profile2ApCapability,
-    SupportedFreqBand,
-};
-use crate::interface_manager::get_interfaces;
-use crate::linux::if_link::RtnlLinkStats64;
-use crate::lldpdu::PortId;
-use crate::{
-    cmdu::IEEE1905Neighbor, interface_manager::get_forwarding_interface_mac, next_task_id,
-};
+use tracing::{debug, error, info, instrument, trace};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateLocal {
@@ -418,7 +400,8 @@ enum ArtifactExchangeClientSource {
 pub struct Ieee1905NodeInternal {
     pub metadata: Ieee1905NodeInfo,
     pub device_data: Ieee1905DeviceData,
-    artifact_exchange_client: Option<(ArtifactExchangeClientSource, String, ArtifactExchangeClient)>,
+    artifact_exchange_client:
+        Option<(ArtifactExchangeClientSource, String, ArtifactExchangeClient)>,
     link_metrics_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
     higher_layer_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
 }
@@ -485,7 +468,8 @@ impl Ieee1905NodeInternal {
         source: ArtifactExchangeClientSource,
         base_url: Option<String>,
     ) {
-        if let Some((current_source, current_base_url, _)) = self.artifact_exchange_client.as_ref() {
+        if let Some((current_source, current_base_url, _)) = self.artifact_exchange_client.as_ref()
+        {
             if base_url.as_ref() == Some(current_base_url) {
                 return; // url didn't change, keep the client
             }
@@ -890,9 +874,9 @@ impl TopologyDatabase {
                                 node.update_artifact_exchange_client(
                                     self.artifact_exchange_client_factory.lock().as_ref(),
                                     ArtifactExchangeClientSource::Ipv6,
-                                    device_data.artifact_exchange_server_address.map(|e| {
-                                        ArtifactExchangeServer::format_base_url(e)
-                                    }),
+                                    device_data
+                                        .artifact_exchange_server_address
+                                        .map(ArtifactExchangeServer::format_base_url),
                                 );
 
                                 if node.device_data.has_changed(&device_data) {
@@ -1154,9 +1138,9 @@ impl TopologyDatabase {
         false
     }
 
-    pub async fn start_topology_cli(self: Arc<Self>) -> io::Result<()> {
+    pub async fn start_topology_cli(self: Arc<Self>) -> std::io::Result<()> {
         enable_raw_mode()?;
-        let mut stdout = io::stdout();
+        let mut stdout = std::io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;

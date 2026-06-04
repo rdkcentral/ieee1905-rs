@@ -254,7 +254,6 @@ async fn send_echoed_packet(
                         message_id = cmdu.message_id,
                         "CONTROLLER: ignored non AP autoconfig CMDU"
                     );
-                    return;
                 }
                 Err(e) => {
                     tracing::debug!(
@@ -263,7 +262,6 @@ async fn send_echoed_packet(
                         error = ?e,
                         "CONTROLLER: ignored SDU with unparseable CMDU"
                     );
-                    return;
                 }
             }
         }
