@@ -1112,7 +1112,8 @@ impl TopologyDatabase {
 
                     let interface_mac = node.device_data.destination_mac;
                     let interface = interface_mac
-                        .and_then(|mac| interfaces.iter().find(|e| mac == e.mac))
+                        .and_then(|mac| interfaces.iter().find(|e| e.mac == mac))
+                        .or_else(|| interfaces.iter().find(|e| e.mac == node.device_data.al_mac))
                         .or_else(|| interfaces.first());
 
                     let interface_mac = interface_mac
