@@ -734,6 +734,7 @@ pub async fn cmdu_link_metric_response_transmission(
 }
 
 pub async fn cmdu_higher_layer_query_transmission_worker(
+    topo_db: Arc<TopologyDatabase>,
     sender: Arc<EthernetSender>,
     message_id_generator: Arc<MessageIdGenerator>,
     interface_mac_address: MacAddr,
@@ -750,6 +751,10 @@ pub async fn cmdu_higher_layer_query_transmission_worker(
 
         let message_id = message_id_generator.next_id();
         debug!(%destination_mac, message_id, "Creating CMDU Higher Layer Query");
+
+        if let Some(mut node) = topo_db.lock_node_by_port_mut(destination_mac).await {
+            node.metadata.local_hle_query_message_id = Some((message_id, Instant::now()));
+        }
 
         let cmdu = CMDU {
             message_version: MessageVersion::Version2013.to_u8(),
