@@ -1,0 +1,41 @@
+name: Run Rust Coverage
+
+on:
+  pull_request:
+    branches: [ develop ]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (+llvm-tools-preview)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Run cargo llvm-cov
+        run: cargo build --package ieee1905 --release
+
+      - name: Checking RSS
+        run: |
+          TIME_OUTPUT=$(mktemp)
+          /usr/bin/time -v ./target/release/ieee1905 > /dev/null 2> "$TIME_OUTPUT" & SERVICE_PID=$!
+          sleep 5
+          kill -2 "$SERVICE_PID"
+          wait "$SERVICE_PID" 2>/dev/null || true
+          RSS_KB=$(grep "Maximum resident set size" "$TIME_OUTPUT" | awk '{print $6}')
+          echo $RSS_KB > rss_report.txt
+
+      - name: Post Coverage Report Comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: rss-report
+          path: rss_report.txt
