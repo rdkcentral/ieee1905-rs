@@ -29,7 +29,6 @@ pub mod cmdu_reassembler;
 pub mod crypto_engine;
 pub mod ethernet_subject_reception;
 pub mod ethernet_subject_transmission;
-pub mod fs_quota_aware_storage;
 pub mod interface_manager;
 mod linux;
 pub mod lldpdu_codec;
@@ -63,6 +62,7 @@ pub mod cmdu {
 pub mod artifact_exchange_service {
     pub mod client;
     mod common;
+    mod fs_quota_aware_storage;
     pub mod server;
 }
 
