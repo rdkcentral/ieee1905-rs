@@ -1,4 +1,4 @@
-use crate::fs_quota_aware_storage::FsQuotaAwareStorage;
+use crate::artifact_exchange_service::fs_quota_aware_storage::FsQuotaAwareStorage;
 use pnet::util::MacAddr;
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
