@@ -548,7 +548,36 @@ Description=IEEE1905 topology service
 After=network.target
 
 [Service]
+Type=notify
 ExecStart=/usr/bin/ieee1905
+
+[Install]
+WantedBy=multi-user.target
+```
+
+The service uses `sd-notify` when it is launched by systemd. After the AL-SAP
+socket is ready to serve registrations and data indications, IEEE1905 sends a
+`READY=1` notification. When the process receives `SIGTERM` or `SIGINT`, it
+sends `STOPPING=1` before exiting. If the AL-SAP socket closes internally, the
+service attempts to restart that socket path without reporting the whole process
+as stopping.
+
+EasyMesh services can then be launched as dependent systemd units. The EasyMesh
+unit should start after `ieee1905.service`, request it as a dependency, and be
+stopped/restarted with it when the IEEE1905 service lifecycle is managed:
+
+```sh
+[Unit]
+Description=EasyMesh Monitor
+Wants=ieee1905.service
+After=ieee1905.service
+PartOf=ieee1905.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/easymesh
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
