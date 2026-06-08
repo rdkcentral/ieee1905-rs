@@ -7,7 +7,7 @@ IEEE 1905.1 is a standard developed by the Institute of Electrical and Electroni
 One of the key components of IEEE 1905 is the Application Layer SAP, which is responsible for managing communication between the higher-level entities (HLEs) and the lower layers of the network stack, and more specifically the IEEE 1905 adaptation layer.
 In order to identify multiple SAPs between AL and HLE layers, we identify the SAP as the AL_MAC_ADDRESS of the remote entity.
 
-## 🗺 IEEE1905.1 Roadmap 
+## 🗺 IEEE1905.1 Roadmap
 
 A short, high-level plan:
 
@@ -22,12 +22,12 @@ A short, high-level plan:
 - [x] TR.181 data-model integration using RBUS
 - [x] Link Metric management and topology inegration.
 - [x] Interoperability.
-- [ ] IEEE1905 CMDU parsing and serialization (version 2024)
+- [x] IEEE1905 CMDU parsing and serialization (version 2024)
 - [ ] Controller Redundancy.
-- [x] Log transfers between Controller and Agents.
-- [x] Binary transfer for upgrade from Controller to Agents.
-- [ ] Agent Binary upgrade.
-- [ ] IEEE1905 security.
+- [x] Artifact Exchange Service from Controller to Agents.
+- [x] Service binary upgrade.
+- [ ] IEEE1905 Layer security capability Message integrity code.
+- [ ] IEEE1905 Layer security capability encryption.
 
 ## Architecture Decisions (ADRs)
 
@@ -363,6 +363,19 @@ For discovery and exchange of logging capabilities and operational metadata betw
 5. Higher Layer Query/Response exchange should be used to synchronize or verify peer logging-related capabilities before relying on cross-node diagnostics.
 
 ![ARCH](docs/architecture/call_flow_diagram/IEEE1905_syslog.jpg)
+
+### Artifact Exchange Server
+
+The artifact exchange server provides an auxiliary HTTP service for transferring operational artifacts between the controller and agents over the IEEE1905 control interface.  
+The service is discovered through topology convergence and Higher Layer Information metadata, allowing agents to learn the controller artifact exchange URL without a separate discovery protocol.
+
+The controller runs the server side of the service and exposes artifacts prepared under the transmit artifact tree. Agents run the client side, periodically pulling controller-to-agent artifacts such as upgrade binaries and WASM applications, and pushing agent-to-controller artifacts such as logs.
+
+1. The server binds to the IEEE1905 virtual/control interface using the link-local IPv6 address derived from the local AL MAC address.
+2. Artifact transfers use HTTP endpoints for listing available artifacts, downloading controller-to-agent artifacts, and uploading agent-to-controller artifacts.
+3. Supported artifact direction is explicit: `binaries` and `wasm` are sent from controller to agents, while `logs` are sent from agents to the controller.
+4. Artifact names are filtered by AL MAC prefix so each node only processes artifacts addressed to it.
+5. Successful and failed transfers are moved into quota-aware archive or failure storage to prevent unbounded filesystem growth.
 
 ### Firmware Upgrade
 
