@@ -622,6 +622,34 @@ By default, logs will be printed to stdout. Use following command to disable std
 /usr/bin/ieee1905 --no-stdout-appender
 ```
 
+#### Enable artifact exchange
+
+By default, artifact exchange is disabled. Enable it with
+`--artifact-exchange <server|client>`.
+
+Run the controller-side HTTP artifact exchange service with:
+
+```shell
+/usr/bin/ieee1905 --artifact-exchange server
+```
+
+Run an agent-side artifact exchange client with:
+
+```shell
+/usr/bin/ieee1905 --artifact-exchange client
+```
+
+Use `server` on the controller node that exposes artifacts for agents and
+receives uploaded agent artifacts. Use `client` on agent nodes that pull
+controller-to-agent artifacts such as `binaries` and `wasm`, and push
+agent-to-controller artifacts such as `logs`.
+
+For systemd deployments, add the same argument to `ExecStart`, for example:
+
+```ini
+ExecStart=/usr/bin/ieee1905 --artifact-exchange server
+```
+
 #### File logger
 
 By default, file logger is disabled. To enable file logging use following arguments:
