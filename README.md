@@ -351,19 +351,6 @@ Operational notes:
 - Recovery logic should recreate or reattach the virtual interface if namespace state is lost.
 - Diagnostics should include namespace-aware checks (`ip netns`, interface/link state, routes).
 
-### Syslog Integration
-
-IEEE1905 service logs can be integrated with system syslog to simplify operational monitoring and troubleshooting in production deployments.  
-For discovery and exchange of logging capabilities and operational metadata between peers, we will use the IEEE1905 Higher Layer Information Protocol, specifically the **Higher Layer Query Message** and **Higher Layer Response Message**.
-
-1. The service should log key control-plane events with consistent severity levels (`INFO`, `WARN`, `ERROR`), including registration, topology convergence, role transitions, and forwarding decisions.
-2. Logs should include stable context fields (interface, local AL MAC, remote AL MAC, message type, message ID) to enable correlation across components.
-3. In RDK-B integrations, logs should be forwarded to the platform syslog/journald pipeline and retained according to platform policy.
-4. Rate limiting should be applied for repeated transient failures to avoid log flooding while preserving first-occurrence diagnostics.
-5. Higher Layer Query/Response exchange should be used to synchronize or verify peer logging-related capabilities before relying on cross-node diagnostics.
-
-![ARCH](docs/architecture/call_flow_diagram/IEEE1905_syslog.jpg)
-
 ### Artifact Exchange Server
 
 The artifact exchange server provides an auxiliary HTTP service for transferring operational artifacts between the controller and agents over the IEEE1905 control interface.  
@@ -376,6 +363,19 @@ The controller runs the server side of the service and exposes artifacts prepare
 3. Supported artifact direction is explicit: `binaries` and `wasm` are sent from controller to agents, while `logs` are sent from agents to the controller.
 4. Artifact names are filtered by AL MAC prefix so each node only processes artifacts addressed to it.
 5. Successful and failed transfers are moved into quota-aware archive or failure storage to prevent unbounded filesystem growth.
+
+### Syslog Integration
+
+IEEE1905 service logs can be integrated with system syslog to simplify operational monitoring and troubleshooting in production deployments.  
+For discovery and exchange of logging capabilities and operational metadata between peers, we will use the IEEE1905 Higher Layer Information Protocol, specifically the **Higher Layer Query Message** and **Higher Layer Response Message**.
+
+1. The service should log key control-plane events with consistent severity levels (`INFO`, `WARN`, `ERROR`), including registration, topology convergence, role transitions, and forwarding decisions.
+2. Logs should include stable context fields (interface, local AL MAC, remote AL MAC, message type, message ID) to enable correlation across components.
+3. In RDK-B integrations, logs should be forwarded to the platform syslog/journald pipeline and retained according to platform policy.
+4. Rate limiting should be applied for repeated transient failures to avoid log flooding while preserving first-occurrence diagnostics.
+5. Higher Layer Query/Response exchange should be used to synchronize or verify peer logging-related capabilities before relying on cross-node diagnostics.
+
+![ARCH](docs/architecture/call_flow_diagram/IEEE1905_syslog.jpg)
 
 ### Firmware Upgrade
 
