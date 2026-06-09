@@ -10,6 +10,7 @@ use crate::{TopologyDatabase, next_task_id};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, put};
+use std::io::ErrorKind;
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -54,7 +55,7 @@ impl ArtifactExchangeServer {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    #[instrument(skip_all, "artifact_exchange_server")]
+    #[instrument(skip_all, name = "artifact_exchange_server")]
     pub async fn start(&mut self) -> anyhow::Result<()> {
         debug!("starting server");
 
@@ -150,12 +151,14 @@ pub(crate) struct ArtifactExchangeServerInstanceActor;
 
 impl ArtifactExchangeServerInstanceActor {
     ////////////////////////////////////////////////////////////////////////////////
-    #[instrument(skip_all, "artifact_exchange_server/worker", fields(task = next_task_id()))]
+    #[instrument(skip_all, name = "artifact_exchange_server/worker", fields(task = next_task_id()))]
     async fn worker(self, listener: TcpListener) {
         let config = ArtifactExchangeConfig::get();
 
         debug!("cleanup");
-        if let Err(e) = tokio::fs::remove_dir_all(&config.rx_folder).await {
+        if let Err(e) = tokio::fs::remove_dir_all(&config.rx_folder).await
+            && e.kind() != ErrorKind::NotFound
+        {
             error!(%e, "failed to remove rx folder: {}", config.rx_folder.display());
         }
 
