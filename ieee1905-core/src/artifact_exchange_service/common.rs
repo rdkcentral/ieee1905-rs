@@ -2,6 +2,7 @@ use crate::artifact_exchange_service::fs_quota_aware_storage::FsQuotaAwareStorag
 use pnet::util::MacAddr;
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
+use std::str::FromStr;
 use std::sync::OnceLock;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -77,6 +78,12 @@ pub fn format_mac_as_file_prefix(mac: MacAddr) -> String {
         "{:02x}-{:02x}-{:02x}-{:02x}-{:02x}-{:02x}",
         mac.0, mac.1, mac.2, mac.3, mac.4, mac.5,
     )
+}
+
+////////////////////////////////////////////////////////////////////////////////
+pub fn parse_mac_as_file_prefix(value: &str) -> Option<MacAddr> {
+    let value = value.replace('-', ":");
+    MacAddr::from_str(&value).ok()
 }
 
 ////////////////////////////////////////////////////////////////////////////////

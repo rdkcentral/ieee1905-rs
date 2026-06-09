@@ -12,6 +12,7 @@ use reqwest::Url;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::io::ErrorKind;
 use std::net::Ipv6Addr;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -44,7 +45,9 @@ impl ArtifactExchangeClientFactory {
         );
         call_rt_new_address_v6(if_info.if_index, local_ip_address).await?;
 
-        if let Err(e) = tokio::fs::remove_dir_all(&config.rx_folder).await {
+        if let Err(e) = tokio::fs::remove_dir_all(&config.rx_folder).await
+            && e.kind() != ErrorKind::NotFound
+        {
             error!(%e, "failed to remove rx folder: {}", config.rx_folder.display());
         }
 
@@ -154,7 +157,7 @@ impl ArtifactExchangeClientActor {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    #[instrument(skip_all, "artifact_exchange_client/upload", fields(task = next_task_id()))]
+    #[instrument(skip_all, name = "artifact_exchange_client/upload", fields(task = next_task_id()))]
     async fn upload_artifacts_worker(&self, config: &ArtifactExchangeConfig) {
         loop {
             let instant = Instant::now();
@@ -214,7 +217,7 @@ impl ArtifactExchangeClientActor {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    #[instrument(skip_all, "artifact_exchange_client/download", fields(task = next_task_id()))]
+    #[instrument(skip_all, name = "artifact_exchange_client/download", fields(task = next_task_id()))]
     async fn download_artifacts_worker(&self, config: &ArtifactExchangeConfig) {
         loop {
             let instant = Instant::now();

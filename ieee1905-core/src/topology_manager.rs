@@ -1110,12 +1110,7 @@ impl TopologyDatabase {
             .take_if(|e| e.0 == message_id);
 
         if local_hle_query_message_id.is_none_or(|e| e.1.elapsed() > Duration::from_secs(1)) {
-            warn!(
-                %al_mac,
-                got = message_id,
-                exp = ?node.metadata.local_hle_query_message_id,
-                "higher_layer_response — unexpected message id",
-            );
+            warn!(%al_mac, "higher_layer_response — unexpected message id");
             return false;
         }
 

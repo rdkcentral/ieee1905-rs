@@ -1,4 +1,6 @@
-use crate::artifact_exchange_service::common::{ArtifactExchangeConfig, ArtifactExchangeFilter};
+use crate::artifact_exchange_service::common::{
+    ArtifactExchangeConfig, ArtifactExchangeFilter, parse_mac_as_file_prefix,
+};
 use crate::artifact_exchange_service::server::ArtifactExchangeServerInstanceActor;
 use axum::Json;
 use axum::extract::Query;
@@ -11,6 +13,10 @@ impl ArtifactExchangeServerInstanceActor {
     pub async fn get_artifact_list(Query(mut query): Query<ArtifactExchangeFilter>) -> Response {
         let config = ArtifactExchangeConfig::get();
         query.mac.make_ascii_lowercase();
+
+        if parse_mac_as_file_prefix(&query.mac).is_none() {
+            return (StatusCode::BAD_REQUEST, "invalid `mac` argument").into_response();
+        }
 
         let mut file_groups = HashMap::<String, Vec<String>>::new();
         for artifact_type in config.s2c_artifact_types.iter() {

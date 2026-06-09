@@ -1143,7 +1143,7 @@ Use `server` when the node must expose the artifact exchange HTTP service, and u
 
 Each stored artifact filename shall include:
 
-1. The `AL_MAC` address of the origin entity.
+1. The `AL_MAC` address of the destination entity (the node the artifact is addressed to).
 2. The creation timestamp of the artifact.
 3. The original artifact name.
 
