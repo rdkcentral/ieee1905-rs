@@ -21,10 +21,11 @@
 
 mod logger;
 
-use anyhow::anyhow;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use ieee1905::CMDUObserver;
 use ieee1905::al_sap::AlServiceAccessPoint;
+use ieee1905::artifact_exchange_service::client::ArtifactExchangeClientFactory;
+use ieee1905::artifact_exchange_service::server::ArtifactExchangeServer;
 use ieee1905::cmdu_handler::*;
 use ieee1905::cmdu_message_id_generator::get_message_id_generator;
 use ieee1905::cmdu_proxy::cmdu_topology_discovery_transmission_worker;
@@ -57,8 +58,8 @@ struct CliArgs {
     #[arg(long,default_value_t=String::from("/tmp/al_data_socket"))]
     sap_data_path: String,
     /// Tracing filter
-    #[arg(long,short,default_value_t=String::from("info"))]
-    filter: String,
+    #[arg(long, short)]
+    filter: Option<String>,
     /// Enable console subscriber for tokio-console
     #[cfg(feature = "enable_tokio_console")]
     #[arg(short, long, default_value_t = false)]
@@ -78,6 +79,15 @@ struct CliArgs {
     /// Disable LLDP receivers
     #[arg(long)]
     no_lldp_receivers: bool,
+    /// Enables artifact exchange server
+    #[arg(long)]
+    artifact_exchange: Option<ArtifactExchange>,
+}
+
+#[derive(ValueEnum, Debug, Clone)]
+enum ArtifactExchange {
+    Server,
+    Client,
 }
 
 #[tokio::main]
@@ -115,8 +125,11 @@ async fn main() -> anyhow::Result<()> {
         };
 
     // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
-    let al_mac = get_local_al_mac(cli.interface.clone())
-        .ok_or_else(|| anyhow!("failed to get local al mac"))?;
+    let Some(if_info) = get_interface_info(&cli.interface) else {
+        anyhow::bail!("failed to get local interface {}", cli.interface);
+    };
+
+    let al_mac = if_info.mac;
     tracing::info!("AL MAC address: {}", al_mac);
 
     // // Initialize Database
@@ -132,6 +145,22 @@ async fn main() -> anyhow::Result<()> {
 
     //we initilize here the values for LLDP input parameters
     let chassis_id = al_mac;
+
+    let mut _artifact_exchange_server = None;
+    match cli.artifact_exchange.as_ref() {
+        Some(ArtifactExchange::Server) => {
+            tracing::info!("Artifact exchange server is enabled");
+            let mut server = ArtifactExchangeServer::new(topology_db.clone(), if_info.clone());
+            server.start().await?;
+            _artifact_exchange_server = Some(server);
+        }
+        Some(ArtifactExchange::Client) => {
+            tracing::info!("Artifact exchange client is enabled");
+            let factory = ArtifactExchangeClientFactory::new(if_info.clone()).await?;
+            topology_db.set_artifact_exchange_client_factory(factory);
+        }
+        None => tracing::info!("ArtifactExchangeSync is disabled"),
+    }
 
     tracing::debug!("Topology Database initialized with AL MAC: {:?}", al_mac);
 

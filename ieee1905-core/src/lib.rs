@@ -59,6 +59,13 @@ pub mod cmdu {
     pub use crate::tlv_cmdu_codec::TLV;
 }
 
+pub mod artifact_exchange_service {
+    pub mod client;
+    mod common;
+    mod fs_quota_aware_storage;
+    pub mod server;
+}
+
 use std::sync::atomic::{AtomicU32, Ordering};
 // ───── Reexports: commonly used components ─────
 pub use cmdu_message_id_generator::MessageIdGenerator;

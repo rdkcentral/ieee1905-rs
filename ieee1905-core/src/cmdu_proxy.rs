@@ -18,6 +18,7 @@
 */
 use crate::SDU;
 use crate::al_sap::AlServiceAccessPoint;
+use crate::artifact_exchange_service::server::ArtifactExchangeServer;
 use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
@@ -139,7 +140,7 @@ pub async fn cmdu_topology_query_transmission(
                 })),
                 Some(TLV::from(VendorSpecificInfo {
                     oui: COMCAST_OUI,
-                    vendor_data: COMCAST_QUERY_TAG.to_vec(),
+                    vendor_data: COMCAST_QUERY_TAG,
                 })),
                 if let Some(Role::Registrar) = local_role {
                     Some(TLV::from(MultiApProfile::Profile3))
@@ -245,10 +246,6 @@ pub fn cmdu_topology_response_transmission(
                 TLV::from(AlMacAddress {
                     al_mac_address: local_al_mac_address,
                 }),
-                TLV::from(VendorSpecificInfo {
-                    oui: COMCAST_OUI,
-                    vendor_data: COMCAST_QUERY_TAG.to_vec(),
-                }),
                 TLV::from(EndOfMessage),
             ];
 
@@ -325,6 +322,7 @@ async fn inject_topology_response_tlvs(
         DeviceBridgingCapability::TYPE.to_u8(),
         Ieee1905NeighborDevice::TYPE.to_u8(),
         NonIeee1905NeighborDevices::TYPE.to_u8(),
+        Ipv6::TYPE.to_u8(),
     ];
     vec.retain(|e| !filtered_types.contains(&e.tlv_type));
 
@@ -413,6 +411,27 @@ async fn inject_topology_response_tlvs(
         }));
     }
 
+    // injecting VendorInfo
+    if db.get_artifact_exchange_server_ip_address().is_some() {
+        vec.push(TLV::from(VendorSpecificInfo {
+            oui: COMCAST_OUI,
+            vendor_data: VendorSpecificInfoData {
+                version: 0,
+                info_type: VendorSpecificInfoType::ArtifactExchangeService,
+                role: VendorSpecificInfoRole::Server,
+            },
+        }));
+    } else {
+        vec.push(TLV::from(VendorSpecificInfo {
+            oui: COMCAST_OUI,
+            vendor_data: VendorSpecificInfoData {
+                version: 0,
+                info_type: VendorSpecificInfoType::ArtifactExchangeService,
+                role: VendorSpecificInfoRole::Client,
+            },
+        }));
+    }
+
     vec.push(end_of_message_tlv);
     Ok(())
 }
@@ -446,7 +465,7 @@ pub fn cmdu_topology_notification_transmission(
                 }),
                 TLV::from(VendorSpecificInfo {
                     oui: COMCAST_OUI,
-                    vendor_data: COMCAST_QUERY_TAG.to_vec(),
+                    vendor_data: COMCAST_QUERY_TAG,
                 }),
                 TLV::from(EndOfMessage),
             ];
@@ -707,6 +726,126 @@ pub async fn cmdu_link_metric_response_transmission(
     }
 }
 
+pub async fn cmdu_higher_layer_query_transmission_worker(
+    topo_db: Arc<TopologyDatabase>,
+    sender: Arc<EthernetSender>,
+    message_id_generator: Arc<MessageIdGenerator>,
+    interface_mac_address: MacAddr,
+    destination_mac: MacAddr,
+    cancellation_token: CancellationToken,
+) {
+    let mut ticker = interval(Duration::from_secs(30));
+
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => (),
+            _ = cancellation_token.cancelled() => return,
+        }
+
+        let message_id = message_id_generator.next_id();
+        debug!(%destination_mac, message_id, "Creating CMDU Higher Layer Query");
+
+        if let Some(mut node) = topo_db.lock_node_by_port_mut(destination_mac).await {
+            node.metadata.local_hle_query_message_id = Some((message_id, Instant::now()));
+        }
+
+        let cmdu = CMDU {
+            message_version: MessageVersion::Version2013.to_u8(),
+            reserved: 0,
+            message_type: CMDUType::HigherLayerQuery.to_u16(),
+            message_id,
+            fragment: 0,
+            flags: CMDU::FLAG_LAST_FRAGMENT,
+            payload: TLV::from(EndOfMessage).serialize(),
+        };
+
+        match sender
+            .enqueue_frame(
+                destination_mac,
+                interface_mac_address,
+                EthernetSender::ETHER_TYPE,
+                cmdu.serialize(),
+            )
+            .await
+        {
+            Ok(()) => {
+                info!(%destination_mac, message_id, "CMDU Higher Layer Query sent successfully")
+            }
+            Err(e) => error!(message_id, "Failed to send CMDU Higher Layer Query: {e}"),
+        }
+    }
+}
+
+#[instrument(skip_all, name = "cmdu_higher_layer_response_transmission", fields(task = next_task_id()))]
+pub async fn cmdu_higher_layer_response_transmission(
+    interface: String,
+    sender: Arc<EthernetSender>,
+    local_al_mac_address: MacAddr,
+    remote_al_mac_address: MacAddr,
+    interface_mac_address: MacAddr,
+    message_id: u16,
+) {
+    trace!(
+        interface = %interface,
+        message_id = message_id,
+        "Creating CMDU Higher Layer Response",
+    );
+
+    let db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
+    let Some(server_address) = db.get_artifact_exchange_server_ip_address() else {
+        return info!("skipping, artifact exchange server is not present");
+    };
+    let Some(node) = db.get_device(remote_al_mac_address).await else {
+        return warn!(al_mac = %remote_al_mac_address, "Node not found");
+    };
+
+    let payload = [
+        TLV::from(AlMacAddress {
+            al_mac_address: local_al_mac_address,
+        }),
+        TLV::from(Ieee1905ProfileVersion::Ieee1905_1a),
+        TLV::from(DeviceIdentificationType {
+            friendly_name: TopologyDatabase::HLE_ARTIFACT_EXCHANGE_SERVICE.to_string(),
+            manufacturer_name: Default::default(),
+            manufacturer_model: Default::default(),
+        }),
+        TLV::from(ControlUrl {
+            url: ArtifactExchangeServer::format_base_url(server_address),
+        }),
+        TLV::from(EndOfMessage),
+    ];
+
+    let cmdu = CMDU {
+        message_version: MessageVersion::Version2013.to_u8(),
+        reserved: 0,
+        message_type: CMDUType::HigherLayerResponse.to_u16(),
+        message_id,
+        fragment: 0,
+        flags: CMDU::FLAG_LAST_FRAGMENT,
+        payload: payload.iter().flat_map(TLV::serialize).collect(),
+    };
+
+    match sender
+        .enqueue_frame(
+            node.device_data.destination_frame_mac,
+            interface_mac_address,
+            EthernetSender::ETHER_TYPE,
+            cmdu.serialize(),
+        )
+        .await
+    {
+        Ok(()) => info!(
+            interface = %interface,
+            message_id = message_id,
+            "CMDU Higher Layer Response sent successfully"
+        ),
+        Err(e) => error!(
+            message_id = message_id,
+            "Failed to send CMDU Higher Layer Response: {e}"
+        ),
+    }
+}
+
 pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>, sdu: SDU) {
     tokio::spawn(async move {
         if !AlServiceAccessPoint::is_connected_and_enabled().await {
@@ -838,7 +977,7 @@ mod tests {
         let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
         let response = inject_topology_response_tlvs(&mut vec, &db).await;
         assert!(response.is_ok());
-        assert_eq!(vec.len(), 2);
+        assert_eq!(vec.len(), 3);
     }
 
     #[tokio::test]
