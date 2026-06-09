@@ -354,7 +354,7 @@ Operational notes:
 ### Artifact Exchange Server
 
 The artifact exchange server provides an auxiliary HTTP service for transferring operational artifacts between the controller and agents over the IEEE1905 control interface.  
-The service is discovered through topology convergence and Higher Layer Information metadata, allowing agents to learn the controller artifact exchange URL without a separate discovery protocol.
+The service is discovered through topology convergence and Higher Layer Information metadata, allowing agents to learn the controller artifact exchange URL without a separate discovery protocol. In practice, clients consume the server URL from the Control URL TLV carried in the Higher Layer Response. That URL includes the controller IPv6 address directly to avoid unnecessary resolution steps. Current controller and agent roles are exchanged with a vendor proprietary TLV; this can be replaced in the future with a standard TLV such as Supported Role.
 
 The controller runs the server side of the service and exposes artifacts prepared under the transmit artifact tree. Agents run the client side, periodically pulling controller-to-agent artifacts such as upgrade binaries and WASM applications, and pushing agent-to-controller artifacts such as logs.
 
@@ -363,19 +363,6 @@ The controller runs the server side of the service and exposes artifacts prepare
 3. Supported artifact direction is explicit: `binaries` and `wasm` are sent from controller to agents, while `logs` are sent from agents to the controller.
 4. Artifact names are filtered by AL MAC prefix so each node only processes artifacts addressed to it.
 5. Successful and failed transfers are moved into quota-aware archive or failure storage to prevent unbounded filesystem growth.
-
-### Syslog Integration
-
-IEEE1905 service logs can be integrated with system syslog to simplify operational monitoring and troubleshooting in production deployments.  
-For discovery and exchange of logging capabilities and operational metadata between peers, we will use the IEEE1905 Higher Layer Information Protocol, specifically the **Higher Layer Query Message** and **Higher Layer Response Message**.
-
-1. The service should log key control-plane events with consistent severity levels (`INFO`, `WARN`, `ERROR`), including registration, topology convergence, role transitions, and forwarding decisions.
-2. Logs should include stable context fields (interface, local AL MAC, remote AL MAC, message type, message ID) to enable correlation across components.
-3. In RDK-B integrations, logs should be forwarded to the platform syslog/journald pipeline and retained according to platform policy.
-4. Rate limiting should be applied for repeated transient failures to avoid log flooding while preserving first-occurrence diagnostics.
-5. Higher Layer Query/Response exchange should be used to synchronize or verify peer logging-related capabilities before relying on cross-node diagnostics.
-
-![ARCH](docs/architecture/call_flow_diagram/IEEE1905_syslog.jpg)
 
 ### Firmware Upgrade
 
@@ -392,6 +379,23 @@ The controller distributes, via IEEE1905, the upgrade metadata required by exten
 5. During rolling upgrades, Higher Layer Query/Response should be used to detect peer upgrade state/capability and gate feature activation until compatibility is confirmed.
 
 ![ARCH](docs/architecture/call_flow_diagram/IEEE1905_fw_repo.jpg)
+
+### Logfile Exchange
+
+Logfile exchange should provide a structured way to move operational logs from agents to the controller for diagnostics, observability, and remote troubleshooting without requiring a separate discovery mechanism.  
+Discovery metadata between IEEE1905 entities will be handled through the IEEE1905 Higher Layer Information Protocol using **Higher Layer Query Message** and **Higher Layer Response Message** exchanges.
+
+In this model, the **controller** exposes the artifact exchange HTTP service and receives uploaded log artifacts from agents.  
+Agents learn the controller endpoint from the Control URL TLV carried in the Higher Layer Response, where the URL includes the controller IPv6 address directly to avoid unnecessary resolution steps. Controller and agent roles are currently exchanged through a vendor proprietary TLV, which can be replaced in the future with a standard TLV such as Supported Role.
+
+1. Logfile exchange should use the `logs` artifact direction from agent to controller, while preserving artifact naming based on AL MAC, timestamp, and original filename.
+2. Uploaded logs should be stored in the artifact exchange receive tree and moved into archive or failure storage according to transfer and processing outcome.
+3. Log exports should include enough stable context to correlate files with topology state, role, interface, and remote peer identity.
+4. Transfers should tolerate intermittent reachability and retry safely without causing duplicate processing or unbounded storage growth.
+5. Higher Layer Query/Response exchange should be used to verify peer logfile-exchange capability before relying on cross-node log collection workflows.
+
+![ARCH](docs/architecture/call_flow_diagram/IEEE1905_log.jpg)
+
 
 ### IEEE1905.1 Forwarding Table
 
@@ -1122,7 +1126,7 @@ cargo bench -p ieee1905 --bench codec_parse_bench -- codec_parse_cmdu
 
 Artifacts can be transferred automatically between the controller and the agent as an auxiliary service.
 
-This mechanism will rely on topology convergence to synchronize the controller's IPv6 address so that agents can discover where to pull artifacts from and where to push artifacts to. The goal is to reuse topology knowledge already maintained by IEEE1905 instead of introducing a separate discovery mechanism.
+This mechanism will rely on topology convergence to synchronize the controller's IPv6 address so that agents can discover where to pull artifacts from and where to push artifacts to. The server URL is consumed from the Control URL TLV present in the Higher Layer Response, and that URL includes the controller IPv6 address directly to avoid unnecessary resolution steps. Controller and agent roles are currently exchanged through a vendor proprietary TLV, with the intent to replace that mechanism in the future with a standard TLV such as Supported Role. The goal is to reuse topology knowledge already maintained by IEEE1905 instead of introducing a separate discovery mechanism.
 
 On the controller side, we will implement an HTTP artifact exchange service using `axum`. On the client side, we will use `reqwest` so an AL entity can push artifacts to a remote controller or pull artifacts from it when required.
 
