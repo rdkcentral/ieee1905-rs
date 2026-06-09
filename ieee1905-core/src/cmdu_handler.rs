@@ -483,20 +483,6 @@ impl CMDUHandler {
             }
         }
 
-        let mut artifact_exchange_server_address = None;
-        for info in VendorSpecificInfo::find_all(tlvs) {
-            if info.oui != COMCAST_OUI {
-                continue;
-            }
-            if info.vendor_data.info_type == VendorSpecificInfoType::ArtifactExchangeService
-                && info.vendor_data.role == VendorSpecificInfoRole::Server
-                && let Some(ipv6) = Ipv6::find(tlvs)
-                && let Some(entry) = ipv6.entries.first()
-            {
-                artifact_exchange_server_address = Some(entry.link_local_address);
-            }
-        }
-
         let topology_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
         let Some(node) = topology_db.find_device_by_port(source_mac).await.clone() else {
             warn!(
@@ -550,7 +536,6 @@ impl CMDUHandler {
             destination_frame_mac: source_mac,
             local_interface_mac,
             local_interface_list: Some(interfaces.clone()),
-            artifact_exchange_server_address,
             ..Default::default()
         };
 
