@@ -20,7 +20,6 @@
 #![deny(warnings)]
 #![allow(clippy::too_many_arguments)]
 
-use crate::artifact_exchange_service::server::ArtifactExchangeServer;
 use crate::cmdu_codec::{ControlUrl, LinkMetricRx, LinkMetricTx};
 use crate::linux::if_link::RtnlLinkStats64;
 use crate::lldpdu::PortId;
@@ -309,7 +308,6 @@ pub struct Ieee1905DeviceData {
     pub supported_freq_band: Option<SupportedFreqBand>,
     pub ieee1905profile_version: Option<Ieee1905ProfileVersion>,
     pub device_identification_type: Option<DeviceIdentificationType>,
-    pub artifact_exchange_server_address: Option<Ipv6Addr>,
 }
 
 impl Ieee1905DeviceData {
@@ -333,7 +331,6 @@ impl Ieee1905DeviceData {
             supported_freq_band: None,
             ieee1905profile_version: None,
             device_identification_type: None,
-            artifact_exchange_server_address: None,
         }
     }
 
@@ -392,18 +389,11 @@ impl From<&Ieee1905NodeInternal> for Ieee1905Node {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum ArtifactExchangeClientSource {
-    Ipv6,
-    ControlUrl,
-}
-
 #[derive(Debug)]
 pub struct Ieee1905NodeInternal {
     pub metadata: Ieee1905NodeInfo,
     pub device_data: Ieee1905DeviceData,
-    artifact_exchange_client:
-        Option<(ArtifactExchangeClientSource, String, ArtifactExchangeClient)>,
+    artifact_exchange_client: Option<(String, ArtifactExchangeClient)>,
     link_metrics_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
     higher_layer_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
 }
@@ -467,21 +457,12 @@ impl Ieee1905NodeInternal {
     fn update_artifact_exchange_client(
         &mut self,
         client_factory: Option<&ArtifactExchangeClientFactory>,
-        source: ArtifactExchangeClientSource,
         base_url: Option<String>,
     ) {
-        if let Some((current_source, current_base_url, _)) = self.artifact_exchange_client.as_ref()
-        {
+        if let Some((current_base_url, _)) = self.artifact_exchange_client.as_ref() {
             if base_url.as_ref() == Some(current_base_url) {
                 return; // url didn't change, keep the client
             }
-
-            if *current_source == ArtifactExchangeClientSource::ControlUrl
-                && source == ArtifactExchangeClientSource::Ipv6
-            {
-                return; // priority goes to url-based creation, it gives more info
-            }
-
             info!(
                 al_mac = %self.device_data.al_mac,
                 base_url = current_base_url,
@@ -501,7 +482,7 @@ impl Ieee1905NodeInternal {
                         address = %base_url,
                         "artifact exchange client started",
                     );
-                    self.artifact_exchange_client = Some((source, base_url, e));
+                    self.artifact_exchange_client = Some((base_url, e));
                 }
                 Err(e) => error!(
                     al_mac = %self.device_data.al_mac,
@@ -873,14 +854,6 @@ impl TopologyDatabase {
                                     "Comparing local_interface_list"
                                 );
 
-                                node.update_artifact_exchange_client(
-                                    self.artifact_exchange_client_factory.lock().as_ref(),
-                                    ArtifactExchangeClientSource::Ipv6,
-                                    device_data
-                                        .artifact_exchange_server_address
-                                        .map(ArtifactExchangeServer::format_base_url),
-                                );
-
                                 if node.device_data.has_changed(&device_data) {
                                     debug!("Device data changed local_interface_list)");
 
@@ -1134,9 +1107,9 @@ impl TopologyDatabase {
         let local_hle_query_message_id = node
             .metadata
             .local_hle_query_message_id
-            .take_if(|e| e.0 == message_id && e.1.elapsed() <= Duration::from_secs(1));
+            .take_if(|e| e.0 == message_id);
 
-        if local_hle_query_message_id.is_none() {
+        if local_hle_query_message_id.is_none_or(|e| e.1.elapsed() > Duration::from_secs(1)) {
             warn!(
                 %al_mac,
                 got = message_id,
@@ -1147,11 +1120,8 @@ impl TopologyDatabase {
         }
 
         if device_information.friendly_name == Self::HLE_ARTIFACT_EXCHANGE_SERVICE {
-            node.update_artifact_exchange_client(
-                self.artifact_exchange_client_factory.lock().as_ref(),
-                ArtifactExchangeClientSource::ControlUrl,
-                control_url.map(|e| e.url),
-            );
+            let factory = self.artifact_exchange_client_factory.lock();
+            node.update_artifact_exchange_client(factory.as_ref(), control_url.map(|e| e.url));
             return true;
         }
         false

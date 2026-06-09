@@ -411,8 +411,8 @@ async fn inject_topology_response_tlvs(
         }));
     }
 
-    // injecting VendorInfo and Ipv6
-    if let Some(address) = db.get_artifact_exchange_server_ip_address() {
+    // injecting VendorInfo
+    if db.get_artifact_exchange_server_ip_address().is_some() {
         vec.push(TLV::from(VendorSpecificInfo {
             oui: COMCAST_OUI,
             vendor_data: VendorSpecificInfoData {
@@ -420,13 +420,6 @@ async fn inject_topology_response_tlvs(
                 info_type: VendorSpecificInfoType::ArtifactExchangeService,
                 role: VendorSpecificInfoRole::Server,
             },
-        }));
-        vec.push(TLV::from(Ipv6 {
-            entries: vec![Ipv6Entry {
-                mac_address: db.al_mac_address,
-                link_local_address: address,
-                other_addresses: vec![],
-            }],
         }));
     } else {
         vec.push(TLV::from(VendorSpecificInfo {
@@ -818,13 +811,6 @@ pub async fn cmdu_higher_layer_response_transmission(
         }),
         TLV::from(ControlUrl {
             url: ArtifactExchangeServer::format_base_url(server_address),
-        }),
-        TLV::from(Ipv6 {
-            entries: vec![Ipv6Entry {
-                mac_address: local_al_mac_address,
-                link_local_address: server_address,
-                other_addresses: Default::default(),
-            }],
         }),
         TLV::from(EndOfMessage),
     ];
