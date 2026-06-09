@@ -310,93 +310,6 @@ The protection against split brain scenraio will work as follow:
 
 ---
 
-### Private Link-Local IPv6 EUI-64 for Control Plane Virtual Ethernet
-
-The IEEE1905 control-plane virtual Ethernet interface can be assigned a **private link-local IPv6 address** derived from the AL MAC address using EUI-64 interface-ID rules.  
-This address is in the `fe80::/64` scope and is **not routable outside the local home link/network**.
-
-1. Use the AL MAC assigned to the virtual Ethernet interface as the base identifier.
-2. Build the EUI-64 interface ID from the 48-bit MAC:
-   flip the U/L bit in the first octet, then insert `ff:fe` in the middle.
-3. Combine the resulting 64-bit interface ID with the link-local IPv6 prefix `fe80::/64`.
-4. Assign the address to the virtual Ethernet interface used by the IEEE1905 control plane.
-5. Validate duplicate-address detection (DAD), route reachability, and namespace placement (if isolation is enabled).
-
-Example (conceptual):
-
-- AL MAC: `02:42:c0:a8:64:02`
-- EUI-64 ID: `0042:c0ff:fea8:6402`
-- Link-local `/64` prefix: `fe80::/64`
-- Resulting IPv6: `fe80::42:c0ff:fea8:6402/64`
-
-### Network Isolation (Virtual Ethernet Namespace)
-
-To reduce blast radius and improve security boundaries, the IEEE1905 virtual Ethernet interface can be isolated in a dedicated Linux network namespace.
-
-1. Create a dedicated namespace for IEEE1905 control-plane traffic.
-2. Move the virtual Ethernet endpoint used by IEEE1905 into that namespace.
-3. Expose only the minimum required links/routes between host and IEEE1905 namespaces.
-4. Apply namespace-scoped firewall rules and permissions to restrict unintended traffic paths.
-5. Monitor namespace/interface state and fail fast if the virtual interface is missing or detached.
-
-Expected benefits:
-
-- Better separation between IEEE1905 control traffic and unrelated host networking.
-- Lower risk of accidental packet leakage across services.
-- Cleaner policy enforcement for interface access, logging, and debugging.
-
-Operational notes:
-
-- Startup scripts or systemd units should create/validate the namespace before launching IEEE1905.
-- Recovery logic should recreate or reattach the virtual interface if namespace state is lost.
-- Diagnostics should include namespace-aware checks (`ip netns`, interface/link state, routes).
-
-### Artifact Exchange Server
-
-The artifact exchange server provides an auxiliary HTTP service for transferring operational artifacts between the controller and agents over the IEEE1905 control interface.  
-The service is discovered through topology convergence and Higher Layer Information metadata, allowing agents to learn the controller artifact exchange URL without a separate discovery protocol. In practice, clients consume the server URL from the Control URL TLV carried in the Higher Layer Response. That URL includes the controller IPv6 address directly to avoid unnecessary resolution steps. Current controller and agent roles are exchanged with a vendor proprietary TLV; this can be replaced in the future with a standard TLV such as Supported Role.
-
-The controller runs the server side of the service and exposes artifacts prepared under the transmit artifact tree. Agents run the client side, periodically pulling controller-to-agent artifacts such as upgrade binaries and WASM applications, and pushing agent-to-controller artifacts such as logs.
-
-1. The server binds to the IEEE1905 virtual/control interface using the link-local IPv6 address derived from the local AL MAC address.
-2. Artifact transfers use HTTP endpoints for listing available artifacts, downloading controller-to-agent artifacts, and uploading agent-to-controller artifacts.
-3. Supported artifact direction is explicit: `binaries` and `wasm` are sent from controller to agents, while `logs` are sent from agents to the controller.
-4. Artifact names are filtered by AL MAC prefix so each node only processes artifacts addressed to it.
-5. Successful and failed transfers are moved into quota-aware archive or failure storage to prevent unbounded filesystem growth.
-
-### Firmware Upgrade
-
-Firmware upgrades should preserve IEEE1905 service continuity and prevent topology instability during restart windows.  
-Upgrade coordination metadata between IEEE1905 entities will be handled through the IEEE1905 Higher Layer Information Protocol using **Higher Layer Query Message** and **Higher Layer Response Message** exchanges.
-
-In this model, only the **controller** requires connectivity to the backend firmware repository/service.  
-The controller distributes, via IEEE1905, the upgrade metadata required by extenders (for example image URI, version, integrity/checksum, and policy), so extenders can fetch and apply the correct binaries.
-
-1. During upgrade/restart, IEEE1905 should gracefully stop transmission workers and release resources in deterministic order.
-2. On startup after upgrade, the service should rebuild local interface state, restart discovery/notification timers, and repopulate topology state through normal convergence.
-3. If role-bearing entities (agent/controller/registrar) restart, role selection and split-brain protection flow must be re-evaluated using the same tie-break logic.
-4. Upgrade procedures should be backward compatible for topology/CMDU behavior across adjacent firmware versions whenever feasible.
-5. During rolling upgrades, Higher Layer Query/Response should be used to detect peer upgrade state/capability and gate feature activation until compatibility is confirmed.
-
-![ARCH](docs/architecture/call_flow_diagram/IEEE1905_fw_repo.jpg)
-
-### Logfile Exchange
-
-Logfile exchange should provide a structured way to move operational logs from agents to the controller for diagnostics, observability, and remote troubleshooting without requiring a separate discovery mechanism.  
-Discovery metadata between IEEE1905 entities will be handled through the IEEE1905 Higher Layer Information Protocol using **Higher Layer Query Message** and **Higher Layer Response Message** exchanges.
-
-In this model, the **controller** exposes the artifact exchange HTTP service and receives uploaded log artifacts from agents.  
-Agents learn the controller endpoint from the Control URL TLV carried in the Higher Layer Response, where the URL includes the controller IPv6 address directly to avoid unnecessary resolution steps. Controller and agent roles are currently exchanged through a vendor proprietary TLV, which can be replaced in the future with a standard TLV such as Supported Role.
-
-1. Logfile exchange should use the `logs` artifact direction from agent to controller, while preserving artifact naming based on AL MAC, timestamp, and original filename.
-2. Uploaded logs should be stored in the artifact exchange receive tree and moved into archive or failure storage according to transfer and processing outcome.
-3. Log exports should include enough stable context to correlate files with topology state, role, interface, and remote peer identity.
-4. Transfers should tolerate intermittent reachability and retry safely without causing duplicate processing or unbounded storage growth.
-5. Higher Layer Query/Response exchange should be used to verify peer logfile-exchange capability before relying on cross-node log collection workflows.
-
-![ARCH](docs/architecture/call_flow_diagram/IEEE1905_log.jpg)
-
-
 ### IEEE1905.1 Forwarding Table
 
 The forwarding table will be used to select the MAC address for source and destination used in the ethernet frames, based on the AL MAC source address and destination, to transport CMDU packets.
@@ -1122,13 +1035,90 @@ cargo bench -p ieee1905 --bench cmdu_handler_bench -- node_present
 cargo bench -p ieee1905 --bench codec_parse_bench -- codec_parse_cmdu
 ```
 
-## 📦 Automatic Artifact Transfer Between Controller and Agent
+## 📦 Artifact Exchange Service
 
 Artifacts can be transferred automatically between the controller and the agent as an auxiliary service.
 
-This mechanism will rely on topology convergence to synchronize the controller's IPv6 address so that agents can discover where to pull artifacts from and where to push artifacts to. The server URL is consumed from the Control URL TLV present in the Higher Layer Response, and that URL includes the controller IPv6 address directly to avoid unnecessary resolution steps. Controller and agent roles are currently exchanged through a vendor proprietary TLV, with the intent to replace that mechanism in the future with a standard TLV such as Supported Role. The goal is to reuse topology knowledge already maintained by IEEE1905 instead of introducing a separate discovery mechanism.
+This mechanism relies on topology convergence to synchronize the controller's IPv6 address so that agents can discover where to pull artifacts from and where to push artifacts to. The goal is to reuse topology knowledge already maintained by IEEE1905 instead of introducing a separate discovery mechanism.
 
-On the controller side, we will implement an HTTP artifact exchange service using `axum`. On the client side, we will use `reqwest` so an AL entity can push artifacts to a remote controller or pull artifacts from it when required.
+The artifact exchange server provides an auxiliary HTTP service for transferring operational artifacts between the controller and agents over the IEEE1905 control interface. The controller runs the server side of the service and exposes artifacts prepared under the transmit artifact tree. Agents run the client side, periodically pulling controller-to-agent artifacts such as upgrade binaries and WASM applications, and pushing agent-to-controller artifacts such as logs.
+
+The service is discovered through topology convergence and Higher Layer Information metadata, allowing agents to learn the controller artifact exchange URL without a separate discovery protocol. In practice, clients consume the server URL from the Control URL TLV carried in the Higher Layer Response, and that URL includes the controller IPv6 address directly to avoid unnecessary resolution steps. Controller and agent roles are currently exchanged through a vendor proprietary TLV; this can be replaced in the future with a standard TLV such as Supported Role.
+
+On the controller side, the artifact exchange HTTP service is implemented using `axum`. On the client side, `reqwest` is used so an AL entity can push artifacts to a remote controller or pull artifacts from it when required.
+
+1. The server binds to the IEEE1905 virtual/control interface using the link-local IPv6 address derived from the local AL MAC address.
+2. Artifact transfers use HTTP endpoints for listing available artifacts, downloading controller-to-agent artifacts, and uploading agent-to-controller artifacts.
+3. Supported artifact direction is explicit: `binaries` and `wasm` are sent from controller to agents, while `logs` are sent from agents to the controller.
+4. Artifact names are filtered by AL MAC prefix so each node only processes artifacts addressed to it.
+5. Successful and failed transfers are moved into quota-aware archive or failure storage to prevent unbounded filesystem growth.
+
+### Private Link-Local IPv6 EUI-64 for Control Plane Virtual Ethernet
+
+The IEEE1905 control-plane virtual Ethernet interface can be assigned a **private link-local IPv6 address** derived from the AL MAC address using EUI-64 interface-ID rules. This address is in the `fe80::/64` scope and is **not routable outside the local home link/network**.
+
+1. Use the AL MAC assigned to the virtual Ethernet interface as the base identifier.
+2. Build the EUI-64 interface ID from the 48-bit MAC: flip the U/L bit in the first octet, then insert `ff:fe` in the middle.
+3. Combine the resulting 64-bit interface ID with the link-local IPv6 prefix `fe80::/64`.
+4. Assign the address to the virtual Ethernet interface used by the IEEE1905 control plane.
+5. Validate duplicate-address detection (DAD), route reachability, and namespace placement if isolation is enabled.
+
+Example:
+
+- AL MAC: `02:42:c0:a8:64:02`
+- EUI-64 ID: `0042:c0ff:fea8:6402`
+- Link-local `/64` prefix: `fe80::/64`
+- Resulting IPv6: `fe80::42:c0ff:fea8:6402/64`
+
+### Network Isolation (Virtual Ethernet Namespace)
+
+To reduce blast radius and improve security boundaries, the IEEE1905 virtual Ethernet interface can be isolated in a dedicated Linux network namespace.
+
+1. Create a dedicated namespace for IEEE1905 control-plane traffic.
+2. Move the virtual Ethernet endpoint used by IEEE1905 into that namespace.
+3. Expose only the minimum required links and routes between host and IEEE1905 namespaces.
+4. Apply namespace-scoped firewall rules and permissions to restrict unintended traffic paths.
+5. Monitor namespace and interface state and fail fast if the virtual interface is missing or detached.
+
+Expected benefits:
+
+- Better separation between IEEE1905 control traffic and unrelated host networking.
+- Lower risk of accidental packet leakage across services.
+- Cleaner policy enforcement for interface access, logging, and debugging.
+
+Operational notes:
+
+- Startup scripts or systemd units should create or validate the namespace before launching IEEE1905.
+- Recovery logic should recreate or reattach the virtual interface if namespace state is lost.
+- Diagnostics should include namespace-aware checks such as `ip netns`, interface and link state, and routes.
+
+### Firmware Upgrade
+
+Firmware upgrades should preserve IEEE1905 service continuity and prevent topology instability during restart windows. Upgrade coordination metadata between IEEE1905 entities will be handled through the IEEE1905 Higher Layer Information Protocol using **Higher Layer Query Message** and **Higher Layer Response Message** exchanges.
+
+In this model, only the **controller** requires connectivity to the backend firmware repository or service. The controller distributes, via IEEE1905, the upgrade metadata required by extenders, for example image URI, version, integrity or checksum, and policy, so extenders can fetch and apply the correct binaries.
+
+1. During upgrade or restart, IEEE1905 should gracefully stop transmission workers and release resources in deterministic order.
+2. On startup after upgrade, the service should rebuild local interface state, restart discovery and notification timers, and repopulate topology state through normal convergence.
+3. If role-bearing entities such as agent, controller, or registrar restart, role selection and split-brain protection flow must be re-evaluated using the same tie-break logic.
+4. Upgrade procedures should be backward compatible for topology and CMDU behavior across adjacent firmware versions whenever feasible.
+5. During rolling upgrades, Higher Layer Query and Response should be used to detect peer upgrade state and capability and gate feature activation until compatibility is confirmed.
+
+![ARCH](docs/architecture/call_flow_diagram/IEEE1905_fw_repo.jpg)
+
+### Logfile Exchange
+
+Logfile exchange should provide a structured way to move operational logs from agents to the controller for diagnostics, observability, and remote troubleshooting without requiring a separate discovery mechanism. Discovery metadata between IEEE1905 entities will be handled through the IEEE1905 Higher Layer Information Protocol using **Higher Layer Query Message** and **Higher Layer Response Message** exchanges.
+
+In this model, the **controller** exposes the artifact exchange HTTP service and receives uploaded log artifacts from agents.
+
+1. Logfile exchange should use the `logs` artifact direction from agent to controller, while preserving artifact naming based on AL MAC, timestamp, and original filename.
+2. Uploaded logs should be stored in the artifact exchange receive tree and moved into archive or failure storage according to transfer and processing outcome.
+3. Log exports should include enough stable context to correlate files with topology state, role, interface, and remote peer identity.
+4. Transfers should tolerate intermittent reachability and retry safely without causing duplicate processing or unbounded storage growth.
+5. Higher Layer Query and Response should be used to verify peer logfile-exchange capability before relying on cross-node log collection workflows.
+
+![ARCH](docs/architecture/call_flow_diagram/IEEE1905_log.jpg)
 
 ### Artifact Types
 
