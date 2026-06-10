@@ -19,6 +19,7 @@
 
 #![deny(warnings)]
 
+use netdev::interface::types::InterfaceType;
 use std::net::Ipv6Addr;
 // External crates
 use pnet::datalink::{self, MacAddr};
@@ -717,10 +718,14 @@ async fn call_nl80211_get_wiphy(
 async fn get_ethernet_interfaces(
     links: &IndexMap<i32, LinkInterfaceInfo>,
 ) -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
-    let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
-    let eth_tool_family_id = router.resolve_genl_family(ETH_TOOL_GENL_NAME).await?;
+    let interfaces = match call_eth_tool_get_link_modes().await {
+        Ok(e) => e,
+        Err(e) => {
+            warn!(%e, "call_eth_tool_get_link_modes failed, falling back to netdev");
+            call_netdev_get_ethernet_interfaces().await?
+        }
+    };
 
-    let interfaces = call_eth_tool_get_link_modes(&router, eth_tool_family_id).await?;
     let if_map: IndexMap<_, _> = interfaces.into_iter().map(|e| (e.if_index, e)).collect();
 
     let mut result = Vec::new();
@@ -776,10 +781,10 @@ struct EthernetInterfaceInfo {
     is_802_3ab_supported: bool,
 }
 
-async fn call_eth_tool_get_link_modes(
-    router: &NlRouter,
-    family_id: u16,
-) -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
+async fn call_eth_tool_get_link_modes() -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
+    let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
+    let eth_tool_family_id = router.resolve_genl_family(ETH_TOOL_GENL_NAME).await?;
+
     let nl_attrs = NlattrBuilder::default()
         .nla_type(
             AttrTypeBuilder::default()
@@ -798,7 +803,7 @@ async fn call_eth_tool_get_link_modes(
 
     let mut recv = router
         .send::<_, _, GenlId, Genlmsghdr<EthToolMessage, EthToolLinkModesAttribute>>(
-            family_id,
+            eth_tool_family_id,
             NlmF::DUMP | NlmF::ACK,
             NlPayload::Payload(nl_message),
         )
@@ -865,6 +870,28 @@ async fn call_eth_tool_get_link_modes(
         });
     }
     Ok(interfaces)
+}
+
+async fn call_netdev_get_ethernet_interfaces() -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
+    const ETH_TYPES: [InterfaceType; 4] = [
+        InterfaceType::Ethernet,
+        InterfaceType::Ethernet3Megabit,
+        InterfaceType::FastEthernetT,
+        InterfaceType::GigabitEthernet,
+    ];
+
+    let mut result = Vec::new();
+    for interface in tokio::task::spawn_blocking(netdev::get_interfaces).await? {
+        if !ETH_TYPES.contains(&interface.if_type) {
+            continue;
+        }
+        result.push(EthernetInterfaceInfo {
+            if_index: interface.index as i32,
+            link_speed: None,
+            is_802_3ab_supported: true,
+        });
+    }
+    Ok(result)
 }
 
 fn get_link_stats(handle: &RtAttrHandle<Ifla>) -> Option<RtnlLinkStats64> {
