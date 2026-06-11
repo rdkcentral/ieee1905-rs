@@ -18,7 +18,7 @@
 */
 
 use crate::cmdu::CMDU;
-use crate::next_task_id;
+use crate::{next_task_id, spawn_join_set_named};
 use pnet::datalink::MacAddr;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
@@ -27,7 +27,7 @@ use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio::time::Duration;
-use tracing::{Instrument, info_span};
+use tracing::info_span;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CmduReassemblyError {
@@ -58,49 +58,39 @@ impl CmduReassembler {
         let buffer_clone = buffer.clone();
 
         let mut join_set = JoinSet::new();
-        join_set.spawn(
-            async move {
-                let mut ticker = tokio::time::interval(Duration::from_secs(3));
+        let span = info_span!(parent: None, "cmdu_reassembler_cleaner", task = next_task_id());
+        spawn_join_set_named("cmdu_reassembler", Some(span), &mut join_set, async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(3));
 
-                loop {
-                    ticker.tick().await;
+            loop {
+                ticker.tick().await;
 
-                    let mut buffer = buffer_clone.lock().await;
-                    let now = Instant::now();
+                let mut buffer = buffer_clone.lock().await;
+                let now = Instant::now();
 
-                    buffer.retain(|key, entry| {
-                        let elapsed = now.duration_since(entry.first_received);
+                buffer.retain(|key, entry| {
+                    let elapsed = now.duration_since(entry.first_received);
 
-                        if elapsed > Duration::from_secs(3) {
-                            if entry.fragments.is_empty() {
-                                tracing::error!("Reassembly error for {:?}: EmptyFragments", key);
-                            } else if !entry.fragments.values().any(|f| f.is_last_fragment()) {
-                                tracing::error!(
-                                    "Reassembly error for {:?}: MissingLastFragment",
-                                    key
-                                );
-                            } else {
-                                let last_id = entry.fragments.keys().max().cloned().unwrap_or(0);
-                                if entry.fragments.len() < (last_id + 1) as usize {
-                                    tracing::error!(
-                                        "Reassembly error for {:?}: MissingFragments",
-                                        key
-                                    );
-                                }
-                            }
-                            tracing::trace!("Other CMDU's did not arrive removing the reassembler");
-                            false // remove expired entry
+                    if elapsed > Duration::from_secs(3) {
+                        if entry.fragments.is_empty() {
+                            tracing::error!("Reassembly error for {:?}: EmptyFragments", key);
+                        } else if !entry.fragments.values().any(|f| f.is_last_fragment()) {
+                            tracing::error!("Reassembly error for {:?}: MissingLastFragment", key);
                         } else {
-                            tracing::trace!("Waiting for rest of the packets!");
-                            true // keep
+                            let last_id = entry.fragments.keys().max().cloned().unwrap_or(0);
+                            if entry.fragments.len() < (last_id + 1) as usize {
+                                tracing::error!("Reassembly error for {:?}: MissingFragments", key);
+                            }
                         }
-                    });
-                }
+                        tracing::trace!("Other CMDU's did not arrive removing the reassembler");
+                        false // remove expired entry
+                    } else {
+                        tracing::trace!("Waiting for rest of the packets!");
+                        true // keep
+                    }
+                });
             }
-            .instrument(
-                info_span!(parent: None, "cmdu_reassembler_cleaner", task = next_task_id()),
-            ),
-        );
+        });
 
         Self {
             _join_set: join_set,

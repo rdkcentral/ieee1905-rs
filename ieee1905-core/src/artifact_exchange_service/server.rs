@@ -6,7 +6,7 @@ use crate::artifact_exchange_service::common::ArtifactExchangeConfig;
 use crate::interface_manager::{
     InterfaceInfo, call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64,
 };
-use crate::{TopologyDatabase, next_task_id};
+use crate::{TopologyDatabase, next_task_id, spawn_join_set_named, spawn_on_named};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, put};
@@ -111,7 +111,12 @@ impl ArtifactExchangeServerInstance {
 
         debug!("starting server worker");
         let mut join_set = JoinSet::new();
-        join_set.spawn(ArtifactExchangeServerInstanceActor.worker(listener));
+        spawn_join_set_named(
+            "artifact_exchange_server/worker",
+            None,
+            &mut join_set,
+            ArtifactExchangeServerInstanceActor.worker(listener),
+        );
 
         info!(
             if_name = if_info.if_name,
@@ -139,10 +144,11 @@ impl Drop for ArtifactExchangeServerInstance {
             "clearing ip address to the interface",
         );
         self.topo_db.set_artifact_exchange_server_ip_address(None);
-        self.runtime.spawn(call_rt_remove_address_v6(
-            self.if_info.if_index,
-            self.ip_address,
-        ));
+        spawn_on_named(
+            "artifact_exchange_server/drop",
+            &self.runtime,
+            call_rt_remove_address_v6(self.if_info.if_index, self.ip_address),
+        );
     }
 }
 

@@ -29,6 +29,7 @@ use crate::{
         CMDUFragmentation, DeviceIdentificationType, Ieee1905ProfileVersion, LinkMetricQuery,
         MediaType, MediaTypeSpecialInfo, Profile2ApCapability, SupportedFreqBand,
     },
+    spawn_named,
 };
 use crate::{
     artifact_exchange_service::client::ArtifactExchangeClientFactory,
@@ -531,8 +532,14 @@ impl TopologyDatabase {
             artifact_exchange_client_factory: Default::default(),
             artifact_exchange_server_ip_address: Default::default(),
         });
-        tokio::spawn(this.clone().refresh_topology_worker());
-        tokio::spawn(this.clone().refresh_interfaces_worker());
+        spawn_named(
+            "db/refresh_topology",
+            this.clone().refresh_topology_worker(),
+        );
+        spawn_named(
+            "db/refresh_interfaces",
+            this.clone().refresh_interfaces_worker(),
+        );
         this
     }
 

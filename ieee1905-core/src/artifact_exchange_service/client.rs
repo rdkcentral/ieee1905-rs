@@ -5,7 +5,7 @@ use crate::artifact_exchange_service::common::{
 use crate::interface_manager::{
     InterfaceInfo, call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64,
 };
-use crate::next_task_id;
+use crate::{next_task_id, spawn_join_set_named, spawn_on_named};
 use futures::StreamExt;
 use pnet::util::MacAddr;
 use reqwest::Url;
@@ -77,10 +77,11 @@ impl Drop for ArtifactExchangeClientFactory {
             ip_address = %self.local_ip_address,
             "clearing ip address to the interface",
         );
-        self.runtime.spawn(call_rt_remove_address_v6(
-            self.if_info.if_index,
-            self.local_ip_address,
-        ));
+        spawn_on_named(
+            "artifact_exchange_client/drop",
+            &self.runtime,
+            call_rt_remove_address_v6(self.if_info.if_index, self.local_ip_address),
+        );
     }
 }
 
@@ -119,7 +120,12 @@ impl ArtifactExchangeClient {
         };
 
         let mut join_set = JoinSet::new();
-        join_set.spawn(actor.worker());
+        spawn_join_set_named(
+            "artifact_exchange_client/worker",
+            None,
+            &mut join_set,
+            actor.worker(),
+        );
 
         Ok(Self {
             base_url: base_url_str.into_owned(),

@@ -22,7 +22,6 @@
 mod logger;
 
 use clap::{Parser, ValueEnum};
-use ieee1905::CMDUObserver;
 use ieee1905::al_sap::AlServiceAccessPoint;
 use ieee1905::artifact_exchange_service::client::ArtifactExchangeClientFactory;
 use ieee1905::artifact_exchange_service::server::ArtifactExchangeServer;
@@ -35,6 +34,7 @@ use ieee1905::interface_manager::*;
 use ieee1905::lldpdu_observer::LLDPObserver;
 use ieee1905::lldpdu_proxy::lldp_discovery_worker;
 use ieee1905::topology_manager::*;
+use ieee1905::{CMDUObserver, spawn_named};
 use sd_notify::NotifyState;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -191,12 +191,15 @@ async fn main() -> anyhow::Result<()> {
     let forwarding_interface_clone = forwarding_interface.clone();
 
     // Launch of AL-SAP as independent task
-    tokio::task::spawn(AlServiceAccessPoint::run(
-        sap_control_path,
-        sap_data_path,
-        sender_clone,
-        forwarding_interface_clone,
-    ));
+    spawn_named(
+        "al_sap",
+        AlServiceAccessPoint::run(
+            sap_control_path,
+            sap_data_path,
+            sender_clone,
+            forwarding_interface_clone,
+        ),
+    );
 
     // Initialization of the CMDU handler
     let cmdu_handler = Arc::new(
@@ -244,25 +247,26 @@ async fn main() -> anyhow::Result<()> {
         }
 
         let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx));
-        tokio::task::spawn(lldp_discovery_worker(
-            lldp_sender,
-            chassis_id,
-            interface.mac,
-            interface.name,
-        ));
+        spawn_named(
+            format!("proxy_lldp_discovery/{}", interface.name),
+            lldp_discovery_worker(lldp_sender, chassis_id, interface.mac, interface.name),
+        );
     }
 
     let discovery_interface_ieee1905 = forwarding_interface.clone();
 
     tracing::debug!("Starting IEEE1905 Discovery on {}", forwarding_interface);
 
-    tokio::task::spawn(cmdu_topology_discovery_transmission_worker(
-        discovery_interface_ieee1905,
-        Arc::clone(&sender),
-        Arc::clone(&message_id_generator),
-        al_mac,
-        forwarding_mac,
-    ));
+    spawn_named(
+        "proxy_topo_discovery",
+        cmdu_topology_discovery_transmission_worker(
+            discovery_interface_ieee1905,
+            sender.clone(),
+            message_id_generator.clone(),
+            al_mac,
+            forwarding_mac,
+        ),
+    );
 
     let mut signal_terminate = signal(SignalKind::terminate())?;
     let mut signal_interrupt = signal(SignalKind::interrupt())?;
