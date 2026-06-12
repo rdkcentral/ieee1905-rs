@@ -20,7 +20,7 @@
 #![deny(warnings)]
 
 // External crates
-use crate::next_task_id;
+use crate::{next_task_id, spawn_join_set_blocking_named, spawn_join_set_named};
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use pnet::datalink::{self, Channel::Ethernet, Config};
@@ -33,7 +33,7 @@ use std::io::ErrorKind;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::task::{JoinSet, yield_now};
-use tracing::{Instrument, debug, error, info, info_span, warn};
+use tracing::{debug, error, info, info_span, warn};
 
 /// Observer trait for handling specific Ethernet frame types
 #[async_trait]
@@ -91,42 +91,39 @@ impl EthernetReceiver {
         let (observer_tx, mut observer_rx) = tokio::sync::mpsc::channel(1000);
         observer_entry.insert(observer_tx);
 
-        self.join_set.spawn(
-            async move {
-                debug!("Observer task started for EtherType: 0x{:04X}", ether_type);
+        let span = info_span!(parent: None, "ethernet_receiver_dispatch", task = next_task_id());
+        let name = format!("eth_recv/{ether_type:04x}");
+        spawn_join_set_named(name, Some(span), &mut self.join_set, async move {
+            debug!("Observer task started for EtherType: 0x{:04X}", ether_type);
 
-                while let Some(message) = observer_rx.recv().await {
-                    debug!(
-                        interface_mac = ?message.interface_mac,
-                        source_mac = ?message.source_mac,
-                        destination_mac = ?message.destination_mac,
-                        frame_length = message.payload.len(),
-                        "Observer received frame"
-                    );
+            while let Some(message) = observer_rx.recv().await {
+                debug!(
+                    interface_mac = ?message.interface_mac,
+                    source_mac = ?message.source_mac,
+                    destination_mac = ?message.destination_mac,
+                    frame_length = message.payload.len(),
+                    "Observer received frame"
+                );
 
-                    observer
-                        .on_frame(
-                            message.interface_mac,
-                            &message.payload,
-                            message.source_mac,
-                            message.destination_mac,
-                        )
-                        .await;
+                observer
+                    .on_frame(
+                        message.interface_mac,
+                        &message.payload,
+                        message.source_mac,
+                        message.destination_mac,
+                    )
+                    .await;
 
-                    // TODO this looks like a "magic delay" workaround and
-                    //  should be properly fixed on the reassembler side
+                // TODO this looks like a "magic delay" workaround and
+                //  should be properly fixed on the reassembler side
 
-                    // To avoid situation when cmdu part with flag end
-                    // is processed before first one
-                    // yield will casue that reassembler is triggered for with
-                    // respect to the arrival of packets.
-                    yield_now().await;
-                }
+                // To avoid situation when cmdu part with flag end
+                // is processed before first one
+                // yield will casue that reassembler is triggered for with
+                // respect to the arrival of packets.
+                yield_now().await;
             }
-            .instrument(
-                info_span!(parent: None, "ethernet_receiver_dispatch", task = next_task_id()),
-            ),
-        );
+        });
     }
 
     /// **Start receiving Ethernet frames**
@@ -158,7 +155,8 @@ impl EthernetReceiver {
             Err(e) => bail!("Failed to create datalink channel: {e}"),
         };
 
-        self.join_set.spawn_blocking(move || {
+        let name = format!("eth_recv/{interface_name}/block");
+        spawn_join_set_blocking_named(name, &mut self.join_set, move || {
             let _span = info_span!(parent: None, "ethernet_receiver_reader", task = next_task_id())
                 .entered();
 
@@ -200,33 +198,30 @@ impl EthernetReceiver {
         });
 
         // TODO this intermediate channel is not needed and can be removed
-        self.join_set.spawn(
-            async move {
-                while let Some(message) = notify_rx.recv().await {
-                    let ether_type = message.ether_type;
-                    let Some(observer) = self.observers.get(&ether_type) else {
-                        continue;
-                    };
+        let span = info_span!(parent: None, "eth_recv_intermediate", task = next_task_id());
+        let name = format!("eth_recv/{interface_name}");
+        spawn_join_set_named(name, Some(span), &mut self.join_set, async move {
+            while let Some(message) = notify_rx.recv().await {
+                let ether_type = message.ether_type;
+                let Some(observer) = self.observers.get(&ether_type) else {
+                    continue;
+                };
 
-                    debug!(
-                        eth_type = format!("0x{ether_type:04X}"),
-                        src = %message.source_mac,
-                        dst = %message.destination_mac,
-                        payload_len = message.payload.len(),
-                        "Received Ethernet frame"
-                    );
+                debug!(
+                    eth_type = format!("0x{ether_type:04X}"),
+                    src = %message.source_mac,
+                    dst = %message.destination_mac,
+                    payload_len = message.payload.len(),
+                    "Received Ethernet frame"
+                );
 
-                    if observer.send(message).await.is_ok() {
-                        debug!("Notified observer for EtherType: 0x{ether_type:04X}");
-                    } else {
-                        error!("Failed to notify observer for EtherType: 0x{ether_type:04X}");
-                    }
+                if observer.send(message).await.is_ok() {
+                    debug!("Notified observer for EtherType: 0x{ether_type:04X}");
+                } else {
+                    error!("Failed to notify observer for EtherType: 0x{ether_type:04X}");
                 }
             }
-            .instrument(
-                info_span!(parent: None, "ethernet_receiver_intermediate", task = next_task_id()),
-            ),
-        );
+        });
         Ok(self.join_set)
     }
 }
