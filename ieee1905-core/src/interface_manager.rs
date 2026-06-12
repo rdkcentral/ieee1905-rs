@@ -19,6 +19,8 @@
 
 #![deny(warnings)]
 
+use netdev::interface::types::InterfaceType;
+use std::net::Ipv6Addr;
 // External crates
 use pnet::datalink::{self, MacAddr};
 
@@ -38,17 +40,29 @@ use crate::topology_manager::{Ieee1905InterfaceData, Ieee1905LocalInterface};
 use indexmap::{IndexMap, IndexSet};
 use neli::consts::nl::{GenlId, NlmF};
 use neli::consts::rtnl::{
-    Arphrd, Iff, Ifla, IflaInfo, IflaVlan, Nda, Ntf, Nud, RtAddrFamily, Rtm, Rtn,
+    Arphrd, Ifa, IfaF, Iff, Ifla, IflaInfo, IflaVlan, Nda, Ntf, Nud, RtAddrFamily, RtScope, Rtm,
+    Rtn,
 };
 use neli::consts::socket::NlFamily;
 use neli::genl::{AttrTypeBuilder, GenlAttrHandle, Genlmsghdr, GenlmsghdrBuilder, NlattrBuilder};
-use neli::nl::{NlPayload, Nlmsghdr};
+use neli::nl::{NlPayload, Nlmsghdr, NlmsghdrBuilder};
 use neli::router::asynchronous::{NlRouter, NlRouterReceiverHandle};
-use neli::rtnl::{Ifinfomsg, IfinfomsgBuilder, Ndmsg, NdmsgBuilder, RtAttrHandle};
-use neli::types::GenlBuffer;
+use neli::rtnl::{
+    Ifaddrmsg, IfaddrmsgBuilder, Ifinfomsg, IfinfomsgBuilder, Ndmsg, NdmsgBuilder, RtAttrHandle,
+    RtattrBuilder,
+};
+use neli::socket::asynchronous::NlSocketHandle;
+use neli::types::{GenlBuffer, RtBuffer};
 use neli::utils::Groups;
 use std::ops::{BitAnd, Div};
 use tracing::{error, trace, warn};
+
+#[derive(Debug, Clone)]
+pub struct InterfaceInfo {
+    pub mac: MacAddr,
+    pub if_index: u32,
+    pub if_name: String,
+}
 
 pub fn get_local_al_mac(interface_name: String) -> Option<MacAddr> {
     // Fetch all network interfaces
@@ -63,6 +77,16 @@ pub fn get_local_al_mac(interface_name: String) -> Option<MacAddr> {
     }
     tracing::debug!("No Al Mac found, using default.");
     Some(MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
+}
+
+pub fn get_interface_info(if_name: &str) -> Option<InterfaceInfo> {
+    let interfaces = datalink::interfaces();
+    let interface = interfaces.iter().find(|e| e.name == if_name)?;
+    Some(InterfaceInfo {
+        mac: interface.mac?,
+        if_index: interface.index,
+        if_name: if_name.to_string(),
+    })
 }
 
 pub fn get_forwarding_interface_mac(interface_name: &str) -> MacAddr {
@@ -275,6 +299,74 @@ async fn call_rt_get_bridge_fdb() -> anyhow::Result<IndexMap<MacAddr, IndexSet<i
             .insert(if_index);
     }
     Ok(result)
+}
+
+pub async fn call_rt_new_address_v6(if_index: u32, address: Ipv6Addr) -> anyhow::Result<()> {
+    let socket = NlSocketHandle::connect(NlFamily::Route, None, Groups::empty())?;
+
+    let rt_attrs = RtBuffer::from_iter([
+        RtattrBuilder::default()
+            .rta_type(Ifa::Local)
+            .rta_payload(address.octets())
+            .build()?,
+        RtattrBuilder::default()
+            .rta_type(Ifa::Address)
+            .rta_payload(address.octets())
+            .build()?,
+    ]);
+
+    let rt_message = IfaddrmsgBuilder::default()
+        .ifa_family(RtAddrFamily::Inet6)
+        .ifa_prefixlen(64)
+        .ifa_flags(IfaF::NODAD)
+        .ifa_scope(RtScope::Link)
+        .ifa_index(if_index)
+        .rtattrs(rt_attrs)
+        .build()?;
+
+    let rt_header = NlmsghdrBuilder::default()
+        .nl_type(Rtm::Newaddr)
+        .nl_flags(NlmF::REQUEST | NlmF::CREATE | NlmF::ACK | NlmF::EXCL)
+        .nl_payload(NlPayload::Payload(rt_message))
+        .build()?;
+
+    socket.send(&rt_header).await?;
+    socket.recv_all::<u16, Ifaddrmsg>().await?;
+    Ok(())
+}
+
+pub async fn call_rt_remove_address_v6(if_index: u32, address: Ipv6Addr) -> anyhow::Result<()> {
+    let socket = NlSocketHandle::connect(NlFamily::Route, None, Groups::empty())?;
+
+    let rt_attrs = RtBuffer::from_iter([
+        RtattrBuilder::default()
+            .rta_type(Ifa::Local)
+            .rta_payload(address.octets())
+            .build()?,
+        RtattrBuilder::default()
+            .rta_type(Ifa::Address)
+            .rta_payload(address.octets())
+            .build()?,
+    ]);
+
+    let rt_message = IfaddrmsgBuilder::default()
+        .ifa_family(RtAddrFamily::Inet6)
+        .ifa_prefixlen(64)
+        .ifa_flags(IfaF::empty())
+        .ifa_scope(RtScope::Link)
+        .ifa_index(if_index)
+        .rtattrs(rt_attrs)
+        .build()?;
+
+    let rt_header = NlmsghdrBuilder::default()
+        .nl_type(Rtm::Deladdr)
+        .nl_flags(NlmF::REQUEST | NlmF::ACK)
+        .nl_payload(NlPayload::Payload(rt_message))
+        .build()?;
+
+    socket.send(&rt_header).await?;
+    socket.recv_all::<u16, Ifaddrmsg>().await?;
+    Ok(())
 }
 
 async fn get_wireless_interfaces(
@@ -626,10 +718,14 @@ async fn call_nl80211_get_wiphy(
 async fn get_ethernet_interfaces(
     links: &IndexMap<i32, LinkInterfaceInfo>,
 ) -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
-    let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
-    let eth_tool_family_id = router.resolve_genl_family(ETH_TOOL_GENL_NAME).await?;
+    let interfaces = match call_eth_tool_get_link_modes().await {
+        Ok(e) => e,
+        Err(e) => {
+            warn!(%e, "call_eth_tool_get_link_modes failed, falling back to netdev");
+            call_netdev_get_ethernet_interfaces().await?
+        }
+    };
 
-    let interfaces = call_eth_tool_get_link_modes(&router, eth_tool_family_id).await?;
     let if_map: IndexMap<_, _> = interfaces.into_iter().map(|e| (e.if_index, e)).collect();
 
     let mut result = Vec::new();
@@ -685,10 +781,10 @@ struct EthernetInterfaceInfo {
     is_802_3ab_supported: bool,
 }
 
-async fn call_eth_tool_get_link_modes(
-    router: &NlRouter,
-    family_id: u16,
-) -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
+async fn call_eth_tool_get_link_modes() -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
+    let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
+    let eth_tool_family_id = router.resolve_genl_family(ETH_TOOL_GENL_NAME).await?;
+
     let nl_attrs = NlattrBuilder::default()
         .nla_type(
             AttrTypeBuilder::default()
@@ -707,7 +803,7 @@ async fn call_eth_tool_get_link_modes(
 
     let mut recv = router
         .send::<_, _, GenlId, Genlmsghdr<EthToolMessage, EthToolLinkModesAttribute>>(
-            family_id,
+            eth_tool_family_id,
             NlmF::DUMP | NlmF::ACK,
             NlPayload::Payload(nl_message),
         )
@@ -774,6 +870,28 @@ async fn call_eth_tool_get_link_modes(
         });
     }
     Ok(interfaces)
+}
+
+async fn call_netdev_get_ethernet_interfaces() -> anyhow::Result<Vec<EthernetInterfaceInfo>> {
+    const ETH_TYPES: [InterfaceType; 4] = [
+        InterfaceType::Ethernet,
+        InterfaceType::Ethernet3Megabit,
+        InterfaceType::FastEthernetT,
+        InterfaceType::GigabitEthernet,
+    ];
+
+    let mut result = Vec::new();
+    for interface in tokio::task::spawn_blocking(netdev::get_interfaces).await? {
+        if !ETH_TYPES.contains(&interface.if_type) {
+            continue;
+        }
+        result.push(EthernetInterfaceInfo {
+            if_index: interface.index as i32,
+            link_speed: None,
+            is_802_3ab_supported: true,
+        });
+    }
+    Ok(result)
 }
 
 fn get_link_stats(handle: &RtAttrHandle<Ifla>) -> Option<RtnlLinkStats64> {
@@ -935,6 +1053,29 @@ fn convert_if_type_to_role(if_type: Option<Nl80211IfType>, frequency: u32) -> Op
     })
 }
 
+pub fn convert_mac_to_eui64(mac: MacAddr) -> Ipv6Addr {
+    Ipv6Addr::from([
+        // prefix
+        0xfe,
+        0x80,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        // eui
+        mac.0 ^ 0x02,
+        mac.1,
+        mac.2,
+        0xff,
+        0xfe,
+        mac.3,
+        mac.4,
+        mac.5,
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -975,5 +1116,13 @@ mod tests {
             assert_eq!(actual, *expected, "input: total = {total}, busy = {busy}");
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_convert_mac_to_eui64() {
+        let mac = MacAddr::from([0x9e, 0x7f, 0x24, 0x2b, 0x41, 0x86]);
+        let actual = convert_mac_to_eui64(mac);
+        let expected = Ipv6Addr::from_bits(0xfe800000000000009c7f24fffe2b4186u128);
+        assert_eq!(actual, expected);
     }
 }

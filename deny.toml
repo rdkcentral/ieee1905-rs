@@ -71,6 +71,7 @@ feature-depth = 1
 # output a note when they are encountered.
 ignore = [
     { id = "RUSTSEC-2024-0436", reason = "paste is required transitively (ratatui, cryptoki, netlink); awaiting upstream migration to maintained alternative" },
+    { id = "RUSTSEC-2026-0173", reason = "cannot be fixed, dependencies have not been updated yet" },
     #"RUSTSEC-0000-0000",
     #{ id = "RUSTSEC-0000-0000", reason = "you can specify a reason the advisory is ignored" },
     #"a-crate-that-is-yanked@0.1.1", # you can also ignore yanked crate versions if you wish
@@ -149,17 +150,6 @@ registries = [
 # Lint level for when multiple versions of the same crate are detected
 multiple-versions = "allow"
 skip = [
-    { crate = "windows_x86_64_gnu",     reason = "Windows target bindings; duplicates OK for now" },
-    { crate = "windows_x86_64_gnullvm", reason = "Windows glue crate; multiple versions OK for now" },
-    { crate = "windows_x86_64_msvc", reason = "Windows glue crate; multiple versions OK for now" },
-    { crate = "windows_i686_msvc", reason = "Windows glue crate; multiple versions OK for now" },
-    { crate = "windows_i686_gnullvm", reason = "Windows glue crate; multiple versions OK for now" },
-    { crate = "windows_i686_gnu", reason = "Windows glue crate; multiple versions OK for now" },
-    { crate = "windows_aarch64_gnullvm", reason = "Windows glue crate; multiple versions OK for now" },
-    { crate = "windows-targets", reason = "Windows glue crate; multiple versions OK for now" },
-
-
-
 ]
 
 

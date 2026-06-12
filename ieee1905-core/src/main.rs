@@ -21,8 +21,10 @@
 
 mod logger;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use ieee1905::al_sap::AlServiceAccessPoint;
+use ieee1905::artifact_exchange_service::client::ArtifactExchangeClientFactory;
+use ieee1905::artifact_exchange_service::server::ArtifactExchangeServer;
 use ieee1905::cmdu_handler::*;
 use ieee1905::cmdu_message_id_generator::get_message_id_generator;
 use ieee1905::cmdu_proxy::cmdu_topology_discovery_transmission_worker;
@@ -32,19 +34,13 @@ use ieee1905::interface_manager::*;
 use ieee1905::lldpdu_observer::LLDPObserver;
 use ieee1905::lldpdu_proxy::lldp_discovery_worker;
 use ieee1905::topology_manager::*;
-use ieee1905::{CMDUObserver, next_task_id};
+use ieee1905::{CMDUObserver, spawn_named};
+use sd_notify::NotifyState;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-//use ieee1905::crypto_engine::CRYPTO_CONTEXT;
-use anyhow::anyhow;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Mutex;
-use tokio::sync::oneshot;
-use tracing::instrument;
-
-use sd_notify::NotifyState;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -62,8 +58,8 @@ struct CliArgs {
     #[arg(long,default_value_t=String::from("/tmp/al_data_socket"))]
     sap_data_path: String,
     /// Tracing filter
-    #[arg(long,short,default_value_t=String::from("info"))]
-    filter: String,
+    #[arg(long, short)]
+    filter: Option<String>,
     /// Enable console subscriber for tokio-console
     #[cfg(feature = "enable_tokio_console")]
     #[arg(short, long, default_value_t = false)]
@@ -83,9 +79,19 @@ struct CliArgs {
     /// Disable LLDP receivers
     #[arg(long)]
     no_lldp_receivers: bool,
+    /// Enables artifact exchange server
+    #[arg(long)]
+    artifact_exchange: Option<ArtifactExchange>,
 }
 
-fn main() -> anyhow::Result<()> {
+#[derive(ValueEnum, Debug, Clone)]
+enum ArtifactExchange {
+    Server,
+    Client,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = CliArgs::parse();
 
     let _guard = logger::init_logger(&cli);
@@ -106,28 +112,6 @@ fn main() -> anyhow::Result<()> {
         tracing::error!("failed to open RBus connection: {e}");
     });
 
-    loop {
-        tracing::info!("Starting runtime");
-        let runtime = tokio::runtime::Runtime::new()?;
-
-        tracing::info!("Runtime started");
-        if runtime.block_on(run_main_logic(&cli))? {
-            break;
-        }
-
-        tracing::info!("Releasing runtime");
-        // timeout is used for blocking tasks, which in our case are related to datalink channels.
-        // all such tasks are configured to have a 1-second timeout, so will die at most in 1 second.
-        runtime.shutdown_timeout(Duration::from_secs(2));
-        tracing::info!("Runtime released");
-    }
-
-    tracing::info!("Closing app.");
-    Ok(())
-}
-
-#[instrument(skip_all, name = "main", fields(task = next_task_id()))]
-async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     let mut join_sets = Vec::new();
 
     //Set AL MAC & test MAC addresses
@@ -141,14 +125,16 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
         };
 
     // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
-    let al_mac = get_local_al_mac(cli.interface.clone())
-        .ok_or_else(|| anyhow!("failed to get local al mac"))?;
+    let Some(if_info) = get_interface_info(&cli.interface) else {
+        anyhow::bail!("failed to get local interface {}", cli.interface);
+    };
+
+    let al_mac = if_info.mac;
     tracing::info!("AL MAC address: {}", al_mac);
 
     // // Initialize Database
 
     let topology_db = TopologyDatabase::get_instance(al_mac, &cli.interface);
-    let _db_workers = topology_db.start_workers();
 
     // Upon every loop restart topology database role can change
     topology_db.set_local_role(None).await;
@@ -159,6 +145,22 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
 
     //we initilize here the values for LLDP input parameters
     let chassis_id = al_mac;
+
+    let mut _artifact_exchange_server = None;
+    match cli.artifact_exchange.as_ref() {
+        Some(ArtifactExchange::Server) => {
+            tracing::info!("Artifact exchange server is enabled");
+            let mut server = ArtifactExchangeServer::new(topology_db.clone(), if_info.clone());
+            server.start().await?;
+            _artifact_exchange_server = Some(server);
+        }
+        Some(ArtifactExchange::Client) => {
+            tracing::info!("Artifact exchange client is enabled");
+            let factory = ArtifactExchangeClientFactory::new(if_info.clone()).await?;
+            topology_db.set_artifact_exchange_client_factory(factory);
+        }
+        None => tracing::info!("ArtifactExchangeSync is disabled"),
+    }
 
     tracing::debug!("Topology Database initialized with AL MAC: {:?}", al_mac);
 
@@ -188,16 +190,16 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
     let sender_clone = Arc::clone(&sender);
     let forwarding_interface_clone = forwarding_interface.clone();
 
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
     // Launch of AL-SAP as independent task
-    tokio::task::spawn(AlServiceAccessPoint::initialize_and_store(
-        sap_control_path,
-        sap_data_path,
-        sender_clone,
-        forwarding_interface_clone,
-        shutdown_tx,
-    ));
+    spawn_named(
+        "al_sap",
+        AlServiceAccessPoint::run(
+            sap_control_path,
+            sap_data_path,
+            sender_clone,
+            forwarding_interface_clone,
+        ),
+    );
 
     // Initialization of the CMDU handler
     let cmdu_handler = Arc::new(
@@ -245,43 +247,38 @@ async fn run_main_logic(cli: &CliArgs) -> anyhow::Result<bool> {
         }
 
         let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx));
-        tokio::task::spawn(lldp_discovery_worker(
-            lldp_sender,
-            chassis_id,
-            interface.mac,
-            interface.name,
-        ));
+        spawn_named(
+            format!("proxy_lldp_discovery/{}", interface.name),
+            lldp_discovery_worker(lldp_sender, chassis_id, interface.mac, interface.name),
+        );
     }
 
     let discovery_interface_ieee1905 = forwarding_interface.clone();
 
     tracing::debug!("Starting IEEE1905 Discovery on {}", forwarding_interface);
 
-    tokio::task::spawn(cmdu_topology_discovery_transmission_worker(
-        discovery_interface_ieee1905,
-        Arc::clone(&sender),
-        Arc::clone(&message_id_generator),
-        al_mac,
-        forwarding_mac,
-    ));
+    spawn_named(
+        "proxy_topo_discovery",
+        cmdu_topology_discovery_transmission_worker(
+            discovery_interface_ieee1905,
+            sender.clone(),
+            message_id_generator.clone(),
+            al_mac,
+            forwarding_mac,
+        ),
+    );
 
     let mut signal_terminate = signal(SignalKind::terminate())?;
     let mut signal_interrupt = signal(SignalKind::interrupt())?;
 
     // if topology_cli is running
     // you can close app by pressing q
-    let mut exit_service = true;
-
     tokio::select! {
         _ = signal_terminate.recv() => {let _ = sd_notify::notify(true, &[NotifyState::Stopping]);},
         _ = signal_interrupt.recv() => {let _ = sd_notify::notify(true, &[NotifyState::Stopping]);},
-        _ = shutdown_rx => {
-            tracing::info!("Socket closed. Trying to restart.");
-            exit_service = false;
-        }
         _ = topology_db.start_topology_cli(), if cli.topology_ui => {}
     }
-    Ok(exit_service)
+    Ok(())
 }
 
 async fn get_lldp_compatible_interfaces() -> Vec<Ieee1905LocalInterface> {
