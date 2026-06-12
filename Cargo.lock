@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "ieee1905"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1585,7 +1585,7 @@ dependencies = [
 
 [[package]]
 name = "ieee1905-tests"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2810,7 +2810,7 @@ dependencies = [
 
 [[package]]
 name = "rbus-core"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "bstr",
@@ -2822,7 +2822,7 @@ dependencies = [
 
 [[package]]
 name = "rbus-provider"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "bstr",
@@ -2834,7 +2834,7 @@ dependencies = [
 
 [[package]]
 name = "rbus-sys"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "bindgen",
