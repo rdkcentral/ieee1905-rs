@@ -18,6 +18,7 @@
 */
 use crate::SDU;
 use crate::al_sap::AlServiceAccessPoint;
+use crate::artifact_exchange_service::server::ArtifactExchangeServer;
 use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
@@ -30,7 +31,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::time::{Duration, Instant, interval};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, debug, error, info, info_span, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 #[instrument(skip_all, name = "cmdu_discovery_transmission", fields(task = next_task_id()))]
 pub async fn cmdu_topology_discovery_transmission_worker(
@@ -98,6 +99,11 @@ pub async fn cmdu_topology_discovery_transmission_worker(
     }
 }
 
+#[instrument(
+    skip_all,
+    name = "cmdu_query_transmission",
+    fields(task = next_task_id(), al_mac = %remote_al_mac_address),
+)]
 pub async fn cmdu_topology_query_transmission(
     interface: String,
     sender: Arc<EthernetSender>,
@@ -106,111 +112,111 @@ pub async fn cmdu_topology_query_transmission(
     remote_al_mac_address: MacAddr,
     interface_mac_address: MacAddr,
 ) {
-    tokio::spawn(
-        async move {
-            let message_id = message_id_generator.next_id();
+    let message_id = message_id_generator.next_id();
+    debug!(
+        interface = %interface,
+        message_id = message_id,
+        "Creating CMDU Topology Query"
+    );
+
+    // Retrieve device data from the topology database
+    let topology_db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
+    let Some(node) = topology_db.get_device(remote_al_mac_address).await else {
+        debug!(
+            "Could not find node in topology database for AL_MAC={}",
+            remote_al_mac_address
+        );
+        return;
+    };
+
+    // Clone the device data (without modifying metadata)
+    let device_data = node.device_data.clone();
+
+    // **Retrieve Destination MAC Address**
+    let destination_mac = device_data.destination_frame_mac;
+    let local_role = topology_db.get_local_role().await;
+
+    // Define TLVs
+    let payload = [
+        Some(TLV::from(AlMacAddress {
+            al_mac_address: local_al_mac_address,
+        })),
+        Some(TLV::from(VendorSpecificInfo {
+            oui: COMCAST_OUI,
+            vendor_data: COMCAST_QUERY_TAG,
+        })),
+        if let Some(Role::Registrar) = local_role {
+            Some(TLV::from(MultiApProfile::Profile3))
+        } else {
+            None
+        },
+        Some(TLV::from(EndOfMessage)),
+    ];
+
+    // Construct CMDU
+    let cmdu_topology_query = CMDU {
+        message_version: MessageVersion::Version2013.to_u8(),
+        reserved: 0,
+        message_type: CMDUType::TopologyQuery.to_u16(),
+        message_id,
+        fragment: 0,
+        flags: 0x80,
+        payload: payload.iter().flatten().flat_map(TLV::serialize).collect(),
+    };
+
+    let serialized_cmdu = cmdu_topology_query.serialize();
+    debug!(
+        message_id = message_id,
+        ?serialized_cmdu,
+        "Serialized CMDU for Topology Query"
+    );
+
+    let source_mac = interface_mac_address;
+    let ethertype = 0x893A; // IEEE 1905 EtherType
+
+    // Send the CMDU via EthernetSender
+    match sender
+        .enqueue_frame(destination_mac, source_mac, ethertype, serialized_cmdu)
+        .await
+    {
+        Err(e) => {
+            error!(
+                message_id = message_id,
+                "Failed to send CMDU Topology Query: {}", e
+            );
+        }
+        Ok(()) => {
             debug!(
                 interface = %interface,
                 message_id = message_id,
-                "Creating CMDU Topology Query"
+                al_mac = %local_al_mac_address,
+                "CMDU Topology Query sent successfully"
             );
 
-            // Retrieve device data from the topology database
-            let topology_db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
-            let Some(node) = topology_db.get_device(remote_al_mac_address).await else {
-                debug!(
-                    "Could not find node in topology database for AL_MAC={}",
-                    remote_al_mac_address
-                );
-                return;
-            };
-
-            // Clone the device data (without modifying metadata)
-            let device_data = node.device_data.clone();
-
-            // **Retrieve Destination MAC Address**
-            let destination_mac = device_data.destination_frame_mac;
-            let local_role = topology_db.get_local_role().await;
-
-            // Define TLVs
-            let payload = [
-                Some(TLV::from(AlMacAddress {
-                    al_mac_address: local_al_mac_address,
-                })),
-                Some(TLV::from(VendorSpecificInfo {
-                    oui: COMCAST_OUI,
-                    vendor_data: COMCAST_QUERY_TAG.to_vec(),
-                })),
-                if let Some(Role::Registrar) = local_role {
-                    Some(TLV::from(MultiApProfile::Profile3))
-                } else {
-                    None
-                },
-                Some(TLV::from(EndOfMessage)),
-            ];
-
-            // Construct CMDU
-            let cmdu_topology_query = CMDU {
-                message_version: MessageVersion::Version2013.to_u8(),
-                reserved: 0,
-                message_type: CMDUType::TopologyQuery.to_u16(),
-                message_id,
-                fragment: 0,
-                flags: 0x80,
-                payload: payload.iter().flatten().flat_map(TLV::serialize).collect(),
-            };
-
-            let serialized_cmdu = cmdu_topology_query.serialize();
+            // **Update the node's state to `QUERY_SENT` in the topology database**
+            topology_db
+                .update_ieee1905_topology(
+                    device_data.clone(),
+                    UpdateType::QuerySent,
+                    Some(message_id),
+                    None,
+                    None,
+                )
+                .await;
             debug!(
-                message_id = message_id,
-                ?serialized_cmdu,
-                "Serialized CMDU for Topology Query"
+                "Updated topology database: AL_MAC={} set to QUERY_SENT",
+                remote_al_mac_address
             );
-
-            let source_mac = interface_mac_address;
-            let ethertype = 0x893A; // IEEE 1905 EtherType
-
-            // Send the CMDU via EthernetSender
-            match sender
-                .enqueue_frame(destination_mac, source_mac, ethertype, serialized_cmdu)
-                .await
-            {
-                Err(e) => {
-                    error!(
-                        message_id = message_id,
-                        "Failed to send CMDU Topology Query: {}", e
-                    );
-                }
-                Ok(()) => {
-                    debug!(
-                        interface = %interface,
-                        message_id = message_id,
-                        al_mac = %local_al_mac_address,
-                        "CMDU Topology Query sent successfully"
-                    );
-
-                    // **Update the node's state to `QUERY_SENT` in the topology database**
-                    topology_db
-                        .update_ieee1905_topology(
-                            device_data.clone(),
-                            UpdateType::QuerySent,
-                            Some(message_id),
-                            None,
-                            None,
-                        )
-                        .await;
-                    debug!(
-                        "Updated topology database: AL_MAC={} set to QUERY_SENT",
-                        remote_al_mac_address
-                    );
-                }
-            }
         }
-        .instrument(info_span!(parent: None, "cmdu_query_transmission", task = next_task_id())),
-    );
+    }
 }
 
-pub fn cmdu_topology_response_transmission(
+#[instrument(
+    skip_all,
+    name = "cmdu_response_transmission",
+    fields(task = next_task_id(), al_mac = %remote_al_mac_address),
+)]
+pub async fn cmdu_topology_response_transmission(
     interface: String,
     sender: Arc<EthernetSender>,
     local_al_mac_address: MacAddr,
@@ -218,93 +224,83 @@ pub fn cmdu_topology_response_transmission(
     interface_mac_address: MacAddr,
     message_id: u16,
 ) {
-    tokio::spawn(
-        async move {
-            //let message_id = message_id_generator.next_id();
-            trace!(
-                interface = %interface,
-                "Creating CMDU Topology Response"
-            );
-
-            // Retrieve node information from the topology database
-            let topology_db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
-            let Some(node) = topology_db.get_device(remote_al_mac_address).await else {
-                warn!(
-                    "Could not find node in topology database for AL_MAC={}",
-                    remote_al_mac_address
-                );
-                return;
-            };
-
-            // Retrieve Forwarding MAC Address from Database
-            let destination_mac = node.device_data.destination_frame_mac;
-            let fragmentation = node.device_data.supported_fragmentation;
-
-            // Building TLV payload
-            let mut payload = vec![
-                TLV::from(AlMacAddress {
-                    al_mac_address: local_al_mac_address,
-                }),
-                TLV::from(VendorSpecificInfo {
-                    oui: COMCAST_OUI,
-                    vendor_data: COMCAST_QUERY_TAG.to_vec(),
-                }),
-                TLV::from(EndOfMessage),
-            ];
-
-            if let Err(e) = inject_topology_response_tlvs(&mut payload, &topology_db).await {
-                return error!(%e, "failed to inject topo TLVs");
-            }
-
-            // Construct the CMDU
-            let cmdu_topology_response = CMDU {
-                message_version: MessageVersion::Version2013.to_u8(),
-                reserved: 0,
-                message_type: CMDUType::TopologyResponse.to_u16(),
-                message_id,
-                fragment: 0,
-                flags: 0x80, // Not fragmented
-                payload: payload.iter().flat_map(TLV::serialize).collect(),
-            };
-
-            let send_future = enqueue_fragmented_cmdu(
-                &sender,
-                destination_mac,
-                interface_mac_address,
-                cmdu_topology_response,
-                fragmentation,
-            );
-
-            match send_future.await {
-                Ok(_) => {
-                    info!(
-                        interface = %interface,
-                        message_id = message_id,
-                        "CMDU Topology Response sent successfully"
-                    );
-
-                    // **Update Topology Database to RESPONSE_SENT**
-
-                    topology_db
-                        .update_ieee1905_topology(
-                            node.device_data.clone(),
-                            UpdateType::ResponseSent,
-                            None,
-                            None,
-                            None,
-                        )
-                        .await;
-
-                    info!("Topology Database updated: AL_MAC={local_al_mac_address} set to ResponseSent");
-                }
-                Err(e) => error!(
-                    message_id = message_id,
-                    "Failed to send CMDU Topology Response: {e}",
-                ),
-            }
-        }
-            .instrument(info_span!(parent: None, "cmdu_response_transmission", task = next_task_id())),
+    trace!(
+        interface = %interface,
+        "Creating CMDU Topology Response"
     );
+
+    // Retrieve node information from the topology database
+    let topology_db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
+    let Some(node) = topology_db.get_device(remote_al_mac_address).await else {
+        warn!(
+            "Could not find node in topology database for AL_MAC={}",
+            remote_al_mac_address
+        );
+        return;
+    };
+
+    // Retrieve Forwarding MAC Address from Database
+    let destination_mac = node.device_data.destination_frame_mac;
+    let fragmentation = node.device_data.supported_fragmentation;
+
+    // Building TLV payload
+    let mut payload = vec![
+        TLV::from(AlMacAddress {
+            al_mac_address: local_al_mac_address,
+        }),
+        TLV::from(EndOfMessage),
+    ];
+
+    if let Err(e) = inject_topology_response_tlvs(&mut payload, &topology_db).await {
+        return error!(%e, "failed to inject topo TLVs");
+    }
+
+    // Construct the CMDU
+    let cmdu_topology_response = CMDU {
+        message_version: MessageVersion::Version2013.to_u8(),
+        reserved: 0,
+        message_type: CMDUType::TopologyResponse.to_u16(),
+        message_id,
+        fragment: 0,
+        flags: 0x80, // Not fragmented
+        payload: payload.iter().flat_map(TLV::serialize).collect(),
+    };
+
+    let send_future = enqueue_fragmented_cmdu(
+        &sender,
+        destination_mac,
+        interface_mac_address,
+        cmdu_topology_response,
+        fragmentation,
+    );
+
+    match send_future.await {
+        Ok(_) => {
+            info!(
+                interface = %interface,
+                message_id = message_id,
+                "CMDU Topology Response sent successfully"
+            );
+
+            // **Update Topology Database to RESPONSE_SENT**
+
+            topology_db
+                .update_ieee1905_topology(
+                    node.device_data.clone(),
+                    UpdateType::ResponseSent,
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+
+            info!("Topology Database updated: AL_MAC={local_al_mac_address} set to ResponseSent");
+        }
+        Err(e) => error!(
+            message_id = message_id,
+            "Failed to send CMDU Topology Response: {e}",
+        ),
+    }
 }
 
 async fn inject_topology_response_tlvs(
@@ -325,6 +321,7 @@ async fn inject_topology_response_tlvs(
         DeviceBridgingCapability::TYPE.to_u8(),
         Ieee1905NeighborDevice::TYPE.to_u8(),
         NonIeee1905NeighborDevices::TYPE.to_u8(),
+        Ipv6::TYPE.to_u8(),
     ];
     vec.retain(|e| !filtered_types.contains(&e.tlv_type));
 
@@ -413,94 +410,113 @@ async fn inject_topology_response_tlvs(
         }));
     }
 
+    // injecting VendorInfo
+    if db.get_artifact_exchange_server_ip_address().is_some() {
+        vec.push(TLV::from(VendorSpecificInfo {
+            oui: COMCAST_OUI,
+            vendor_data: VendorSpecificInfoData {
+                version: 0,
+                info_type: VendorSpecificInfoType::ArtifactExchangeService,
+                role: VendorSpecificInfoRole::Server,
+            },
+        }));
+    } else {
+        vec.push(TLV::from(VendorSpecificInfo {
+            oui: COMCAST_OUI,
+            vendor_data: VendorSpecificInfoData {
+                version: 0,
+                info_type: VendorSpecificInfoType::ArtifactExchangeService,
+                role: VendorSpecificInfoRole::Client,
+            },
+        }));
+    }
+
     vec.push(end_of_message_tlv);
     Ok(())
 }
 
-pub fn cmdu_topology_notification_transmission(
+#[instrument(skip_all, name = "cmdu_notification_transmission", fields(task = next_task_id()))]
+pub async fn cmdu_topology_notification_transmission(
     interface: String,
     sender: Arc<EthernetSender>,
     message_id_generator: Arc<MessageIdGenerator>,
     local_al_mac_address: MacAddr,
     forwarding_interface_mac: MacAddr,
 ) {
-    tokio::spawn(
-        async move {
-            let message_id = message_id_generator.next_id();
-            trace!(
+    let message_id = message_id_generator.next_id();
+    trace!(
+        interface = %interface,
+        message_id = message_id,
+        "Creating CMDU Topology Notification"
+    );
+
+    info!(
+        "Updated topology database: MSGId={} set to NotificationSent",
+        message_id
+    );
+
+    let topology_db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
+
+    let payload = [
+        TLV::from(AlMacAddress {
+            al_mac_address: local_al_mac_address,
+        }),
+        TLV::from(VendorSpecificInfo {
+            oui: COMCAST_OUI,
+            vendor_data: COMCAST_QUERY_TAG,
+        }),
+        TLV::from(EndOfMessage),
+    ];
+
+    // Construct the Topology Notification CMDU
+    let cmdu_topology_notification = CMDU {
+        message_version: MessageVersion::Version2013.to_u8(),
+        reserved: 0,
+        message_type: CMDUType::TopologyNotification.to_u16(),
+        message_id,
+        fragment: 0,
+        flags: 0x80, // Not fragmented
+        payload: payload.iter().flat_map(TLV::serialize).collect(),
+    };
+
+    // Serialize CMDU
+    let serialized_cmdu = cmdu_topology_notification.serialize();
+    debug!(
+        message_id = message_id,
+        ?serialized_cmdu,
+        "Serialized CMDU for Topology Notification"
+    );
+
+    // Set IEEE 1905 multicast destination MAC
+    let destination_mac = MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13);
+    let source_mac = forwarding_interface_mac;
+    let ethertype = 0x893A; // IEEE 1905 EtherType
+
+    // Send the CMDU via EthernetSender
+    match sender
+        .send_frame(destination_mac, source_mac, ethertype, serialized_cmdu)
+        .await
+    {
+        Ok(()) => {
+            info!(
                 interface = %interface,
                 message_id = message_id,
-                "Creating CMDU Topology Notification"
+                "CMDU Topology Notification sent successfully"
             );
-
-            info!(
-                "Updated topology database: MSGId={} set to NotificationSent",
-                message_id
-            );
-
-            let topology_db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
-
-            let payload = [
-                TLV::from(AlMacAddress {
-                    al_mac_address: local_al_mac_address,
-                }),
-                TLV::from(VendorSpecificInfo {
-                    oui: COMCAST_OUI,
-                    vendor_data: COMCAST_QUERY_TAG.to_vec(),
-                }),
-                TLV::from(EndOfMessage),
-            ];
-
-            // Construct the Topology Notification CMDU
-            let cmdu_topology_notification = CMDU {
-                message_version: MessageVersion::Version2013.to_u8(),
-                reserved: 0,
-                message_type: CMDUType::TopologyNotification.to_u16(),
-                message_id,
-                fragment: 0,
-                flags: 0x80, // Not fragmented
-                payload: payload.iter().flat_map(TLV::serialize).collect(),
-            };
-
-            // Serialize CMDU
-            let serialized_cmdu = cmdu_topology_notification.serialize();
-            debug!(
-                message_id = message_id,
-                ?serialized_cmdu,
-                "Serialized CMDU for Topology Notification"
-            );
-
-            // Set IEEE 1905 multicast destination MAC
-            let destination_mac = MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13);
-            let source_mac = forwarding_interface_mac;
-            let ethertype = 0x893A; // IEEE 1905 EtherType
-
-            // Send the CMDU via EthernetSender
-            match sender
-                .send_frame(destination_mac, source_mac, ethertype, serialized_cmdu)
-                .await
-            {
-                Ok(()) => {
-                    info!(
-                        interface = %interface,
-                        message_id = message_id,
-                        "CMDU Topology Notification sent successfully"
-                    );
-                    topology_db.handle_notification_sent().await;
-                }
-                Err(e) => error!(
-                    message_id = message_id,
-                    "Failed to send CMDU Topology Notification: {}", e
-                ),
-            }
+            topology_db.handle_notification_sent().await;
         }
-        .instrument(
-            info_span!(parent: None, "cmdu_notification_transmission", task = next_task_id()),
+        Err(e) => error!(
+            message_id = message_id,
+            "Failed to send CMDU Topology Notification: {}", e
         ),
-    );
+    }
 }
 
-#[instrument(skip_all, name = "cmdu_link_metric_query_transmission", fields(task = next_task_id()))]
+#[instrument(
+    skip_all,
+    name = "cmdu_link_metric_query_transmission",
+    fields(task = next_task_id(), mac = %destination_mac),
+)]
 pub async fn cmdu_link_metric_query_transmission_worker(
     topo_db: Arc<TopologyDatabase>,
     sender: Arc<EthernetSender>,
@@ -574,7 +590,11 @@ pub struct LinkMetricResponseTransmissionRequest {
     pub neighbors: Vec<Ieee1905Node>,
 }
 
-#[instrument(skip_all, name = "cmdu_link_metric_response_transmission", fields(task = next_task_id()))]
+#[instrument(
+    skip_all,
+    name = "cmdu_link_metric_response_transmission",
+    fields(task = next_task_id(), al_mac = %request.remote_al_mac_address),
+)]
 pub async fn cmdu_link_metric_response_transmission(
     request: LinkMetricResponseTransmissionRequest,
 ) {
@@ -707,64 +727,202 @@ pub async fn cmdu_link_metric_response_transmission(
     }
 }
 
-pub fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>, sdu: SDU) {
-    tokio::spawn(async move {
-        if !AlServiceAccessPoint::is_connected_and_enabled().await {
-            return info!("AlSap is not active, ignoring SDU");
+#[instrument(
+    skip_all,
+    name = "cmdu_higher_layer_query_worker",
+    fields(task = next_task_id(), mac = %destination_mac),
+)]
+pub async fn cmdu_higher_layer_query_transmission_worker(
+    topo_db: Arc<TopologyDatabase>,
+    sender: Arc<EthernetSender>,
+    message_id_generator: Arc<MessageIdGenerator>,
+    interface_mac_address: MacAddr,
+    destination_mac: MacAddr,
+    cancellation_token: CancellationToken,
+) {
+    let mut ticker = interval(Duration::from_secs(30));
+
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => (),
+            _ = cancellation_token.cancelled() => return,
         }
 
-        trace!(?sdu, "Parsing CMDU from SDU payload");
-        let source_al_mac = sdu.source_al_mac_address;
-        let destination_al_mac = sdu.destination_al_mac_address;
-        let fragmentation;
+        let message_id = message_id_generator.next_id();
+        debug!(%destination_mac, message_id, "Creating CMDU Higher Layer Query");
 
-        match CMDU::parse(&sdu.payload) {
-            Ok((_, mut cmdu)) => {
-                let topology_db = TopologyDatabase::get_instance(source_al_mac, &interface);
-                let destination_mac = if sdu.destination_al_mac_address == IEEE1905_CONTROL_ADDRESS {
-                    trace!("Parsing CMDU from SDU payload destination mac address is IEEE1905_CONTROL_ADDRESS");
-                    fragmentation = CMDUFragmentation::default();
-                    IEEE1905_CONTROL_ADDRESS
-                } else {
-                    trace!("Acquiry topology database for source al mac address {source_al_mac}");
-                    trace!("Searching for destination {destination_al_mac} in topology database");
+        if let Some(mut node) = topo_db.lock_node_by_port_mut(destination_mac).await {
+            node.metadata.local_hle_query_message_id = Some((message_id, Instant::now()));
+        }
 
-                    let Some(node) = topology_db.get_device(sdu.destination_al_mac_address).await else {
-                        return warn!("No destination_mac found for AL-MAC {destination_al_mac}");
-                    };
+        let cmdu = CMDU {
+            message_version: MessageVersion::Version2013.to_u8(),
+            reserved: 0,
+            message_type: CMDUType::HigherLayerQuery.to_u16(),
+            message_id,
+            fragment: 0,
+            flags: CMDU::FLAG_LAST_FRAGMENT,
+            payload: TLV::from(EndOfMessage).serialize(),
+        };
 
-                    fragmentation = node.device_data.supported_fragmentation;
-                    node.device_data.destination_frame_mac
-                };
-
-                let source_mac = match get_mac_address_by_interface(&interface) {
-                    Some(mac) => mac,
-                    None => {
-                        return warn!("Interface {} not found or has no MAC address", interface);
-                    }
-                };
-
-                if cmdu.message_type == CMDUType::TopologyResponse.to_u16() {
-                    let Ok(mut tlvs) = cmdu.get_tlvs() else {
-                        return error!("Failed to parse topo response TLVs");
-                    };
-                    if let Err(e) = inject_topology_response_tlvs(&mut tlvs, &topology_db).await {
-                        return error!(%e, "Failed to inject topo response TLVs");
-                    }
-                    debug!("injecting topology response TLVs");
-                    cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
-                    trace!(?cmdu, "injected topology response TLVs");
-                }
-
-                if let Err(e) = enqueue_fragmented_cmdu(&sender, destination_mac, source_mac, cmdu, fragmentation).await {
-                    error!("Failed to send CMDU: {e}");
-                }
+        match sender
+            .enqueue_frame(
+                destination_mac,
+                interface_mac_address,
+                EthernetSender::ETHER_TYPE,
+                cmdu.serialize(),
+            )
+            .await
+        {
+            Ok(()) => {
+                info!(%destination_mac, message_id, "CMDU Higher Layer Query sent successfully")
             }
-            Err(_) => {
-                error!("Failed to parse CMDU from SDU payload!");
+            Err(e) => error!(message_id, "Failed to send CMDU Higher Layer Query: {e}"),
+        }
+    }
+}
+
+#[instrument(
+    skip_all,
+    name = "cmdu_higher_layer_response_transmission",
+    fields(task = next_task_id(), al_mac = %remote_al_mac_address),
+)]
+pub async fn cmdu_higher_layer_response_transmission(
+    interface: String,
+    sender: Arc<EthernetSender>,
+    local_al_mac_address: MacAddr,
+    remote_al_mac_address: MacAddr,
+    interface_mac_address: MacAddr,
+    message_id: u16,
+) {
+    trace!(
+        interface = %interface,
+        message_id = message_id,
+        "Creating CMDU Higher Layer Response",
+    );
+
+    let db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
+    let Some(server_address) = db.get_artifact_exchange_server_ip_address() else {
+        return info!("skipping, artifact exchange server is not present");
+    };
+    let Some(node) = db.get_device(remote_al_mac_address).await else {
+        return warn!(al_mac = %remote_al_mac_address, "Node not found");
+    };
+
+    let payload = [
+        TLV::from(AlMacAddress {
+            al_mac_address: local_al_mac_address,
+        }),
+        TLV::from(Ieee1905ProfileVersion::Ieee1905_1a),
+        TLV::from(DeviceIdentificationType {
+            friendly_name: TopologyDatabase::HLE_ARTIFACT_EXCHANGE_SERVICE.to_string(),
+            manufacturer_name: Default::default(),
+            manufacturer_model: Default::default(),
+        }),
+        TLV::from(ControlUrl {
+            url: ArtifactExchangeServer::format_base_url(server_address),
+        }),
+        TLV::from(EndOfMessage),
+    ];
+
+    let cmdu = CMDU {
+        message_version: MessageVersion::Version2013.to_u8(),
+        reserved: 0,
+        message_type: CMDUType::HigherLayerResponse.to_u16(),
+        message_id,
+        fragment: 0,
+        flags: CMDU::FLAG_LAST_FRAGMENT,
+        payload: payload.iter().flat_map(TLV::serialize).collect(),
+    };
+
+    match sender
+        .enqueue_frame(
+            node.device_data.destination_frame_mac,
+            interface_mac_address,
+            EthernetSender::ETHER_TYPE,
+            cmdu.serialize(),
+        )
+        .await
+    {
+        Ok(()) => info!(
+            interface = %interface,
+            message_id = message_id,
+            "CMDU Higher Layer Response sent successfully"
+        ),
+        Err(e) => error!(
+            message_id = message_id,
+            "Failed to send CMDU Higher Layer Response: {e}"
+        ),
+    }
+}
+
+#[instrument(
+    skip_all,
+    name = "cmdu_from_sdu_transmission",
+    fields(task = next_task_id(), mac = %sdu.destination_al_mac_address),
+)]
+pub async fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetSender>, sdu: SDU) {
+    if !AlServiceAccessPoint::is_connected_and_enabled().await {
+        return info!("AlSap is not active, ignoring SDU");
+    }
+
+    trace!(?sdu, "Parsing CMDU from SDU payload");
+    let source_al_mac = sdu.source_al_mac_address;
+    let destination_al_mac = sdu.destination_al_mac_address;
+    let fragmentation;
+
+    match CMDU::parse(&sdu.payload) {
+        Ok((_, mut cmdu)) => {
+            let topology_db = TopologyDatabase::get_instance(source_al_mac, &interface);
+            let destination_mac = if sdu.destination_al_mac_address == IEEE1905_CONTROL_ADDRESS {
+                trace!(
+                    "Parsing CMDU from SDU payload destination mac address is IEEE1905_CONTROL_ADDRESS"
+                );
+                fragmentation = CMDUFragmentation::default();
+                IEEE1905_CONTROL_ADDRESS
+            } else {
+                trace!("Acquiry topology database for source al mac address {source_al_mac}");
+                trace!("Searching for destination {destination_al_mac} in topology database");
+
+                let Some(node) = topology_db.get_device(sdu.destination_al_mac_address).await
+                else {
+                    return warn!("No destination_mac found for AL-MAC {destination_al_mac}");
+                };
+
+                fragmentation = node.device_data.supported_fragmentation;
+                node.device_data.destination_frame_mac
+            };
+
+            let source_mac = match get_mac_address_by_interface(&interface) {
+                Some(mac) => mac,
+                None => {
+                    return warn!("Interface {} not found or has no MAC address", interface);
+                }
+            };
+
+            if cmdu.message_type == CMDUType::TopologyResponse.to_u16() {
+                let Ok(mut tlvs) = cmdu.get_tlvs() else {
+                    return error!("Failed to parse topo response TLVs");
+                };
+                if let Err(e) = inject_topology_response_tlvs(&mut tlvs, &topology_db).await {
+                    return error!(%e, "Failed to inject topo response TLVs");
+                }
+                debug!("injecting topology response TLVs");
+                cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
+                trace!(?cmdu, "injected topology response TLVs");
+            }
+
+            if let Err(e) =
+                enqueue_fragmented_cmdu(&sender, destination_mac, source_mac, cmdu, fragmentation)
+                    .await
+            {
+                error!("Failed to send CMDU: {e}");
             }
         }
-    }.instrument(info_span!(parent: None, "cmdu_from_sdu_transmission", task = next_task_id())));
+        Err(_) => {
+            error!("Failed to parse CMDU from SDU payload!");
+        }
+    }
 }
 
 async fn enqueue_fragmented_cmdu(
@@ -838,7 +996,7 @@ mod tests {
         let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
         let response = inject_topology_response_tlvs(&mut vec, &db).await;
         assert!(response.is_ok());
-        assert_eq!(vec.len(), 2);
+        assert_eq!(vec.len(), 3);
     }
 
     #[tokio::test]

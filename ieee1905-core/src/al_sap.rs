@@ -31,7 +31,7 @@ use crate::registration_codec::{
 use crate::sdu_codec::SDU;
 use crate::tlv_cmdu_codec::TLVTrait;
 use crate::topology_manager::Role;
-use crate::{TopologyDatabase, next_task_id};
+use crate::{TopologyDatabase, next_task_id, spawn_named};
 use anyhow::{Context, Result, bail};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
@@ -326,12 +326,15 @@ impl AlServiceAccessPoint {
             self.interface_name
         );
 
-        cmdu_topology_notification_transmission(
-            self.interface_name.clone(),
-            Arc::clone(&self.sender),
-            message_id_generator,
-            al_mac,
-            forwarding_mac,
+        spawn_named(
+            "proxy_topo_notification",
+            cmdu_topology_notification_transmission(
+                self.interface_name.clone(),
+                self.sender.clone(),
+                message_id_generator,
+                al_mac,
+                forwarding_mac,
+            ),
         );
     }
 
@@ -704,10 +707,13 @@ async fn send_cmdu_from_sdu(sdu: SDU) -> Result<()> {
             ));
         }
         tracing::debug!("Sending CMDU part from SDU via network");
-        cmdu_from_sdu_transmission(
-            sap_guard.interface_name.clone(),
-            sap_guard.sender.clone(),
-            sdu.clone(),
+        spawn_named(
+            "cmdu_from_sdu",
+            cmdu_from_sdu_transmission(
+                sap_guard.interface_name.clone(),
+                sap_guard.sender.clone(),
+                sdu.clone(),
+            ),
         );
         Ok(())
     } else {

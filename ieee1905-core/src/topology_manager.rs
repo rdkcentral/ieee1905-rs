@@ -19,12 +19,33 @@
 
 #![deny(warnings)]
 #![allow(clippy::too_many_arguments)]
-// External crates
+
+use crate::cmdu_codec::{ControlUrl, LinkMetricRx, LinkMetricTx};
+use crate::linux::if_link::RtnlLinkStats64;
+use crate::lldpdu::PortId;
+use crate::{
+    artifact_exchange_service::client::ArtifactExchangeClient,
+    cmdu_codec::{
+        CMDUFragmentation, DeviceIdentificationType, Ieee1905ProfileVersion, LinkMetricQuery,
+        MediaType, MediaTypeSpecialInfo, Profile2ApCapability, SupportedFreqBand,
+    },
+    spawn_named,
+};
+use crate::{
+    artifact_exchange_service::client::ArtifactExchangeClientFactory,
+    interface_manager::get_interfaces,
+};
+use crate::{
+    cmdu::IEEE1905Neighbor, interface_manager::get_forwarding_interface_mac, next_task_id,
+};
 use crossterm::{
     event::{self, KeyCode},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use indexmap::IndexMap;
+use neli::consts::rtnl::Iff;
+use parking_lot::Mutex;
 use pnet::datalink::MacAddr;
 use ratatui::{
     Terminal,
@@ -33,32 +54,17 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Row, Table},
 };
+use std::net::Ipv6Addr;
+use std::ops::Deref;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
 use tokio::{
     sync::RwLock,
     task::yield_now,
     time::{Duration, Instant, interval},
 };
-use tracing::{debug, error, info, instrument, trace};
-// Standard library
-use indexmap::IndexMap;
-use neli::consts::rtnl::Iff;
-use std::ops::Deref;
-use std::sync::OnceLock;
-use std::{io, sync::Arc};
-use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
 use tokio_util::sync::CancellationToken;
-// Internal modules
-use crate::cmdu_codec::{
-    CMDUFragmentation, DeviceIdentificationType, Ieee1905ProfileVersion, LinkMetricQuery,
-    LinkMetricRx, LinkMetricTx, MediaType, MediaTypeSpecialInfo, Profile2ApCapability,
-    SupportedFreqBand,
-};
-use crate::interface_manager::get_interfaces;
-use crate::linux::if_link::RtnlLinkStats64;
-use crate::lldpdu::PortId;
-use crate::{
-    cmdu::IEEE1905Neighbor, interface_manager::get_forwarding_interface_mac, next_task_id,
-};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateLocal {
@@ -91,6 +97,7 @@ pub enum TransmissionEvent {
     SendTopologyResponse(MacAddr),
     SendTopologyNotification(MacAddr),
     StartLinkMetricQueryWorker((MacAddr, CancellationToken)),
+    StartHigherLayerQueryWorker((MacAddr, CancellationToken)),
     None,
 }
 
@@ -205,6 +212,7 @@ pub struct Ieee1905NodeInfo {
     /// this excludes response ids, those are always copied from the query
     pub local_message_id: Option<u16>,
     pub local_link_metric_query_message_id: Option<(u16, Instant)>,
+    pub local_hle_query_message_id: Option<(u16, Instant)>,
     /// last msg id received from this node
     /// this excludes response ids, those are always copied from the query
     pub remote_message_id: Option<u16>,
@@ -228,6 +236,7 @@ impl Ieee1905NodeInfo {
             last_seen: Instant::now(), // Set current time at creation
             local_message_id: None,
             local_link_metric_query_message_id: None,
+            local_hle_query_message_id: None,
             remote_message_id: None,
             lldp_neighbor,
             node_state_local,
@@ -385,7 +394,9 @@ impl From<&Ieee1905NodeInternal> for Ieee1905Node {
 pub struct Ieee1905NodeInternal {
     pub metadata: Ieee1905NodeInfo,
     pub device_data: Ieee1905DeviceData,
+    artifact_exchange_client: Option<(String, ArtifactExchangeClient)>,
     link_metrics_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
+    higher_layer_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
 }
 
 impl Ieee1905NodeInternal {
@@ -394,7 +405,9 @@ impl Ieee1905NodeInternal {
         Self {
             metadata,
             device_data,
+            artifact_exchange_client: None,
             link_metrics_query_cancellation_token: None,
+            higher_layer_query_cancellation_token: None,
         }
     }
 
@@ -426,6 +439,61 @@ impl Ieee1905NodeInternal {
             cancellation_token,
         ))
     }
+
+    fn prepare_higher_layer_query_transmission_event_if_needed(&mut self) -> TransmissionEvent {
+        if self.higher_layer_query_cancellation_token.is_some() {
+            return TransmissionEvent::None;
+        }
+
+        let cancellation_token = CancellationToken::new();
+        let drop_guard = cancellation_token.clone().drop_guard();
+        self.higher_layer_query_cancellation_token = Some(drop_guard);
+
+        TransmissionEvent::StartHigherLayerQueryWorker((
+            self.device_data.destination_frame_mac,
+            cancellation_token,
+        ))
+    }
+
+    fn update_artifact_exchange_client(
+        &mut self,
+        client_factory: Option<&ArtifactExchangeClientFactory>,
+        base_url: Option<String>,
+    ) {
+        if let Some((current_base_url, _)) = self.artifact_exchange_client.as_ref() {
+            if base_url.as_ref() == Some(current_base_url) {
+                return; // url didn't change, keep the client
+            }
+            info!(
+                al_mac = %self.device_data.al_mac,
+                base_url = current_base_url,
+                "artifact exchange client stopped",
+            );
+            self.artifact_exchange_client = None;
+        }
+
+        if self.artifact_exchange_client.is_none()
+            && let Some(client_factory) = client_factory
+            && let Some(base_url) = base_url
+        {
+            match client_factory.start(self.device_data.al_mac, &base_url) {
+                Ok(e) => {
+                    info!(
+                        al_mac = %self.device_data.al_mac,
+                        address = %base_url,
+                        "artifact exchange client started",
+                    );
+                    self.artifact_exchange_client = Some((base_url, e));
+                }
+                Err(e) => error!(
+                    al_mac = %self.device_data.al_mac,
+                    address = %base_url,
+                    %e,
+                    "failed to start artifact exchange client",
+                ),
+            }
+        }
+    }
 }
 
 static TOPOLOGY_DATABASE: OnceLock<Arc<TopologyDatabase>> = OnceLock::new();
@@ -438,9 +506,13 @@ pub struct TopologyDatabase {
     pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905LocalInterface>>>>,
     pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905NodeInternal>>>,
     pub local_role: Arc<RwLock<Option<Role>>>,
+    artifact_exchange_client_factory: Mutex<Option<ArtifactExchangeClientFactory>>,
+    artifact_exchange_server_ip_address: Mutex<Option<Ipv6Addr>>,
 }
 
 impl TopologyDatabase {
+    pub const HLE_ARTIFACT_EXCHANGE_SERVICE: &'static str = "ArtifactExchangeService";
+
     /// **Creates a new `TopologyDatabase` instance**
     pub fn new(al_mac_address: MacAddr, interface_name: String) -> Arc<Self> {
         debug!(al_mac = %al_mac_address, "Database initialized");
@@ -457,9 +529,17 @@ impl TopologyDatabase {
             local_interface_list: Arc::new(RwLock::new(None)),
             nodes: Arc::new(RwLock::new(IndexMap::new())),
             local_role: Arc::new(RwLock::new(None)),
+            artifact_exchange_client_factory: Default::default(),
+            artifact_exchange_server_ip_address: Default::default(),
         });
-        tokio::spawn(this.clone().refresh_topology_worker());
-        tokio::spawn(this.clone().refresh_interfaces_worker());
+        spawn_named(
+            "db/refresh_topology",
+            this.clone().refresh_topology_worker(),
+        );
+        spawn_named(
+            "db/refresh_interfaces",
+            this.clone().refresh_interfaces_worker(),
+        );
         this
     }
 
@@ -476,6 +556,18 @@ impl TopologyDatabase {
     pub async fn get_forwarding_interface_mac(&self) -> MacAddr {
         let mac_guard = self.local_mac.read().await;
         *mac_guard
+    }
+
+    pub fn set_artifact_exchange_client_factory(&self, factory: ArtifactExchangeClientFactory) {
+        *self.artifact_exchange_client_factory.lock() = Some(factory);
+    }
+
+    pub fn get_artifact_exchange_server_ip_address(&self) -> Option<Ipv6Addr> {
+        *self.artifact_exchange_server_ip_address.lock()
+    }
+
+    pub fn set_artifact_exchange_server_ip_address(&self, address: Option<Ipv6Addr>) {
+        *self.artifact_exchange_server_ip_address.lock() = address;
     }
 
     /// **Returns a globally shared `TopologyDatabase` instance (async)**
@@ -711,7 +803,7 @@ impl TopologyDatabase {
                             if local_state == StateLocal::Idle {
                                 TransmissionEvent::SendTopologyQuery(al_mac)
                             } else {
-                                TransmissionEvent::None
+                                node.prepare_higher_layer_query_transmission_event_if_needed()
                             }
                         }
                         UpdateType::NotificationReceived => {
@@ -845,6 +937,7 @@ impl TopologyDatabase {
                             last_seen: Instant::now(),
                             local_message_id: local_msg_id,
                             local_link_metric_query_message_id: None,
+                            local_hle_query_message_id: None,
                             remote_message_id: remote_msg_id,
                             lldp_neighbor,
                             node_state_local: StateLocal::Idle,
@@ -852,6 +945,8 @@ impl TopologyDatabase {
                         },
                         device_data,
                         link_metrics_query_cancellation_token: None,
+                        higher_layer_query_cancellation_token: None,
+                        artifact_exchange_client: None,
                     };
 
                     let node_was_created;
@@ -951,7 +1046,7 @@ impl TopologyDatabase {
             .take_if(|e| e.0 == message_id && e.1.elapsed() <= Duration::from_secs(1));
 
         if local_link_metric_query_message_id.is_none() {
-            debug!(
+            warn!(
                 %source,
                 got = message_id,
                 exp = ?node.metadata.local_link_metric_query_message_id,
@@ -1003,9 +1098,40 @@ impl TopologyDatabase {
         }
     }
 
-    pub async fn start_topology_cli(self: Arc<Self>) -> io::Result<()> {
+    pub async fn handle_higher_layer_response(
+        &self,
+        al_mac: MacAddr,
+        message_id: u16,
+        device_information: DeviceIdentificationType,
+        control_url: Option<ControlUrl>,
+    ) -> bool {
+        let mut nodes = self.nodes.write().await;
+        let Some(node) = Self::find_node_by_port_mut(nodes.values_mut(), al_mac) else {
+            debug!(%al_mac, "higher_layer_response — node not found");
+            return false;
+        };
+
+        let local_hle_query_message_id = node
+            .metadata
+            .local_hle_query_message_id
+            .take_if(|e| e.0 == message_id);
+
+        if local_hle_query_message_id.is_none_or(|e| e.1.elapsed() > Duration::from_secs(1)) {
+            warn!(%al_mac, "higher_layer_response — unexpected message id");
+            return false;
+        }
+
+        if device_information.friendly_name == Self::HLE_ARTIFACT_EXCHANGE_SERVICE {
+            let factory = self.artifact_exchange_client_factory.lock();
+            node.update_artifact_exchange_client(factory.as_ref(), control_url.map(|e| e.url));
+            return true;
+        }
+        false
+    }
+
+    pub async fn start_topology_cli(self: Arc<Self>) -> std::io::Result<()> {
         enable_raw_mode()?;
-        let mut stdout = io::stdout();
+        let mut stdout = std::io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
@@ -1104,20 +1230,25 @@ impl TopologyDatabase {
                         .map(|l| l.port_id.to_string())
                         .unwrap_or_else(|| "-".to_string());
 
-                    let interface_mac = node
+                    let interfaces = node
                         .device_data
                         .local_interface_list
-                        .as_ref()
-                        .and_then(|list| list.first())
-                        .map(|iface| iface.mac.to_string())
+                        .as_deref()
+                        .unwrap_or_default();
+
+                    let interface_mac = node.device_data.destination_mac;
+                    let interface = interface_mac
+                        .and_then(|mac| interfaces.iter().find(|e| e.mac == mac))
+                        .or_else(|| interfaces.iter().find(|e| e.mac == node.device_data.al_mac))
+                        .or_else(|| interfaces.first());
+
+                    let interface_mac = interface_mac
+                        .or_else(|| interface.as_ref().map(|e| e.mac))
+                        .map(|e| e.to_string())
                         .unwrap_or_else(|| "-".to_string());
 
-                    let media_type = node
-                        .device_data
-                        .local_interface_list
-                        .as_ref()
-                        .and_then(|list| list.first())
-                        .map(|iface| iface.media_type.to_string())
+                    let media_type = interface
+                        .map(|e| e.media_type.to_string())
                         .unwrap_or_else(|| "-".to_string());
 
                     let last_seen_secs = node.metadata.last_seen.elapsed().as_secs();
