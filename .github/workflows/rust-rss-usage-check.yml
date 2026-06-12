@@ -1,0 +1,49 @@
+name: Run RSS usage check
+
+on:
+  pull_request:
+    branches: [ develop ]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  rss-usage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build ieee1905
+        run: cargo build --package ieee1905 --release
+
+      - name: Checking RSS usage
+        run: |
+          #
+          echo "Setting up network interfaces"
+          sudo ip link add ieee1905_end type veth peer name ieee1905_con
+          sudo ip link set ieee1905_end up
+          sudo ip link set ieee1905_con up
+          #
+          echo "Launching ieee1905"
+          TIME_OUTPUT=$(mktemp)
+          sudo /usr/bin/time -v timeout 5s ./target/release/ieee1905 -i ieee1905_con > /dev/null 2> "$TIME_OUTPUT" & SERVICE_PID=$!
+          #
+          echo "Waiting for ieee1905 to finish"
+          wait "$SERVICE_PID" 2>/dev/null || true
+          #
+          echo "Generating report"
+          MAX_RSS_KB=$(grep "Maximum resident set size" "$TIME_OUTPUT" | awk '{print $6}')
+          echo "OS: $(uname -srm)" > rss_report.txt
+          echo "Maximum RSS (GNU): $MAX_RSS_KB KB" >> rss_report.txt
+
+      - name: Post RSS usage report comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: rss-report
+          path: rss_report.txt
