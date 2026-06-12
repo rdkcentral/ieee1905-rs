@@ -29,6 +29,7 @@ use crate::{
         CMDUFragmentation, DeviceIdentificationType, Ieee1905ProfileVersion, LinkMetricQuery,
         MediaType, MediaTypeSpecialInfo, Profile2ApCapability, SupportedFreqBand,
     },
+    spawn_named,
 };
 use crate::{
     artifact_exchange_service::client::ArtifactExchangeClientFactory,
@@ -531,8 +532,14 @@ impl TopologyDatabase {
             artifact_exchange_client_factory: Default::default(),
             artifact_exchange_server_ip_address: Default::default(),
         });
-        tokio::spawn(this.clone().refresh_topology_worker());
-        tokio::spawn(this.clone().refresh_interfaces_worker());
+        spawn_named(
+            "db/refresh_topology",
+            this.clone().refresh_topology_worker(),
+        );
+        spawn_named(
+            "db/refresh_interfaces",
+            this.clone().refresh_interfaces_worker(),
+        );
         this
     }
 
@@ -1223,20 +1230,25 @@ impl TopologyDatabase {
                         .map(|l| l.port_id.to_string())
                         .unwrap_or_else(|| "-".to_string());
 
-                    let interface_mac = node
+                    let interfaces = node
                         .device_data
                         .local_interface_list
-                        .as_ref()
-                        .and_then(|list| list.first())
-                        .map(|iface| iface.mac.to_string())
+                        .as_deref()
+                        .unwrap_or_default();
+
+                    let interface_mac = node.device_data.destination_mac;
+                    let interface = interface_mac
+                        .and_then(|mac| interfaces.iter().find(|e| e.mac == mac))
+                        .or_else(|| interfaces.iter().find(|e| e.mac == node.device_data.al_mac))
+                        .or_else(|| interfaces.first());
+
+                    let interface_mac = interface_mac
+                        .or_else(|| interface.as_ref().map(|e| e.mac))
+                        .map(|e| e.to_string())
                         .unwrap_or_else(|| "-".to_string());
 
-                    let media_type = node
-                        .device_data
-                        .local_interface_list
-                        .as_ref()
-                        .and_then(|list| list.first())
-                        .map(|iface| iface.media_type.to_string())
+                    let media_type = interface
+                        .map(|e| e.media_type.to_string())
                         .unwrap_or_else(|| "-".to_string());
 
                     let last_seen_secs = node.metadata.last_seen.elapsed().as_secs();
