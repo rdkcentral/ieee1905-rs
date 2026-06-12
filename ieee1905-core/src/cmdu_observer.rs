@@ -20,7 +20,7 @@
 use crate::cmdu::{CMDU, CMDUType};
 use crate::cmdu_handler::CMDUHandler;
 use crate::ethernet_subject_reception::EthernetFrameObserver;
-use crate::next_task_id;
+use crate::{next_task_id, spawn_named};
 use async_trait::async_trait;
 use pnet::datalink::MacAddr;
 use std::sync::Arc;
@@ -66,7 +66,8 @@ impl EthernetFrameObserver for CMDUObserver {
                 //TODO to clean up
                 //let interface_name = handler_ref.interface_name.clone(); // --> not needed for now unles we pass the interface to the handler
 
-                tokio::task::spawn(
+                spawn_named(
+                    format!("handle_cmdu/{}", self.handler.interface_name),
                     async move {
                         if let Err(e) = handler
                             .handle_cmdu(&cmdu, source_mac, destination_mac, interface_mac)
@@ -75,7 +76,7 @@ impl EthernetFrameObserver for CMDUObserver {
                             error!("Failed to handle CMDU: {e:?}");
                         }
                     }
-                    .instrument(info_span!(parent: None, "handle_cmdu", task = next_task_id())),
+                    .instrument(info_span!(parent: None, "handle_cmdu", task = next_task_id(), mac = %source_mac)),
                 );
             }
             Err(e) => {

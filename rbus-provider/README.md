@@ -3,7 +3,9 @@
 The goal of this crate is to provide a simple way to implement interface for RBus providers.
 
 So instead of registering each element by hand and setting/handling callbacks, it can be written with a simple DSL-like structure:
+
 ```rust
+
 fn register_provider() -> RBusProvider {
     RBusProvider::open(c"ExampleDevice", || (
       rbus_object("Device", (
@@ -23,7 +25,8 @@ fn register_provider() -> RBusProvider {
 ```
 
 Above registration will give following output when using `rbuscli`:
-```
+
+```rust
 rbuscli> getvalues Device.
 Parameter  1:
               Name  : Device.ID
@@ -59,16 +62,18 @@ Parameter  8:
               Value : IEEE 802.11
 ```
 
-# Main Components
+## Main Components
 
 RBus Provider crate tries to be minimalistic and has only two main components:
+
 - `RBusProvider` - entry point component that initializes RBus handle and registers all tables/objects/properties
 - `RBusProviderElement` - trait representing an accessible via RBus entity (tuple/tables/objects/properties)
 
-# Elements
+## Elements
 
-Let's take these RBus paths for example: 
-```
+Let's take these RBus paths for example:
+
+```rust
 Device.BuildInfo.Version
 Device.Interfaces.0.Mac
 Device.Interfaces.0.Type
@@ -197,7 +202,9 @@ Most elements require handlers to provide access to the data they represent.
 
 Different elements can share the same handler.
 Arguments can be used to distinguish which element the handler was called for:
+
 ```rust
+
 fn build_device_elements() -> impl RBusProviderElement {
     (
         rbus_property("ID", DeviceHandler),
@@ -226,6 +233,7 @@ impl RBusProviderGetter for DeviceHandler {
 ```
 
 Arguments provide full information about the property being accessed:
+
 - `RBusProperty` handle
 - property path name (for ex. `Mac`)
 - property full path (for ex. `Device.Interfaces.0.Mac`)

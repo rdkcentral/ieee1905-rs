@@ -18,7 +18,6 @@
 */
 
 #![deny(warnings)]
-// ───── Base modules ─────
 pub mod al_sap;
 pub mod cmdu_codec;
 pub mod cmdu_handler;
@@ -43,7 +42,6 @@ pub mod topology_manager;
 #[cfg(feature = "rbus")]
 pub mod rbus;
 
-// ───── Submodules: TLVs grouped under namespaces ─────
 pub mod lldpdu {
     pub use crate::lldpdu_codec::{ChassisId, LLDPDU, LLDPTLVType, PortId, TimeToLiveTLV};
     pub use crate::tlv_lldpdu_codec::TLV;
@@ -59,17 +57,91 @@ pub mod cmdu {
     pub use crate::tlv_cmdu_codec::TLV;
 }
 
-use std::sync::atomic::{AtomicU32, Ordering};
-// ───── Reexports: commonly used components ─────
+pub mod artifact_exchange_service {
+    pub mod client;
+    mod common;
+    mod fs_quota_aware_storage;
+    pub mod server;
+}
+
 pub use cmdu_message_id_generator::MessageIdGenerator;
 pub use cmdu_observer::CMDUObserver;
 pub use ethernet_subject_reception::EthernetReceiver;
 pub use ethernet_subject_transmission::EthernetSender;
 pub use lldpdu_observer::LLDPObserver;
 pub use sdu_codec::SDU;
+use std::future::Future;
+use std::sync::atomic::{AtomicU32, Ordering};
+use tokio::runtime::Handle;
+use tokio::task::{AbortHandle, JoinHandle, JoinSet};
 pub use topology_manager::TopologyDatabase;
+use tracing::{Instrument, Span};
 
 pub fn next_task_id() -> u32 {
     static TASK_ID: AtomicU32 = AtomicU32::new(0);
     TASK_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+#[track_caller]
+pub fn spawn_named<F>(name: impl AsRef<str>, future: F) -> JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    tokio::task::Builder::new()
+        .name(name.as_ref())
+        .spawn(future)
+        .expect("runtime is dead")
+}
+
+#[track_caller]
+pub fn spawn_on_named<F>(
+    name: impl AsRef<str>,
+    runtime: &Handle,
+    future: F,
+) -> JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    tokio::task::Builder::new()
+        .name(name.as_ref())
+        .spawn_on(future, runtime)
+        .expect("runtime is dead")
+}
+
+#[track_caller]
+pub fn spawn_join_set_named<F>(
+    name: impl AsRef<str>,
+    span: Option<Span>,
+    set: &mut JoinSet<F::Output>,
+    future: F,
+) -> AbortHandle
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let task = set.build_task().name(name.as_ref());
+    let result = match span {
+        None => task.spawn(future),
+        Some(e) => task.spawn(future.instrument(e)),
+    };
+    result.expect("runtime is dead")
+}
+
+#[track_caller]
+pub fn spawn_join_set_blocking_named<F, T>(
+    name: impl AsRef<str>,
+    set: &mut JoinSet<F::Output>,
+    function: F,
+) -> AbortHandle
+where
+    F: FnOnce() -> T,
+    F: Send + 'static,
+    T: Send + 'static,
+{
+    set.build_task()
+        .name(name.as_ref())
+        .spawn_blocking(function)
+        .expect("runtime is dead")
 }

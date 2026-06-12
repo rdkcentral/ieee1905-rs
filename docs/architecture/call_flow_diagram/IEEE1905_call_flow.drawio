@@ -1,4 +1,4 @@
-<mxfile host="Electron" agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/28.2.8 Chrome/140.0.7339.240 Electron/38.4.0 Safari/537.36" version="28.2.8" pages="4">
+<mxfile host="Electron" agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/28.2.8 Chrome/140.0.7339.240 Electron/38.4.0 Safari/537.36" version="28.2.8" pages="5">
   <diagram name="IEEE1905_END-TO-END" id="5Uhve2RYf-4K45r8KyGv">
     <mxGraphModel dx="1801" dy="1041" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
       <root>
@@ -500,15 +500,15 @@
       </root>
     </mxGraphModel>
   </diagram>
-  <diagram name="IEEE1905_FW_REPO" id="sittJU-mdHEouhjJofxY">
-    <mxGraphModel dx="1801" dy="1041" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+  <diagram name="IEEE1905_LOGS" id="qpNIVL87YArrlqda1OuF">
+    <mxGraphModel dx="3588" dy="909" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
       <root>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-0" />
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-1" parent="dqpCEqPEEhPi3ZKG0BTO-0" />
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-2" value="IEEE1905&lt;div&gt;Agent&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" parent="dqpCEqPEEhPi3ZKG0BTO-1" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-0" />
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-1" parent="HSTbWgW6EKRbhmCLNFA3-0" />
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-2" value="IEEE1905&lt;div&gt;Agent&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="457" y="120" width="100" height="970" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-3" value="HigherLayer_Query(msd_id)" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;" parent="dqpCEqPEEhPi3ZKG0BTO-2" edge="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-3" value="HigherLayer_Query(msd_id)" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;" edge="1" parent="HSTbWgW6EKRbhmCLNFA3-2">
           <mxGeometry x="-0.0021" width="60" relative="1" as="geometry">
             <mxPoint x="50" y="381" as="sourcePoint" />
             <mxPoint x="468.5" y="381" as="targetPoint" />
@@ -518,100 +518,85 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-4" value="TLV()" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="dqpCEqPEEhPi3ZKG0BTO-3" vertex="1" connectable="0">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-4" value="TLV()" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="HSTbWgW6EKRbhmCLNFA3-3">
           <mxGeometry x="0.0031" y="-7" relative="1" as="geometry">
             <mxPoint x="-5" y="3" as="offset" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-5" value="IEEE1905&lt;div&gt;Controller&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" parent="dqpCEqPEEhPi3ZKG0BTO-1" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-5" value="IEEE1905&lt;div&gt;Controller&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="876" y="120" width="100" height="980" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-6" value="HighLevenEntity&lt;br&gt;&lt;div&gt;(repo)&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" parent="dqpCEqPEEhPi3ZKG0BTO-1" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-6" value="HighLevenEntity&lt;br&gt;&lt;div&gt;(repo)&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="1277" y="120" width="100" height="980" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-7" value="&lt;span class=&quot;ͼs&quot;&gt;sudo&lt;/span&gt; systemctl &lt;span class=&quot;ͼs&quot;&gt;start&lt;/span&gt; http-server" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;" parent="dqpCEqPEEhPi3ZKG0BTO-1" edge="1">
-          <mxGeometry width="60" relative="1" as="geometry">
-            <mxPoint x="1323" y="335" as="sourcePoint" />
-            <mxPoint x="925.5" y="335" as="targetPoint" />
-            <mxPoint as="offset" />
-            <Array as="points">
-              <mxPoint x="1213.5" y="335" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-8" value="(Enable)" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="dqpCEqPEEhPi3ZKG0BTO-7" vertex="1" connectable="0">
-          <mxGeometry x="0.0031" y="-7" relative="1" as="geometry">
-            <mxPoint x="1" y="17" as="offset" />
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-9" value="&lt;font style=&quot;font-size: 10px;&quot;&gt;IPv6 Static&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;rotation=-90;" parent="dqpCEqPEEhPi3ZKG0BTO-1" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-9" value="&lt;font style=&quot;font-size: 10px;&quot;&gt;IPv6 Static&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;rotation=-90;" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="896" y="378" width="60" height="20" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-10" value="HigherLayer_Response(msd_id X + 1)" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;fillColor=#1ba1e2;strokeColor=#006EAF;" parent="dqpCEqPEEhPi3ZKG0BTO-1" edge="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-10" value="HigherLayer_Response(msd_id X + 1)" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;fillColor=#1ba1e2;strokeColor=#006EAF;" edge="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry width="60" relative="1" as="geometry">
             <mxPoint x="922.5" y="591" as="sourcePoint" />
             <mxPoint x="507" y="591" as="targetPoint" />
             <mxPoint as="offset" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-11" value="TLV(AL_MAC,ProfileVersion, ControlURL(repo-url), Ipv6 (static)" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="dqpCEqPEEhPi3ZKG0BTO-10" vertex="1" connectable="0">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-11" value="TLV(AL_MAC,ProfileVersion, ControlURL(repo-url), DeviceIdType" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="HSTbWgW6EKRbhmCLNFA3-10">
           <mxGeometry x="0.0031" y="-7" relative="1" as="geometry">
             <mxPoint x="7" y="22" as="offset" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-12" value="" style="rounded=0;whiteSpace=wrap;html=1;" parent="dqpCEqPEEhPi3ZKG0BTO-1" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-12" value="" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="447" y="1095" width="120" height="20" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-13" value="" style="rounded=0;whiteSpace=wrap;html=1;" parent="dqpCEqPEEhPi3ZKG0BTO-1" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-13" value="" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="866" y="1095" width="120" height="20" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-14" value="" style="rounded=0;whiteSpace=wrap;html=1;" parent="dqpCEqPEEhPi3ZKG0BTO-1" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-14" value="" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="1267" y="1095" width="120" height="20" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-15" value="Higher Layer Information protocol CONVERGENCE" style="swimlane;whiteSpace=wrap;html=1;" parent="dqpCEqPEEhPi3ZKG0BTO-1" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-15" value="Higher Layer Information protocol CONVERGENCE" style="swimlane;whiteSpace=wrap;html=1;" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="20" y="432" width="1453" height="560" as="geometry">
             <mxRectangle x="440" y="322" width="200" height="30" as="alternateBounds" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-17" value="&lt;span class=&quot;ͼs&quot;&gt;sudo&lt;/span&gt;&amp;nbsp;systemctl&amp;nbsp;&lt;span class=&quot;ͼs&quot;&gt;start&lt;/span&gt;&amp;nbsp;syslogd" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;" parent="dqpCEqPEEhPi3ZKG0BTO-15" edge="1">
-          <mxGeometry width="60" relative="1" as="geometry">
-            <mxPoint x="130" y="170" as="sourcePoint" />
-            <mxPoint x="490" y="170" as="targetPoint" />
-            <mxPoint as="offset" />
-            <Array as="points">
-              <mxPoint x="421.5" y="170" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-18" value="(Enable)" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="dqpCEqPEEhPi3ZKG0BTO-17" vertex="1" connectable="0">
-          <mxGeometry x="0.0031" y="-7" relative="1" as="geometry">
-            <mxPoint x="1" as="offset" />
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-24" value="" style="shape=curlyBracket;whiteSpace=wrap;html=1;rounded=1;flipH=1;labelPosition=right;verticalLabelPosition=middle;align=left;verticalAlign=middle;" parent="dqpCEqPEEhPi3ZKG0BTO-15" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-18" value="" style="shape=curlyBracket;whiteSpace=wrap;html=1;rounded=1;flipH=1;labelPosition=right;verticalLabelPosition=middle;align=left;verticalAlign=middle;" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-15">
           <mxGeometry x="910" y="70" width="20" height="90" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-25" value="" style="html=1;verticalLabelPosition=bottom;align=center;labelBackgroundColor=#ffffff;verticalAlign=top;strokeWidth=2;strokeColor=#0080F0;shadow=0;dashed=0;shape=mxgraph.ios7.icons.clock;" parent="dqpCEqPEEhPi3ZKG0BTO-15" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-19" value="" style="html=1;verticalLabelPosition=bottom;align=center;labelBackgroundColor=#ffffff;verticalAlign=top;strokeWidth=2;strokeColor=#0080F0;shadow=0;dashed=0;shape=mxgraph.ios7.icons.clock;" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-15">
           <mxGeometry x="970" y="112" width="30" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-26" value="MaxTimer in Converging=3 sec" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" parent="dqpCEqPEEhPi3ZKG0BTO-15" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-20" value="MaxTimer in Converging=3 sec" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-15">
           <mxGeometry x="920" y="68" width="130" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="iPvVfHmpVgwvkLDVUUqe-12" value="&lt;div&gt;ISOLATED NAME-SPACE for vETH0&lt;/div&gt;wget http://repo/agent/latest" style="label;whiteSpace=wrap;html=1;image=img/clipart/Gear_128x128.png" parent="dqpCEqPEEhPi3ZKG0BTO-15" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-21" value="&lt;div&gt;ISOLATED NAME-SPACE for vETH0&lt;/div&gt;wget http://repo/agent/latest" style="label;whiteSpace=wrap;html=1;image=img/clipart/Gear_128x128.png" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-15">
           <mxGeometry x="30" y="224" width="280" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="iPvVfHmpVgwvkLDVUUqe-13" value="&amp;nbsp; &amp;nbsp; &amp;nbsp; HTTP RESPONSE" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;fillColor=#1ba1e2;strokeColor=#006EAF;" parent="dqpCEqPEEhPi3ZKG0BTO-15" source="dqpCEqPEEhPi3ZKG0BTO-6" edge="1">
-          <mxGeometry width="60" relative="1" as="geometry">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-22" value="&amp;nbsp; &amp;nbsp; &amp;nbsp; HTTP PUT" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;fillColor=#1ba1e2;strokeColor=#006EAF;" edge="1" parent="HSTbWgW6EKRbhmCLNFA3-15" source="HSTbWgW6EKRbhmCLNFA3-6">
+          <mxGeometry x="-0.003" y="-2" width="60" relative="1" as="geometry">
             <mxPoint x="545.5" y="350" as="sourcePoint" />
             <mxPoint x="130" y="350" as="targetPoint" />
             <mxPoint as="offset" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-27" value="HighLevenEntity&lt;br&gt;&lt;div&gt;(consumer)&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" parent="dqpCEqPEEhPi3ZKG0BTO-1" vertex="1">
+        <mxCell id="wtQ2z99yMG2hOExcmXMB-0" value="&amp;nbsp;http://server-ip:6666/AL_MAC_DATA_TIME.log" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="HSTbWgW6EKRbhmCLNFA3-22">
+          <mxGeometry x="-0.0261" y="4" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="FzZtr3oqJ8lwvkRPXaAy-0" value="&amp;nbsp; &amp;nbsp; &amp;nbsp; HTTP 204 OK&amp;nbsp;" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;" edge="1" parent="HSTbWgW6EKRbhmCLNFA3-15">
+          <mxGeometry x="-0.0021" width="60" relative="1" as="geometry">
+            <mxPoint x="129.99666666666653" y="408" as="sourcePoint" />
+            <mxPoint x="1307.33" y="408" as="targetPoint" />
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="660.83" y="408" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-23" value="HighLevenEntity&lt;br&gt;&lt;div&gt;(consumer)&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="100" y="120" width="100" height="980" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-28" value="&amp;nbsp; &amp;nbsp; &amp;nbsp; HTTP GET request&amp;nbsp;" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;" parent="dqpCEqPEEhPi3ZKG0BTO-1" edge="1">
-          <mxGeometry x="-0.0021" width="60" relative="1" as="geometry">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-24" value="&amp;nbsp; &amp;nbsp; &amp;nbsp; HTTP GET request (get file list for the device based on AL_MAC)&amp;nbsp;" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;" edge="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
+          <mxGeometry x="-0.0028" width="60" relative="1" as="geometry">
             <mxPoint x="149.16666666666652" y="718" as="sourcePoint" />
             <mxPoint x="1326.5" y="718" as="targetPoint" />
             <mxPoint as="offset" />
@@ -620,34 +605,186 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-29" value="&amp;nbsp;http://server-ip:8000/fw.bin" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="dqpCEqPEEhPi3ZKG0BTO-28" vertex="1" connectable="0">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-25" value="&amp;nbsp;http://server-ip:6666/file-list" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="HSTbWgW6EKRbhmCLNFA3-24">
           <mxGeometry x="0.0031" y="-7" relative="1" as="geometry">
             <mxPoint x="-5" y="3" as="offset" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-30" value="" style="rounded=0;whiteSpace=wrap;html=1;" parent="dqpCEqPEEhPi3ZKG0BTO-1" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-26" value="" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="90" y="1100" width="120" height="20" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-31" value="&lt;font style=&quot;font-size: 10px;&quot;&gt;IPv6 Static&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;rotation=-90;" parent="dqpCEqPEEhPi3ZKG0BTO-1" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-27" value="&lt;font style=&quot;font-size: 10px;&quot;&gt;IPv6 Static&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;rotation=-90;" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="120" y="378" width="60" height="20" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-32" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=1;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;dashed=1;" parent="dqpCEqPEEhPi3ZKG0BTO-1" source="dqpCEqPEEhPi3ZKG0BTO-34" target="dqpCEqPEEhPi3ZKG0BTO-31" edge="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-28" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=1;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;dashed=1;" edge="1" parent="HSTbWgW6EKRbhmCLNFA3-1" source="HSTbWgW6EKRbhmCLNFA3-30" target="HSTbWgW6EKRbhmCLNFA3-27">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-33" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=1;" parent="dqpCEqPEEhPi3ZKG0BTO-1" source="dqpCEqPEEhPi3ZKG0BTO-34" target="dqpCEqPEEhPi3ZKG0BTO-9" edge="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-29" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=1;" edge="1" parent="HSTbWgW6EKRbhmCLNFA3-1" source="HSTbWgW6EKRbhmCLNFA3-30" target="HSTbWgW6EKRbhmCLNFA3-9">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-34" value="IPv6 interface identifiers can be built from the&amp;nbsp;&lt;strong data-end=&quot;865&quot; data-start=&quot;850&quot;&gt;MAC address&lt;/strong&gt;&amp;nbsp;using&amp;nbsp;&lt;strong data-end=&quot;897&quot; data-start=&quot;872&quot;&gt;EUI-64 transformation:&lt;/strong&gt;&lt;div&gt;&lt;span data-end=&quot;897&quot; data-start=&quot;872&quot;&gt;&lt;b&gt;00:1A:2B:3C:4D:5E&lt;/b&gt;&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span data-end=&quot;897&quot; data-start=&quot;872&quot;&gt;&lt;b&gt;fe80::021a:2bff:fe3c:4d5e&lt;/b&gt;&lt;/span&gt;&lt;/div&gt;" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" parent="dqpCEqPEEhPi3ZKG0BTO-1" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-30" value="IPv6 interface identifiers can be built from the&amp;nbsp;&lt;strong data-end=&quot;865&quot; data-start=&quot;850&quot;&gt;MAC address&lt;/strong&gt;&amp;nbsp;using&amp;nbsp;&lt;strong data-end=&quot;897&quot; data-start=&quot;872&quot;&gt;EUI-64 transformation:&lt;/strong&gt;&lt;div&gt;&lt;span data-end=&quot;897&quot; data-start=&quot;872&quot;&gt;&lt;b&gt;00:1A:2B:3C:4D:5E&lt;/b&gt;&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span data-end=&quot;897&quot; data-start=&quot;872&quot;&gt;&lt;b&gt;fe80::021a:2bff:fe3c:4d5e&lt;/b&gt;&lt;/span&gt;&lt;/div&gt;" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="550" y="50" width="370" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="awzBgKyE464YE8v3mhHj-0" value="BACKEND&lt;div&gt;(cloud repo)&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" vertex="1" parent="dqpCEqPEEhPi3ZKG0BTO-1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-31" value="BACKEND&lt;div&gt;(cloud repo)&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="1520" y="120" width="100" height="980" as="geometry" />
         </mxCell>
-        <mxCell id="awzBgKyE464YE8v3mhHj-1" value="" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="dqpCEqPEEhPi3ZKG0BTO-1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-32" value="" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="1510" y="1095" width="120" height="20" as="geometry" />
         </mxCell>
-        <mxCell id="dqpCEqPEEhPi3ZKG0BTO-19" value="Controller Uprage from the cloud via USP/Xconf" style="label;whiteSpace=wrap;html=1;image=img/clipart/Gear_128x128.png" parent="dqpCEqPEEhPi3ZKG0BTO-1" vertex="1">
+        <mxCell id="HSTbWgW6EKRbhmCLNFA3-33" value="Controller Uprage from the cloud via USP/Xconf" style="label;whiteSpace=wrap;html=1;image=img/clipart/Gear_128x128.png" vertex="1" parent="HSTbWgW6EKRbhmCLNFA3-1">
           <mxGeometry x="880" y="190" width="730" height="30" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="IEEE1905_FW" id="MYaUw2oVEDXR7IyRVsEd">
+    <mxGraphModel dx="3588" dy="909" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-0" />
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-1" parent="TZMQZwJ7LtdT5fYZiTh8-0" />
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-2" value="IEEE1905&lt;div&gt;Agent&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="457" y="120" width="100" height="970" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-3" value="HigherLayer_Query(msd_id)" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;" edge="1" parent="TZMQZwJ7LtdT5fYZiTh8-2">
+          <mxGeometry x="-0.0021" width="60" relative="1" as="geometry">
+            <mxPoint x="50" y="381" as="sourcePoint" />
+            <mxPoint x="468.5" y="381" as="targetPoint" />
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="220" y="381" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-4" value="TLV()" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="TZMQZwJ7LtdT5fYZiTh8-3">
+          <mxGeometry x="0.0031" y="-7" relative="1" as="geometry">
+            <mxPoint x="-5" y="3" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-5" value="IEEE1905&lt;div&gt;Controller&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="876" y="120" width="100" height="980" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-6" value="HighLevenEntity&lt;br&gt;&lt;div&gt;(repo)&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="1277" y="120" width="100" height="980" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-7" value="&lt;font style=&quot;font-size: 10px;&quot;&gt;IPv6 Static&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;rotation=-90;" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="896" y="378" width="60" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-8" value="HigherLayer_Response(msd_id X + 1)" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;fillColor=#1ba1e2;strokeColor=#006EAF;" edge="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry width="60" relative="1" as="geometry">
+            <mxPoint x="922.5" y="591" as="sourcePoint" />
+            <mxPoint x="507" y="591" as="targetPoint" />
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-9" value="TLV(AL_MAC,ProfileVersion, ControlURL(repo-url), DeviceIdType" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="TZMQZwJ7LtdT5fYZiTh8-8">
+          <mxGeometry x="0.0031" y="-7" relative="1" as="geometry">
+            <mxPoint x="7" y="22" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-10" value="" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="447" y="1095" width="120" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-11" value="" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="866" y="1095" width="120" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-12" value="" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="1267" y="1095" width="120" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-13" value="Higher Layer Information protocol CONVERGENCE" style="swimlane;whiteSpace=wrap;html=1;" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="20" y="432" width="1453" height="560" as="geometry">
+            <mxRectangle x="440" y="322" width="200" height="30" as="alternateBounds" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-14" value="" style="shape=curlyBracket;whiteSpace=wrap;html=1;rounded=1;flipH=1;labelPosition=right;verticalLabelPosition=middle;align=left;verticalAlign=middle;" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-13">
+          <mxGeometry x="910" y="70" width="20" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-15" value="" style="html=1;verticalLabelPosition=bottom;align=center;labelBackgroundColor=#ffffff;verticalAlign=top;strokeWidth=2;strokeColor=#0080F0;shadow=0;dashed=0;shape=mxgraph.ios7.icons.clock;" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-13">
+          <mxGeometry x="970" y="112" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-16" value="MaxTimer in Converging=3 sec" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-13">
+          <mxGeometry x="920" y="68" width="130" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-17" value="&lt;div&gt;ISOLATED NAME-SPACE for vETH0&lt;/div&gt;wget http://repo/agent/latest" style="label;whiteSpace=wrap;html=1;image=img/clipart/Gear_128x128.png" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-13">
+          <mxGeometry x="30" y="224" width="280" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-18" value="&amp;nbsp; &amp;nbsp; &amp;nbsp; HTTP PUT" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;fillColor=#1ba1e2;strokeColor=#006EAF;" edge="1" parent="TZMQZwJ7LtdT5fYZiTh8-13">
+          <mxGeometry x="-0.003" y="-2" width="60" relative="1" as="geometry">
+            <mxPoint x="1306.5" y="388" as="sourcePoint" />
+            <mxPoint x="130" y="388" as="targetPoint" />
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-19" value="&amp;nbsp;http://server-ip:6666/agent_executable.bin" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="TZMQZwJ7LtdT5fYZiTh8-18">
+          <mxGeometry x="-0.0261" y="4" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-20" value="&amp;nbsp; &amp;nbsp; &amp;nbsp; HTTP 200 OK&amp;nbsp;" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;" edge="1" parent="TZMQZwJ7LtdT5fYZiTh8-13">
+          <mxGeometry x="-0.0021" width="60" relative="1" as="geometry">
+            <mxPoint x="129.99666666666653" y="450" as="sourcePoint" />
+            <mxPoint x="1307.33" y="450" as="targetPoint" />
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="660.83" y="450" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-21" value="HighLevenEntity&lt;br&gt;&lt;div&gt;(consumer)&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="100" y="120" width="100" height="980" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-22" value="&amp;nbsp; &amp;nbsp; &amp;nbsp; HTTP GET request (get file list for the device based on AL_MAC)&amp;nbsp;" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;" edge="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="-0.0028" width="60" relative="1" as="geometry">
+            <mxPoint x="149.16666666666652" y="718" as="sourcePoint" />
+            <mxPoint x="1326.5" y="718" as="targetPoint" />
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="680" y="718" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-23" value="&amp;nbsp;http://server-ip:6666/file-list" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="TZMQZwJ7LtdT5fYZiTh8-22">
+          <mxGeometry x="0.0031" y="-7" relative="1" as="geometry">
+            <mxPoint x="-5" y="3" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-24" value="" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="90" y="1100" width="120" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-25" value="&lt;font style=&quot;font-size: 10px;&quot;&gt;IPv6 Static&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;rotation=-90;" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="120" y="378" width="60" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-26" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=1;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;dashed=1;" edge="1" parent="TZMQZwJ7LtdT5fYZiTh8-1" source="TZMQZwJ7LtdT5fYZiTh8-28" target="TZMQZwJ7LtdT5fYZiTh8-25">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-27" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=1;" edge="1" parent="TZMQZwJ7LtdT5fYZiTh8-1" source="TZMQZwJ7LtdT5fYZiTh8-28" target="TZMQZwJ7LtdT5fYZiTh8-7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-28" value="IPv6 interface identifiers can be built from the&amp;nbsp;&lt;strong data-end=&quot;865&quot; data-start=&quot;850&quot;&gt;MAC address&lt;/strong&gt;&amp;nbsp;using&amp;nbsp;&lt;strong data-end=&quot;897&quot; data-start=&quot;872&quot;&gt;EUI-64 transformation:&lt;/strong&gt;&lt;div&gt;&lt;span data-end=&quot;897&quot; data-start=&quot;872&quot;&gt;&lt;b&gt;00:1A:2B:3C:4D:5E&lt;/b&gt;&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span data-end=&quot;897&quot; data-start=&quot;872&quot;&gt;&lt;b&gt;fe80::021a:2bff:fe3c:4d5e&lt;/b&gt;&lt;/span&gt;&lt;/div&gt;" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="550" y="50" width="370" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-29" value="BACKEND&lt;div&gt;(cloud repo)&lt;/div&gt;" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;dropTarget=0;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;newEdgeStyle={&quot;curved&quot;:0,&quot;rounded&quot;:0};" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="1520" y="120" width="100" height="980" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-30" value="" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="1510" y="1095" width="120" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="TZMQZwJ7LtdT5fYZiTh8-31" value="Controller Uprage from the cloud via USP/Xconf" style="label;whiteSpace=wrap;html=1;image=img/clipart/Gear_128x128.png" vertex="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="880" y="190" width="730" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="Vc2STz2heMFY5bDgcdsN-0" value="&amp;nbsp; &amp;nbsp; &amp;nbsp; HTTP GET request (get binary file for upgrade)&amp;nbsp;" style="html=1;verticalAlign=bottom;startArrow=oval;startFill=1;endArrow=block;startSize=8;curved=0;rounded=0;" edge="1" parent="TZMQZwJ7LtdT5fYZiTh8-1">
+          <mxGeometry x="-0.0028" width="60" relative="1" as="geometry">
+            <mxPoint x="151.16666666666652" y="774" as="sourcePoint" />
+            <mxPoint x="1328.5" y="774" as="targetPoint" />
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="682" y="774" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Vc2STz2heMFY5bDgcdsN-1" value="&amp;nbsp;http://server-ip:6666/agent-executable.bin" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="Vc2STz2heMFY5bDgcdsN-0">
+          <mxGeometry x="0.0031" y="-7" relative="1" as="geometry">
+            <mxPoint x="-5" y="3" as="offset" />
+          </mxGeometry>
         </mxCell>
       </root>
     </mxGraphModel>
