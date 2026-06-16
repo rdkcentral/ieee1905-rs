@@ -41,11 +41,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Mutex;
+use tokio::task::JoinSet;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct CliArgs {
     /// Turn on the topology text UI
+    #[cfg(feature = "topology_ui")]
     #[arg(short, long, default_value_t = false)]
     topology_ui: bool,
     /// Ethernet interface to be used
@@ -97,10 +99,6 @@ async fn main() -> anyhow::Result<()> {
     let _guard = logger::init_logger(&cli);
     tracing::info!("Tracing initialized!");
 
-    tracing::info!("Fragmentation type: SIZE BASED");
-
-    tracing::info!("TOPOLOGY_UI {:?}", cli.topology_ui);
-
     //ADDING logic for CRYPTO_CONTEXT here
     //let context = CRYPTO_CONTEXT.clone();
     //let ctx = context.lock().await;
@@ -147,6 +145,10 @@ async fn main() -> anyhow::Result<()> {
     let chassis_id = al_mac;
 
     let mut _artifact_exchange_server = None;
+    #[cfg(not(feature = "artifact_exchange"))]
+    if cli.artifact_exchange.is_some() {
+        anyhow::bail!("version was built without artifact exchange service support");
+    }
     match cli.artifact_exchange.as_ref() {
         Some(ArtifactExchange::Server) => {
             tracing::info!("Artifact exchange server is enabled");
@@ -268,16 +270,30 @@ async fn main() -> anyhow::Result<()> {
         ),
     );
 
+    // setup exit conditions
+
     let mut signal_terminate = signal(SignalKind::terminate())?;
     let mut signal_interrupt = signal(SignalKind::interrupt())?;
 
-    // if topology_cli is running
-    // you can close app by pressing q
-    tokio::select! {
-        _ = signal_terminate.recv() => {let _ = sd_notify::notify(true, &[NotifyState::Stopping]);},
-        _ = signal_interrupt.recv() => {let _ = sd_notify::notify(true, &[NotifyState::Stopping]);},
-        _ = topology_db.start_topology_cli(), if cli.topology_ui => {}
+    let mut join_set = JoinSet::new();
+    join_set.spawn(async move {
+        signal_terminate.recv().await;
+    });
+    join_set.spawn(async move {
+        signal_interrupt.recv().await;
+    });
+
+    #[cfg(feature = "topology_ui")]
+    if cli.topology_ui {
+        join_set.spawn(async move {
+            if let Err(e) = topology_db.start_topology_cli().await {
+                tracing::error!("topology_cli failed: {e}");
+            }
+        });
     }
+
+    join_set.join_next().await;
+    let _ = sd_notify::notify(true, &[NotifyState::Stopping]);
     Ok(())
 }
 

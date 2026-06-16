@@ -1,5 +1,5 @@
-use crate::artifact_exchange_service::common::{ArtifactExchangeConfig, is_file_name_sanitized};
-use crate::artifact_exchange_service::server::ArtifactExchangeServerInstanceActor;
+use crate::artifact_exchange_service::http::common::{ArtifactExchangeConfig, is_file_name_sanitized};
+use crate::artifact_exchange_service::http::server::ArtifactExchangeServerInstanceActor;
 use axum::body::{Body, BodyDataStream};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};

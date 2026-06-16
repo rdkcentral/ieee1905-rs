@@ -18,7 +18,6 @@
 */
 use crate::SDU;
 use crate::al_sap::AlServiceAccessPoint;
-use crate::artifact_exchange_service::server::ArtifactExchangeServer;
 use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
@@ -795,6 +794,8 @@ pub async fn cmdu_higher_layer_response_transmission(
     interface_mac_address: MacAddr,
     message_id: u16,
 ) {
+    use crate::artifact_exchange_service::server::ArtifactExchangeServer;
+
     trace!(
         interface = %interface,
         message_id = message_id,

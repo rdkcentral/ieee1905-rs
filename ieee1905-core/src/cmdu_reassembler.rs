@@ -27,7 +27,7 @@ use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio::time::Duration;
-use tracing::info_span;
+use tracing::instrument;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CmduReassemblyError {
@@ -53,44 +53,17 @@ pub struct CmduReassembler {
 }
 
 impl CmduReassembler {
+    ///////////////////////////////////////////////////////////////////////////
     pub fn new() -> Self {
         let buffer = Arc::new(Mutex::new(HashMap::<(MacAddr, u16), FragmentBuffer>::new()));
-        let buffer_clone = buffer.clone();
 
         let mut join_set = JoinSet::new();
-        let span = info_span!(parent: None, "cmdu_reassembler_cleaner", task = next_task_id());
-        spawn_join_set_named("cmdu_reassembler", Some(span), &mut join_set, async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(3));
-
-            loop {
-                ticker.tick().await;
-
-                let mut buffer = buffer_clone.lock().await;
-                let now = Instant::now();
-
-                buffer.retain(|key, entry| {
-                    let elapsed = now.duration_since(entry.first_received);
-
-                    if elapsed > Duration::from_secs(3) {
-                        if entry.fragments.is_empty() {
-                            tracing::error!("Reassembly error for {:?}: EmptyFragments", key);
-                        } else if !entry.fragments.values().any(|f| f.is_last_fragment()) {
-                            tracing::error!("Reassembly error for {:?}: MissingLastFragment", key);
-                        } else {
-                            let last_id = entry.fragments.keys().max().cloned().unwrap_or(0);
-                            if entry.fragments.len() < (last_id + 1) as usize {
-                                tracing::error!("Reassembly error for {:?}: MissingFragments", key);
-                            }
-                        }
-                        tracing::trace!("Other CMDU's did not arrive removing the reassembler");
-                        false // remove expired entry
-                    } else {
-                        tracing::trace!("Waiting for rest of the packets!");
-                        true // keep
-                    }
-                });
-            }
-        });
+        spawn_join_set_named(
+            "cmdu_reassembler",
+            None,
+            &mut join_set,
+            Self::worker(buffer.clone()),
+        );
 
         Self {
             _join_set: join_set,
@@ -98,6 +71,42 @@ impl CmduReassembler {
         }
     }
 
+    ///////////////////////////////////////////////////////////////////////////
+    #[instrument(skip_all, name = "cmdu_reassembler_cleaner", fields(task = next_task_id()))]
+    async fn worker(buffer_clone: Arc<Mutex<HashMap<(MacAddr, u16), FragmentBuffer>>>) {
+        let mut ticker = tokio::time::interval(Duration::from_secs(3));
+
+        loop {
+            ticker.tick().await;
+
+            let mut buffer = buffer_clone.lock().await;
+            let now = Instant::now();
+
+            buffer.retain(|key, entry| {
+                let elapsed = now.duration_since(entry.first_received);
+                if elapsed < Duration::from_secs(3) {
+                    tracing::trace!("Waiting for rest of the packets!");
+                    return true; // keep
+                }
+
+                if entry.fragments.is_empty() {
+                    tracing::error!("Reassembly error for {:?}: EmptyFragments", key);
+                } else if !entry.fragments.values().any(|f| f.is_last_fragment()) {
+                    tracing::error!("Reassembly error for {:?}: MissingLastFragment", key);
+                } else {
+                    let last_id = entry.fragments.keys().max().cloned().unwrap_or(0);
+                    if entry.fragments.len() < (last_id + 1) as usize {
+                        tracing::error!("Reassembly error for {:?}: MissingFragments", key);
+                    }
+                }
+
+                tracing::trace!("Other CMDU's did not arrive removing the reassembler");
+                false // remove expired entry
+            });
+        }
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
     pub async fn push_fragment(
         &self,
         source_mac: MacAddr,
@@ -140,8 +149,8 @@ impl CmduReassembler {
 pub mod tests {
     use super::*;
     use crate::cmdu::TLV;
-    use crate::cmdu_codec::MessageVersion;
     use crate::cmdu_codec::tests::make_dummy_cmdu;
+    use crate::cmdu_codec::MessageVersion;
     use tokio::time::sleep;
     use tracing::{error, trace};
 
