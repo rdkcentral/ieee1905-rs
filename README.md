@@ -1035,6 +1035,12 @@ cargo bench -p ieee1905 --bench cmdu_handler_bench -- node_present
 cargo bench -p ieee1905 --bench codec_parse_bench -- codec_parse_cmdu
 ```
 
+### Memory usage reports
+
+This repository contains a GitHub action to report memory usage.
+
+Comment with different memory stats (like VmSize, VmRSS, VmHWM, RssAnon, RssFile) after 5 seconds of the app running will be added to each PR.
+
 ## 📦 Artifact Exchange Service
 
 Artifacts can be transferred automatically between the controller and the agent as an auxiliary service.
