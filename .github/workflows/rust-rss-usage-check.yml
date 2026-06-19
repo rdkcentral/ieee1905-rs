@@ -31,16 +31,21 @@ jobs:
           sudo ip link set ieee1905_con up
           #
           echo "Launching ieee1905"
-          TIME_OUTPUT=$(mktemp)
-          sudo /usr/bin/time -v timeout 5s ./target/release/ieee1905 -i ieee1905_con > /dev/null 2> "$TIME_OUTPUT" & SERVICE_PID=$!
+          TARGET_PID_FILE=$(mktemp)
+          sudo timeout 7s bash -c "./target/release/ieee1905 -i ieee1905_con --no-stdout-appender & \$! > TARGET_PID_FILE"
           #
-          echo "Waiting for ieee1905 to finish"
+          echo "Waiting for ieee1905 to run"
+          sleep 5
           wait "$SERVICE_PID" 2>/dev/null || true
+          TARGET_PID=$(cat TARGET_PID_FILE)
           #
           echo "Generating report"
-          MAX_RSS_KB=$(grep "Maximum resident set size" "$TIME_OUTPUT" | awk '{print $6}')
-          echo "OS: $(uname -srm)" > rss_report.txt
-          echo "Maximum RSS (GNU): $MAX_RSS_KB KB" >> rss_report.txt
+          echo "Memory report after running for 5s:
+          \`\`\`
+          OS: $(uname -srm)
+          $(cat /proc/$TARGET_PID/status | grep -E "VmSize|VmRSS|VmHWM|RssAnon|RssFile")
+          \`\`\`
+          " > rss_report.txt
 
       - name: Post RSS usage report comment
         uses: marocchino/sticky-pull-request-comment@v2
