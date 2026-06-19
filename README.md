@@ -1037,9 +1037,9 @@ cargo bench -p ieee1905 --bench codec_parse_bench -- codec_parse_cmdu
 
 ### Memory usage reports
 
-This repository contains a GitHub action to report memory usage.
+This repository includes a GitHub Action (`.github/workflows/rust-rss-usage-check.yml`) that runs on pull requests targeting `develop` and posts/updates a sticky PR comment with memory usage statistics.
 
-Comment with different memory stats (like VmSize, VmRSS, VmHWM, RssAnon, RssFile) after 5 seconds of the app running will be added to each PR.
+The report is generated on the Ubuntu runner after `ieee1905` has been running for 5 seconds and includes `/proc/<pid>/status` fields such as `VmSize`, `VmRSS`, `VmHWM`, `RssAnon`, and `RssFile`.
 
 ## 📦 Artifact Exchange Service
 
