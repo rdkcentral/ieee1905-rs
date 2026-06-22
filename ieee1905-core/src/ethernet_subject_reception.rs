@@ -17,211 +17,230 @@
  * limitations under the License.
 */
 
-#![deny(warnings)]
-
-// External crates
-use crate::{next_task_id, spawn_join_set_blocking_named, spawn_join_set_named};
-use anyhow::{anyhow, bail};
+use crate::interface_manager::{InterfaceInfo, get_interface_info};
+use crate::{next_task_id, spawn_join_set_named};
+use anyhow::bail;
 use async_trait::async_trait;
-use pnet::datalink::{self, Channel::Ethernet, Config};
+use pnet::datalink::EtherType;
 use pnet::packet::Packet;
 use pnet::packet::ethernet::EthernetPacket;
-use pnet::util::MacAddr;
+use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::io::ErrorKind;
+use std::mem::size_of_val;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::time::Duration;
-use tokio::sync::mpsc::Sender;
-use tokio::task::{JoinSet, yield_now};
-use tracing::{debug, error, info, info_span, warn};
+use tokio::io::Interest;
+use tokio::io::unix::AsyncFd;
+use tokio::task::JoinSet;
+use tracing::{debug, error, info, instrument, warn};
 
 /// Observer trait for handling specific Ethernet frame types
 #[async_trait]
 pub trait EthernetFrameObserver: Send + Sync + 'static {
-    async fn on_frame(
-        &self,
-        interface_mac: MacAddr,
-        frame: &[u8],
-        source_mac: MacAddr,
-        destination_mac: MacAddr,
-    );
+    async fn on_frame(&self, if_info: &InterfaceInfo, packet: &EthernetPacket);
     fn get_ethertype(&self) -> u16;
 }
 
-/// Subject that receives Ethernet frames and notifies subscribed observers
 #[derive(Default)]
 pub struct EthernetReceiver {
-    join_set: JoinSet<()>,
-    observers: HashMap<u16, Sender<EthernetMessage>>,
-}
-
-struct EthernetMessage {
-    interface_mac: MacAddr,
-    ether_type: u16,
-    payload: Vec<u8>,
-    source_mac: MacAddr,
-    destination_mac: MacAddr,
+    map: HashMap<String, HashMap<u16, Box<dyn EthernetFrameObserver>>>,
 }
 
 impl EthernetReceiver {
+    ///////////////////////////////////////////////////////////////////////////
+    pub fn subscribe(&mut self, interface_name: &str, observer: impl EthernetFrameObserver) {
+        let ether_type = observer.get_ethertype();
+        let observers = self.map.entry(interface_name.to_string()).or_default();
+
+        match observers.entry(ether_type) {
+            Entry::Occupied(_) => {
+                warn!(
+                    "observer for EtherType 0x{ether_type:04X} is already subscribed — skipping duplicate"
+                );
+            }
+            Entry::Vacant(e) => {
+                e.insert(Box::new(observer));
+            }
+        }
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    pub fn run(self) -> anyhow::Result<JoinSet<()>> {
+        let mut join_set = JoinSet::new();
+        for (interface_name, observers) in self.map {
+            let Some(if_info) = get_interface_info(&interface_name) else {
+                bail!("Interface not found: {interface_name}");
+            };
+
+            let socket = AsyncSocket::open(&if_info)?;
+
+            spawn_join_set_named(
+                format!("eth_recv/{interface_name}"),
+                None,
+                &mut join_set,
+                Self::run_socket_worker(if_info, socket, observers),
+            );
+        }
+        Ok(join_set)
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    #[instrument(
+        skip_all,
+        name = "ethernet_receiver",
+        fields(task = next_task_id(), if_name = if_info.if_name)
+    )]
+    async fn run_socket_worker(
+        if_info: InterfaceInfo,
+        socket: AsyncSocket,
+        observers: HashMap<EtherType, Box<dyn EthernetFrameObserver>>,
+    ) {
+        info!("listening on {}", if_info.mac);
+
+        let mut buffer = [0u8; 2048];
+        loop {
+            let length = socket.recv(&mut buffer).await;
+
+            let Some(packet) = EthernetPacket::new(&buffer[..length]) else {
+                error!("failed to parse Ethernet frame.");
+                continue;
+            };
+
+            let ether_type = packet.get_ethertype().0;
+            let Some(observer) = observers.get(&ether_type) else {
+                continue;
+            };
+
+            debug!(
+                eth_type = format!("0x{ether_type:04X}"),
+                src = %packet.get_source(),
+                dst = %packet.get_destination(),
+                payload_len = packet.payload().len(),
+                "received Ethernet frame"
+            );
+
+            observer.on_frame(&if_info, &packet).await;
+        }
+    }
+}
+
+pub(crate) struct AsyncSocket {
+    async_fd: AsyncFd<OwnedFd>,
+    if_index: i32,
+}
+
+impl AsyncSocket {
     const RETRY_TIMEOUT_MIN: Duration = Duration::from_millis(10);
     const RETRY_TIMEOUT_MAX: Duration = Duration::from_secs(1);
 
-    /// **Create a new `EthernetReceiver`**
-    pub fn new() -> Self {
-        Self::default()
-    }
+    ///////////////////////////////////////////////////////////////////////////
+    pub(crate) fn open(if_info: &InterfaceInfo) -> anyhow::Result<Self> {
+        // ETH_P_ALL so the socket receives every ether-type on the interface
+        let protocol = Protocol::from(i32::from((libc::ETH_P_ALL as u16).to_be()));
+        let socket = Socket::new(Domain::PACKET, Type::RAW, Some(protocol))?;
+        socket.set_nonblocking(true)?;
 
-    /// **Subscribe an observer**, avoiding duplicate subscriptions for the same `EtherType`
-    pub fn subscribe(&mut self, observer: impl EthernetFrameObserver) {
-        let ether_type = observer.get_ethertype();
-        debug!("Trying to subscribe observer for EtherType: 0x{ether_type:04X}");
+        let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
+        sll.sll_family = libc::AF_PACKET as u16;
+        sll.sll_protocol = (libc::ETH_P_ALL as u16).to_be();
+        sll.sll_ifindex = if_info.if_index as i32;
 
-        // Si ya hay un canal para ese ethertype, no duplicamos suscripciones
-        let observer_entry = match self.observers.entry(ether_type) {
-            Entry::Occupied(_) => {
-                warn!(
-                    "Observer for EtherType 0x{ether_type:04X} is already subscribed — skipping duplicate"
-                );
-                return;
-            }
-            Entry::Vacant(e) => e,
+        // SAFETY: `sll` is a fully-initialised sockaddr_ll and the passed length matches it.
+        let ret = unsafe {
+            libc::bind(
+                socket.as_raw_fd(),
+                std::ptr::from_ref(&sll).cast(),
+                size_of_val(&sll) as libc::socklen_t,
+            )
         };
 
-        let (observer_tx, mut observer_rx) = tokio::sync::mpsc::channel(1000);
-        observer_entry.insert(observer_tx);
+        if ret != 0 {
+            bail!(
+                "failed to bind AF_PACKET socket to interface {} (os error {})",
+                if_info.if_name,
+                std::io::Error::last_os_error(),
+            );
+        }
 
-        let span = info_span!(parent: None, "ethernet_receiver_dispatch", task = next_task_id());
-        let name = format!("eth_recv/{ether_type:04x}");
-        spawn_join_set_named(name, Some(span), &mut self.join_set, async move {
-            debug!("Observer task started for EtherType: 0x{:04X}", ether_type);
+        let owned_fd = OwnedFd::from(socket);
+        let async_fd = AsyncFd::with_interest(owned_fd, Interest::READABLE | Interest::WRITABLE)?;
+        Ok(Self {
+            async_fd,
+            if_index: if_info.if_index as i32,
+        })
+    }
 
-            while let Some(message) = observer_rx.recv().await {
-                debug!(
-                    interface_mac = ?message.interface_mac,
-                    source_mac = ?message.source_mac,
-                    destination_mac = ?message.destination_mac,
-                    frame_length = message.payload.len(),
-                    "Observer received frame"
-                );
+    ///////////////////////////////////////////////////////////////////////////
+    async fn recv(&self, buffer: &mut [u8]) -> usize {
+        let mut retry_timeout = Self::RETRY_TIMEOUT_MIN;
 
-                observer
-                    .on_frame(
-                        message.interface_mac,
-                        &message.payload,
-                        message.source_mac,
-                        message.destination_mac,
+        loop {
+            // Async, non-blocking read driven by the tokio reactor — no blocking task.
+            let read = self
+                .async_fd
+                .async_io(Interest::READABLE, |fd| {
+                    // SAFETY: reading into a valid buffer; src/src_len are valid out-params.
+                    let n = unsafe {
+                        let mut sll = std::mem::zeroed::<libc::sockaddr_ll>();
+                        let mut sll_len = size_of_val(&sll) as libc::socklen_t;
+                        libc::recvfrom(
+                            fd.as_raw_fd(),
+                            buffer.as_mut_ptr().cast(),
+                            buffer.len(),
+                            0,
+                            std::ptr::from_mut(&mut sll).cast(),
+                            &mut sll_len,
+                        )
+                    };
+                    if n < 0 {
+                        Err(std::io::Error::last_os_error())
+                    } else {
+                        Ok(n as usize)
+                    }
+                })
+                .await;
+
+            match read {
+                Ok(n) => return n,
+                Err(e) => {
+                    error!("error receiving Ethernet frame: {e}");
+                    tokio::time::sleep(retry_timeout).await;
+                    retry_timeout = (retry_timeout * 4).min(Self::RETRY_TIMEOUT_MAX);
+                }
+            };
+        }
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    pub(crate) async fn send(&self, buffer: &[u8]) -> std::io::Result<usize> {
+        // Async, non-blocking write driven by the tokio reactor — no blocking call.
+        self.async_fd
+            .async_io(Interest::WRITABLE, |fd| {
+                // SAFETY: sending a valid buffer to a correctly-sized, fully-initialised sockaddr_ll.
+                let n = unsafe {
+                    // Destination link-layer address (as pnet does): the kernel uses sll_ifindex to choose
+                    // the outgoing interface; for SOCK_RAW the frame already carries the ethernet header.
+                    let mut sll = std::mem::zeroed::<libc::sockaddr_ll>();
+                    sll.sll_family = libc::AF_PACKET as u16;
+                    sll.sll_protocol = (libc::ETH_P_ALL as u16).to_be();
+                    sll.sll_ifindex = self.if_index;
+
+                    libc::sendto(
+                        fd.as_raw_fd(),
+                        buffer.as_ptr().cast(),
+                        buffer.len(),
+                        0,
+                        std::ptr::from_ref(&sll).cast(),
+                        size_of_val(&sll) as libc::socklen_t,
                     )
-                    .await;
-
-                // TODO this looks like a "magic delay" workaround and
-                //  should be properly fixed on the reassembler side
-
-                // To avoid situation when cmdu part with flag end
-                // is processed before first one
-                // yield will casue that reassembler is triggered for with
-                // respect to the arrival of packets.
-                yield_now().await;
-            }
-        });
-    }
-
-    /// **Start receiving Ethernet frames**
-    pub fn run(mut self, interface_name: &str) -> anyhow::Result<JoinSet<()>> {
-        info!("Starting EthernetReceiver on interface: {}", interface_name);
-
-        let interfaces = datalink::interfaces();
-        let interface = interfaces
-            .into_iter()
-            .find(|iface| iface.name == interface_name)
-            .ok_or_else(|| anyhow!("Interface not found: {interface_name}"))?;
-
-        let interface_mac = interface.mac.ok_or_else(|| {
-            anyhow!("Failed to retrieve MAC address for interface {interface_name}")
-        })?;
-
-        info!("Listening on interface: {interface_name} (MAC: {interface_mac})");
-        // Since we spawn a blocking task, we need to have an opportunity
-        // to act on shutdown signal, that's why timeout is used.
-        let config = Config {
-            read_timeout: Some(Self::RETRY_TIMEOUT_MAX),
-            ..Default::default()
-        };
-
-        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(128);
-        let mut datalink_rx = match datalink::channel(&interface, config) {
-            Ok(Ethernet(_, rx)) => rx,
-            Ok(_) => bail!("Unsupported channel type"),
-            Err(e) => bail!("Failed to create datalink channel: {e}"),
-        };
-
-        let name = format!("eth_recv/{interface_name}/block");
-        spawn_join_set_blocking_named(name, &mut self.join_set, move || {
-            let _span = info_span!(parent: None, "ethernet_receiver_reader", task = next_task_id())
-                .entered();
-
-            info!("Listening for Ethernet frames...");
-            let mut retry_timeout = Self::RETRY_TIMEOUT_MIN;
-            while !notify_tx.is_closed() {
-                let packet = match datalink_rx.next() {
-                    Ok(e) => {
-                        retry_timeout = Self::RETRY_TIMEOUT_MIN;
-                        e
-                    }
-                    Err(e) => {
-                        if e.kind() != ErrorKind::TimedOut {
-                            error!("Error receiving Ethernet frame: {e}");
-                            std::thread::sleep(retry_timeout);
-                            retry_timeout = (retry_timeout * 4).min(Self::RETRY_TIMEOUT_MAX);
-                        }
-                        continue;
-                    }
                 };
-
-                let Some(eth_packet) = EthernetPacket::new(packet) else {
-                    error!("Failed to parse Ethernet frame.");
-                    continue;
-                };
-
-                let message = EthernetMessage {
-                    interface_mac,
-                    ether_type: eth_packet.get_ethertype().0,
-                    payload: eth_packet.payload().to_vec(),
-                    source_mac: eth_packet.get_source(),
-                    destination_mac: eth_packet.get_destination(),
-                };
-
-                if notify_tx.blocking_send(message).is_err() {
-                    warn!("Packet dropped: failed to send to async observer handler");
-                }
-            }
-        });
-
-        // TODO this intermediate channel is not needed and can be removed
-        let span = info_span!(parent: None, "eth_recv_intermediate", task = next_task_id());
-        let name = format!("eth_recv/{interface_name}");
-        spawn_join_set_named(name, Some(span), &mut self.join_set, async move {
-            while let Some(message) = notify_rx.recv().await {
-                let ether_type = message.ether_type;
-                let Some(observer) = self.observers.get(&ether_type) else {
-                    continue;
-                };
-
-                debug!(
-                    eth_type = format!("0x{ether_type:04X}"),
-                    src = %message.source_mac,
-                    dst = %message.destination_mac,
-                    payload_len = message.payload.len(),
-                    "Received Ethernet frame"
-                );
-
-                if observer.send(message).await.is_ok() {
-                    debug!("Notified observer for EtherType: 0x{ether_type:04X}");
+                if n < 0 {
+                    Err(std::io::Error::last_os_error())
                 } else {
-                    error!("Failed to notify observer for EtherType: 0x{ether_type:04X}");
+                    Ok(n as usize)
                 }
-            }
-        });
-        Ok(self.join_set)
+            })
+            .await
     }
 }

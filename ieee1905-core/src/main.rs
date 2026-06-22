@@ -112,8 +112,6 @@ async fn main() -> anyhow::Result<()> {
         tracing::error!("failed to open RBus connection: {e}");
     });
 
-    let mut join_sets = Vec::new();
-
     //Set AL MAC & test MAC addresses
     let forwarding_interface =
         if let Some(iface) = get_forwarding_interface_name(cli.interface.clone()) {
@@ -221,14 +219,11 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("LLDP and CMDU observers initilized with local MAC: {al_mac}");
 
     // Initialize Ethernet Receiver
-    let mut receiver = EthernetReceiver::new();
+    let mut receiver = EthernetReceiver::default();
 
     // Subscription of observers
-    receiver.subscribe(cmdu_observer);
+    receiver.subscribe(&forwarding_interface, cmdu_observer);
     tracing::info!("CMDU observers subscribed with local MAC: {al_mac}");
-
-    // Launch of receiver, take in account logic for Rx is sperated from Logic for Tx, so we clone the forwarding_interface
-    join_sets.push(receiver.run(&forwarding_interface)?);
 
     // Sart of the discovery process
 
@@ -241,9 +236,7 @@ async fn main() -> anyhow::Result<()> {
         );
 
         if !cli.no_lldp_receivers {
-            let mut lldp_receiver = EthernetReceiver::new();
-            lldp_receiver.subscribe(lldp_observer.clone());
-            join_sets.push(lldp_receiver.run(&interface.name)?);
+            receiver.subscribe(&interface.name, lldp_observer.clone());
         }
 
         let lldp_sender = EthernetSender::new(&interface.name, Arc::clone(&mutex_tx));
@@ -252,6 +245,9 @@ async fn main() -> anyhow::Result<()> {
             lldp_discovery_worker(lldp_sender, chassis_id, interface.mac, interface.name),
         );
     }
+
+    // Launch the receiver; note that Rx logic is separated from Tx logic, so we clone forwarding_interface
+    let _receiver_guard = receiver.run()?;
 
     let discovery_interface_ieee1905 = forwarding_interface.clone();
 

@@ -20,9 +20,11 @@
 use crate::cmdu::{CMDU, CMDUType};
 use crate::cmdu_handler::CMDUHandler;
 use crate::ethernet_subject_reception::EthernetFrameObserver;
+use crate::interface_manager::InterfaceInfo;
 use crate::{next_task_id, spawn_named};
 use async_trait::async_trait;
-use pnet::datalink::MacAddr;
+use pnet::packet::Packet;
+use pnet::packet::ethernet::EthernetPacket;
 use std::sync::Arc;
 use tracing::{Instrument, error, info_span, trace, warn};
 
@@ -39,16 +41,13 @@ impl CMDUObserver {
 
 #[async_trait]
 impl EthernetFrameObserver for CMDUObserver {
-    async fn on_frame(
-        &self,
-        interface_mac: MacAddr,
-        frame: &[u8],
-        source_mac: MacAddr,
-        destination_mac: MacAddr,
-    ) {
-        let frame_owned = frame.to_vec();
-        tracing::trace!("Parsing CMDU on_frame <{frame_owned:?}>");
-        match CMDU::parse(&frame_owned) {
+    async fn on_frame(&self, if_info: &InterfaceInfo, packet: &EthernetPacket) {
+        let interface_mac = if_info.mac;
+        let source_mac = packet.get_source();
+        let destination_mac = packet.get_destination();
+
+        tracing::trace!("Parsing CMDU on_frame <{:?}>", packet.payload());
+        match CMDU::parse(packet.payload()) {
             Ok((_, cmdu)) => {
                 let cmdu_type = CMDUType::from_u16(cmdu.message_type);
 

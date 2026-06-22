@@ -22,10 +22,13 @@
 use async_trait::async_trait;
 use nom::Err as NomErr;
 use pnet::datalink::MacAddr;
+use pnet::packet::ethernet::EthernetPacket;
+use pnet::packet::Packet;
 use tracing::{debug, error, info, warn};
 
 // Internal modules
 use crate::ethernet_subject_reception::EthernetFrameObserver;
+use crate::interface_manager::InterfaceInfo;
 use crate::lldpdu::{ChassisId, LLDPDU, LLDPTLVType, PortId};
 use crate::topology_manager::{TopologyDatabase, UpdateType};
 
@@ -47,13 +50,12 @@ impl LLDPObserver {
 
 #[async_trait]
 impl EthernetFrameObserver for LLDPObserver {
-    async fn on_frame(
-        &self,
-        interface_mac: MacAddr,
-        frame: &[u8],
-        source_mac: MacAddr,
-        destination_mac: MacAddr,
-    ) {
+    async fn on_frame(&self, if_info: &InterfaceInfo, packet: &EthernetPacket) {
+        let interface_mac = if_info.mac;
+        let source_mac = packet.get_source();
+        let destination_mac = packet.get_destination();
+        let frame = packet.payload();
+
         debug!(
             interface_mac = ?interface_mac,
             source_mac = ?source_mac,

@@ -16,13 +16,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
+use crate::ethernet_subject_reception::AsyncSocket;
+use crate::interface_manager::get_interface_info;
 use crate::{next_task_id, spawn_join_set_named};
 use anyhow::anyhow;
 use pnet::datalink::MacAddr;
 use std::sync::Arc;
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
-use tracing::{debug, error, info, info_span, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 #[derive(Debug)]
 struct Frame {
@@ -42,83 +45,83 @@ impl EthernetSender {
     pub const ETHER_TYPE: u16 = 0x893A;
     pub const ETHER_MTU_SIZE: usize = 1500;
 
-    /// **Creates a new `EthernetSender`**
+    ///////////////////////////////////////////////////////////////////////////
     pub fn new(interface_name: &str, interface_mutex: Arc<Mutex<()>>) -> Self {
-        let (tx, mut rx) = mpsc::channel::<Frame>(100);
-
-        let interface_name = interface_name.to_string();
+        let (tx, rx) = mpsc::channel::<Frame>(100);
 
         let mut join_set = JoinSet::new();
-        let span = info_span!(parent: None, "ethernet_sender", task = next_task_id());
-        let name = format!("eth_send/{interface_name}");
-        spawn_join_set_named(name, Some(span), &mut join_set, async move {
-            info!(interface_name = %interface_name, "Async sender task initialized");
-
-            let interfaces = pnet::datalink::interfaces();
-            let interface = match interfaces
-                .into_iter()
-                .find(|iface| iface.name == interface_name)
-            {
-                Some(iface) => iface,
-                None => {
-                    error!(interface_name = %interface_name, "Interface not found");
-                    return;
-                }
-            };
-
-            info!(interface_name = %interface.name, "Found network interface");
-
-            let config = pnet::datalink::Config::default();
-            let (mut tx, _rx) = match pnet::datalink::channel(&interface, config) {
-                Ok(pnet::datalink::Channel::Ethernet(tx, rx)) => (tx, rx),
-                Ok(_) => {
-                    error!("Unsupported channel type");
-                    return;
-                }
-                Err(e) => {
-                    error!("Failed to create datalink channel: {}", e);
-                    return;
-                }
-            };
-
-            debug!("Async sender task is processing frames...");
-
-            while let Some(frame) = rx.recv().await {
-                debug!(
-                    destination_mac = ?frame.destination_mac,
-                    source_mac = ?frame.source_mac,
-                    ethertype = format!("0x{:04X}", frame.ethertype),
-                    payload_length = frame.payload.len(),
-                    "Processing outgoing Ethernet frame"
-                );
-
-                let _lock = interface_mutex.lock().await;
-
-                let mut buffer = vec![0u8; 14 + frame.payload.len()];
-                buffer[..6].copy_from_slice(&frame.destination_mac.octets());
-                buffer[6..12].copy_from_slice(&frame.source_mac.octets());
-                buffer[12..14].copy_from_slice(&frame.ethertype.to_be_bytes());
-                buffer[14..].copy_from_slice(&frame.payload);
-
-                match tx.send_to(&buffer, None) {
-                    Some(Ok(())) => {
-                        if let Some(e) = frame.success_channel {
-                            let _ = e.send(());
-                        }
-                        debug!("Frame sent successfully")
-                    }
-                    Some(Err(e)) => error!("Failed to send frame: {:?}", e),
-                    None => warn!("No transmit descriptor available"),
-                }
-            }
-
-            warn!("Async sender task exiting.");
-        });
+        spawn_join_set_named(
+            format!("eth_send/{interface_name}"),
+            None,
+            &mut join_set,
+            Self::worker(interface_name.to_owned(), interface_mutex, rx),
+        );
 
         Self {
             _join_set: join_set,
             tx_channel: tx,
         }
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    #[instrument(
+        skip_all,
+        name = "ethernet_sender",
+        fields(task = next_task_id(), if_name = interface_name),
+    )]
+    async fn worker(
+        interface_name: String,
+        interface_mutex: Arc<Mutex<()>>,
+        mut rx: Receiver<Frame>,
+    ) {
+        info!(interface_name = %interface_name, "Async sender task initialized");
+
+        let Some(if_info) = get_interface_info(&interface_name) else {
+            error!(interface_name = %interface_name, "Interface not found");
+            return;
+        };
+
+        let socket = match AsyncSocket::open(&if_info) {
+            Ok(socket) => socket,
+            Err(e) => {
+                error!(interface_name = %interface_name, "Failed to open packet socket: {e}");
+                return;
+            }
+        };
+
+        debug!("Async sender task is processing frames...");
+
+        let mut buffer = Vec::with_capacity(1500);
+        while let Some(frame) = rx.recv().await {
+            debug!(
+                destination_mac = ?frame.destination_mac,
+                source_mac = ?frame.source_mac,
+                ethertype = format!("0x{:04X}", frame.ethertype),
+                payload_length = frame.payload.len(),
+                "Processing outgoing Ethernet frame"
+            );
+
+            buffer.clear();
+            buffer.extend(frame.destination_mac.octets());
+            buffer.extend(frame.source_mac.octets());
+            buffer.extend(frame.ethertype.to_be_bytes());
+            buffer.extend(frame.payload);
+
+            // Create shared mutex for exclusive access to network interfaces for transmission
+            let _lock = interface_mutex.lock().await;
+
+            match socket.send(&buffer).await {
+                Ok(_) => {
+                    if let Some(e) = frame.success_channel {
+                        let _ = e.send(());
+                    }
+                    debug!("Frame sent successfully")
+                }
+                Err(e) => error!("Failed to send frame: {e}"),
+            }
+        }
+
+        warn!("Async sender task exiting.");
     }
 
     /// Enqueues a frame for transmission and waits for it to be actually sent
