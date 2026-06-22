@@ -293,7 +293,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     join_set.join_next().await;
-    let _ = sd_notify::notify(true, &[NotifyState::Stopping]);
+    let _ = sd_notify::notify(&[NotifyState::Stopping]);
     Ok(())
 }
 
