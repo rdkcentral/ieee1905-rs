@@ -734,7 +734,7 @@ impl TopologyDatabase {
         loop {
             interval.tick().await;
 
-            match get_interfaces().await {
+            match get_interfaces(&self.interface_name).await {
                 Ok(mut interfaces) => {
                     Self::update_local_neighbours_ieee1905_compatibility(
                         &mut interfaces,

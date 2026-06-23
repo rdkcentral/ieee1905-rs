@@ -55,7 +55,7 @@ use neli::socket::asynchronous::NlSocketHandle;
 use neli::types::{GenlBuffer, RtBuffer};
 use neli::utils::Groups;
 use std::ops::{BitAnd, Div};
-use tracing::{error, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
@@ -131,9 +131,17 @@ pub fn get_mac_address_by_interface(interface_name: &str) -> Option<MacAddr> {
         .and_then(|iface| iface.mac) // Extract MAC address if found
 }
 
-pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
+pub async fn get_interfaces(
+    forwarding_if_name: &str,
+) -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
     let mut interfaces = Vec::new();
     let mut links = get_link_interfaces().await?;
+
+    // filter out interfaces that are not bridged with the forwarding interfaces
+    filter_interfaces_by_bridge(forwarding_if_name, &mut links).await;
+
+    // filter out all virtual interfaces
+    links.retain(|_, e| e.link_kind.as_deref() != Some("veth"));
 
     match get_wireless_interfaces(&mut links).await {
         Ok(e) => interfaces.extend(e),
@@ -166,13 +174,95 @@ async fn get_link_interfaces() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo
             }
         }
     }
-
-    // remove interfaces that are not part of the bridge
-    if let Some(interface) = links.values().find(|e| e.if_name == "brlan0") {
-        let bridge_if_index = interface.if_index;
-        links.retain(|_, e| e.bridge_if_index == Some(bridge_if_index as u32));
-    }
     Ok(links)
+}
+
+async fn filter_interfaces_by_bridge(
+    forwarding_if_name: &str,
+    links: &mut IndexMap<i32, LinkInterfaceInfo>,
+) {
+    if filter_interfaces_by_ovs_bridge(forwarding_if_name, links).await {
+        return;
+    }
+
+    let Some(interface) = links.values().find(|e| e.if_name == forwarding_if_name) else {
+        return warn!("forwarding interface {forwarding_if_name:?} not found, filtering skipped");
+    };
+
+    let forwarding_bridge_if_index = match interface.link_kind.as_deref() {
+        Some("bridge") => {
+            debug!("forwarding interface {forwarding_if_name:?} is a bridge, filtering by it");
+            interface.if_index as u32
+        }
+        Some("veth") if interface.bridge_if_index.is_none() => {
+            let Some(pair_index) = interface.link_if_index else {
+                return warn!("veth interface {} doesn't have a pair", interface.if_name);
+            };
+            let Some(pair_interface) = links.get(&pair_index) else {
+                return warn!("veth interface {} pair not found", interface.if_name);
+            };
+            let Some(pair_bridge_if_index) = pair_interface.bridge_if_index else {
+                return;
+            };
+            let Some(pair_bridge) = links.get(&(pair_bridge_if_index as i32)) else {
+                return warn!("cannot find bridge interface {pair_bridge_if_index}");
+            };
+            if pair_bridge.link_kind.as_deref() != Some("bridge") {
+                return warn!("interface {:?} is not a bridge", pair_bridge.if_name);
+            }
+
+            debug!(
+                "forwarding interface {forwarding_if_name:?} is a veth, filtering by its bridge {:?}",
+                pair_bridge.if_name,
+            );
+            pair_bridge_if_index
+        }
+        _ => {
+            let Some(bridge_if_index) = interface.bridge_if_index else {
+                return;
+            };
+
+            debug!("forwarding interface {forwarding_if_name:?} has a bridge, filtering by it");
+            bridge_if_index
+        }
+    };
+
+    links.retain(|_, e| e.bridge_if_index == Some(forwarding_bridge_if_index));
+}
+
+async fn filter_interfaces_by_ovs_bridge(
+    mut forwarding_if_name: &str,
+    links: &mut IndexMap<i32, LinkInterfaceInfo>,
+) -> bool {
+    // select other veth pair endpoint if current endpoint is not connected to the bridge
+    if let Some(forwarding_interface) = links.values().find(|e| e.if_name == forwarding_if_name)
+        && forwarding_interface.link_kind.as_deref() == Some("veth")
+        && forwarding_interface.bridge_if_index.is_none()
+        && let Some(pair_if_index) = forwarding_interface.link_if_index
+        && let Some(pair_interface) = links.get(&pair_if_index)
+    {
+        forwarding_if_name = pair_interface.if_name.as_str();
+    }
+
+    let bridge = match call_ovs_interface_to_bridge(forwarding_if_name).await {
+        Ok(e) => e,
+        Err(e) => {
+            debug!(%e, "ovs bridge not available");
+            return false;
+        }
+    };
+
+    let interfaces = match call_ovs_list_bridge_interfaces(&bridge).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!(bridge, %e, "call_ovs_list_bridge_interfaces failed");
+            return false;
+        }
+    };
+
+    debug!("filtering interfaces by {bridge:?} ovs bridge");
+    links.retain(|_, e| interfaces.contains(&e.if_name));
+    true
 }
 
 #[derive(Debug)]
@@ -181,6 +271,8 @@ struct LinkInterfaceInfo {
     if_index: i32,
     if_name: String,
     if_flags: Iff,
+    link_kind: Option<String>,
+    link_if_index: Option<i32>,
     bridge_if_index: Option<u32>,
     vlan_id: Option<u16>,
     link_stats: Option<RtnlLinkStats64>,
@@ -220,28 +312,40 @@ async fn call_rt_get_links() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo>>
         };
 
         let mut vlan_id = None;
-        if let Ok(link_info) = attr_handle.get_nested_attributes(Ifla::Linkinfo) {
-            match link_info.get_attr_payload_as_with_len_borrowed::<&[u8]>(IflaInfo::Kind) {
-                Ok(b"veth\0") => continue,
-                Ok(b"vlan\0") => {
-                    if let Ok(data) = link_info.get_nested_attributes(IflaInfo::Data) {
-                        vlan_id = data.get_attr_payload_as(IflaVlan::Id).ok();
-                    }
-                }
-                _ => {}
+        let mut link_kind = None;
+        if let Ok(link_info) = attr_handle.get_nested_attributes(Ifla::Linkinfo)
+            && let Ok(kind) = link_info.get_attr_payload_as_with_len::<String>(IflaInfo::Kind)
+        {
+            link_kind = Some(kind.clone()).filter(|s| !s.is_empty());
+
+            if kind.as_str() == "vlan"
+                && let Ok(data) = link_info.get_nested_attributes(IflaInfo::Data)
+            {
+                vlan_id = data.get_attr_payload_as(IflaVlan::Id).ok();
             }
         }
 
         let if_flags = *payload.ifi_flags();
         let if_index = *payload.ifi_index();
+        let link_if_index = attr_handle.get_attr_payload_as(Ifla::Link).ok();
         let bridge_if_index = attr_handle.get_attr_payload_as(Ifla::Master).ok();
         let link_stats = get_link_stats(&attr_handle);
+        trace!(
+            if_name = %if_name,
+            if_index,
+            ?link_kind,
+            ?link_if_index,
+            ?bridge_if_index,
+            "parsed link interface",
+        );
 
         let interface_info = LinkInterfaceInfo {
             mac: MacAddr::from(mac),
             if_index,
             if_name,
             if_flags,
+            link_kind,
+            link_if_index,
             bridge_if_index,
             vlan_id,
             link_stats,
@@ -891,6 +995,48 @@ async fn call_netdev_get_ethernet_interfaces() -> anyhow::Result<Vec<EthernetInt
             is_802_3ab_supported: true,
         });
     }
+    Ok(result)
+}
+
+async fn call_ovs_interface_to_bridge(if_name: &str) -> anyhow::Result<String> {
+    debug!("ovs-vsctl iface-to-br {if_name}");
+
+    let output = tokio::process::Command::new("ovs-vsctl")
+        .args(["--timeout=5", "iface-to-br", if_name])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("ovs-vsctl iface-to-br {if_name} failed: {stderr}");
+    }
+
+    let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    debug!("ovs-vsctl iface-to-br {if_name} -> {result:?}");
+    Ok(result)
+}
+
+async fn call_ovs_list_bridge_interfaces(bridge_name: &str) -> anyhow::Result<IndexSet<String>> {
+    debug!("ovs-vsctl list-ifaces {bridge_name}");
+
+    let output = tokio::process::Command::new("ovs-vsctl")
+        .args(["--timeout=5", "list-ifaces", bridge_name])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("ovs-vsctl list-ports failed: {stderr}");
+    }
+
+    let result = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .collect();
+
+    debug!("ovs-vsctl list-ifaces {bridge_name} -> {result:?}");
     Ok(result)
 }
 
