@@ -1035,6 +1035,12 @@ cargo bench -p ieee1905 --bench cmdu_handler_bench -- node_present
 cargo bench -p ieee1905 --bench codec_parse_bench -- codec_parse_cmdu
 ```
 
+### Memory usage reports
+
+This repository includes a GitHub Actions workflow (`.github/workflows/rust-rss-usage-check.yml`) that runs on pull requests targeting `develop` and posts/updates a sticky PR comment with memory usage statistics (this requires a non-fork PR; on forks the comment step cannot write and will fail unless skipped).
+
+The report is generated on the Ubuntu runner after `ieee1905` has been running for 5 seconds and includes `/proc/<pid>/status` fields such as `VmSize`, `VmRSS`, `VmHWM`, `RssAnon`, and `RssFile`.
+
 ## 📦 Artifact Exchange Service
 
 Artifacts can be transferred automatically between the controller and the agent as an auxiliary service.

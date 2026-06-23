@@ -20,26 +20,27 @@
 #![deny(warnings)]
 #![allow(clippy::too_many_arguments)]
 
+use crate::artifact_exchange_service::client::{
+    ArtifactExchangeClient, ArtifactExchangeClientFactory,
+};
 use crate::cmdu_codec::{ControlUrl, LinkMetricRx, LinkMetricTx};
+use crate::interface_manager::get_interfaces;
 use crate::linux::if_link::RtnlLinkStats64;
 use crate::lldpdu::PortId;
 use crate::{
-    artifact_exchange_service::client::ArtifactExchangeClient,
+    cmdu::IEEE1905Neighbor, interface_manager::get_forwarding_interface_mac, next_task_id,
+};
+use crate::{
     cmdu_codec::{
         CMDUFragmentation, DeviceIdentificationType, Ieee1905ProfileVersion, LinkMetricQuery,
         MediaType, MediaTypeSpecialInfo, Profile2ApCapability, SupportedFreqBand,
     },
     spawn_named,
 };
-use crate::{
-    artifact_exchange_service::client::ArtifactExchangeClientFactory,
-    interface_manager::get_interfaces,
-};
-use crate::{
-    cmdu::IEEE1905Neighbor, interface_manager::get_forwarding_interface_mac, next_task_id,
-};
+
+#[cfg(feature = "topology_ui")]
 use crossterm::{
-    event::{self, KeyCode},
+    event::EventStream,
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -47,6 +48,7 @@ use indexmap::IndexMap;
 use neli::consts::rtnl::Iff;
 use parking_lot::Mutex;
 use pnet::datalink::MacAddr;
+#[cfg(feature = "topology_ui")]
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -60,7 +62,6 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
 use tokio::{
     sync::RwLock,
-    task::yield_now,
     time::{Duration, Instant, interval},
 };
 use tokio_util::sync::CancellationToken;
@@ -681,10 +682,10 @@ impl TopologyDatabase {
                 if let StateLocal::ConvergingLocal(when) = node.metadata.node_state_local
                     && now.duration_since(when) >= Duration::from_secs(5)
                 {
-                    debug!(
+                    info!(
                         al_mac = ?al_mac,
                         state = ?node.metadata.last_update,
-                        "Removing node stuck in local convergence for too long"
+                        "Removing node stuck in local convergence for too long",
                     );
                     return false; // Remove from database
                 }
@@ -693,10 +694,10 @@ impl TopologyDatabase {
                 if let StateRemote::ConvergingRemote(when) = node.metadata.node_state_remote
                     && now.duration_since(when) >= Duration::from_secs(5)
                 {
-                    debug!(
+                    info!(
                         al_mac = ?al_mac,
                         state = ?node.metadata.last_update,
-                        "Removing node stuck in remote convergence for too long"
+                        "Removing node stuck in remote convergence for too long",
                     );
                     return false; // Remove from database
                 }
@@ -704,7 +705,11 @@ impl TopologyDatabase {
                 // Remove nodes that have been inactive
                 let elapsed = now.duration_since(node.metadata.last_seen);
                 if elapsed >= Duration::from_secs(60) {
-                    tracing::debug!(al_mac = ?al_mac, "Removing node due to timeout");
+                    info!(
+                        al_mac = ?al_mac,
+                        state = ?node.metadata.last_update,
+                        "Removing node due to timeout",
+                    );
                     return false; // Remove from database
                 }
 
@@ -1129,21 +1134,21 @@ impl TopologyDatabase {
         false
     }
 
+    #[cfg(feature = "topology_ui")]
     pub async fn start_topology_cli(self: Arc<Self>) -> std::io::Result<()> {
         enable_raw_mode()?;
         let mut stdout = std::io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
+        let mut event_stream = EventStream::new();
 
         loop {
             let local_mac = self.al_mac_address.to_string();
             let interfaces = self.local_interface_list.read().await.clone();
             let nodes = {
                 let lock = self.nodes.read().await;
-                lock.iter()
-                    .map(|(k, v)| (*k, Ieee1905Node::from(v)))
-                    .collect::<Vec<_>>()
+                lock.values().map(Ieee1905Node::from).collect::<Vec<_>>()
             };
 
             let mut al_sap_enabled = None;
@@ -1216,7 +1221,7 @@ impl TopologyDatabase {
                     .title("IEEE 1905 Devices")
                     .borders(Borders::ALL);
 
-                let rows = nodes.iter().map(|(mac, node)| {
+                let rows = nodes.iter().map(|node| {
                     let destination_mac = node
                         .device_data
                         .destination_mac
@@ -1254,7 +1259,7 @@ impl TopologyDatabase {
                     let last_seen_secs = node.metadata.last_seen.elapsed().as_secs();
 
                     Row::new(vec![
-                        mac.to_string(),
+                        node.device_data.al_mac.to_string(),
                         format!("{:?}", node.metadata.node_state_local),
                         format!("{:?}", node.metadata.node_state_remote),
                         format!("{}s ago", last_seen_secs),
@@ -1303,11 +1308,10 @@ impl TopologyDatabase {
                 f.render_widget(paragraph3, chunks[2]);
             })?;
 
-            yield_now().await;
-
-            if event::poll(Duration::from_millis(500))?
-                && let event::Event::Key(key) = event::read()?
-                && key.code == KeyCode::Char('q')
+            let event_future = futures::StreamExt::next(&mut event_stream);
+            let event_timeout = tokio::time::timeout(Duration::from_millis(500), event_future);
+            if let Ok(Some(Ok(crossterm::event::Event::Key(event)))) = event_timeout.await
+                && event.code == crossterm::event::KeyCode::Char('q')
             {
                 break;
             }

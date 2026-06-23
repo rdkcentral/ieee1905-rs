@@ -171,7 +171,7 @@ impl AlServiceAccessPoint {
         tracing::info!("Data socket listening at {:?}", data_path);
 
         // Notify systemd (when used) that we are ready to serve
-        let _ = sd_notify::notify(false, &[NotifyState::Ready]);
+        let _ = sd_notify::notify(&[NotifyState::Ready]);
 
         // Accept client connections (control and data)
         tracing::debug!("Waiting for sockets");
