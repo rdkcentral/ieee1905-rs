@@ -19,12 +19,14 @@
 
 #![deny(warnings)]
 pub mod al_sap;
+pub mod artifact_exchange_service;
 pub mod cmdu_codec;
 pub mod cmdu_handler;
 pub mod cmdu_message_id_generator;
 pub mod cmdu_observer;
 pub mod cmdu_proxy;
 pub mod cmdu_reassembler;
+#[cfg(feature = "crypto")]
 pub mod crypto_engine;
 pub mod ethernet_subject_reception;
 pub mod ethernet_subject_transmission;
@@ -57,13 +59,6 @@ pub mod cmdu {
     pub use crate::tlv_cmdu_codec::TLV;
 }
 
-pub mod artifact_exchange_service {
-    pub mod client;
-    mod common;
-    mod fs_quota_aware_storage;
-    pub mod server;
-}
-
 pub use cmdu_message_id_generator::MessageIdGenerator;
 pub use cmdu_observer::CMDUObserver;
 pub use ethernet_subject_reception::EthernetReceiver;
@@ -88,10 +83,17 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    tokio::task::Builder::new()
+    #[cfg(feature = "enable_tokio_console")]
+    let handle = tokio::task::Builder::new()
         .name(name.as_ref())
         .spawn(future)
-        .expect("runtime is dead")
+        .expect("runtime is dead");
+    #[cfg(not(feature = "enable_tokio_console"))]
+    let handle = {
+        let _ = name;
+        tokio::spawn(future)
+    };
+    handle
 }
 
 #[track_caller]
@@ -104,10 +106,17 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    tokio::task::Builder::new()
+    #[cfg(feature = "enable_tokio_console")]
+    let handle = tokio::task::Builder::new()
         .name(name.as_ref())
         .spawn_on(future, runtime)
-        .expect("runtime is dead")
+        .expect("runtime is dead");
+    #[cfg(not(feature = "enable_tokio_console"))]
+    let handle = {
+        let _ = name;
+        runtime.spawn(future)
+    };
+    handle
 }
 
 #[track_caller]
@@ -121,12 +130,24 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    let task = set.build_task().name(name.as_ref());
-    let result = match span {
-        None => task.spawn(future),
-        Some(e) => task.spawn(future.instrument(e)),
+    #[cfg(feature = "enable_tokio_console")]
+    let handle = {
+        let task = set.build_task().name(name.as_ref());
+        let result = match span {
+            None => task.spawn(future),
+            Some(e) => task.spawn(future.instrument(e)),
+        };
+        result.expect("runtime is dead")
     };
-    result.expect("runtime is dead")
+    #[cfg(not(feature = "enable_tokio_console"))]
+    let handle = {
+        let _ = name;
+        match span {
+            None => set.spawn(future),
+            Some(e) => set.spawn(future.instrument(e)),
+        }
+    };
+    handle
 }
 
 #[track_caller]
@@ -140,8 +161,16 @@ where
     F: Send + 'static,
     T: Send + 'static,
 {
-    set.build_task()
+    #[cfg(feature = "enable_tokio_console")]
+    let handle = set
+        .build_task()
         .name(name.as_ref())
         .spawn_blocking(function)
-        .expect("runtime is dead")
+        .expect("runtime is dead");
+    #[cfg(not(feature = "enable_tokio_console"))]
+    let handle = {
+        let _ = name;
+        set.spawn_blocking(function)
+    };
+    handle
 }
