@@ -19,24 +19,24 @@
 
 #![deny(warnings)]
 
+use nom::{
+    bytes::complete::take, error::{Error, ErrorKind},
+    number::complete::{be_i8, be_u16, be_u32, be_u8},
+    IResult,
+    Parser,
+};
 // External crates
 use nom::{Err as NomErr, Needed};
-use nom::{
-    IResult, Parser,
-    bytes::complete::take,
-    error::{Error, ErrorKind},
-    number::complete::{be_i8, be_u8, be_u16, be_u32},
-};
 
+// Internal modules
+use crate::cmdu_reassembler::CmduReassemblyError;
+use crate::tlv_cmdu_codec::{TLVTrait, TLV};
 use anyhow::bail;
 use nom::combinator::{all_consuming, cond};
 use nom::multi::{count, length_count, many0};
 use pnet::datalink::MacAddr;
 use std::fmt::{Debug, Display, Formatter};
 use std::net::Ipv6Addr;
-// Internal modules
-use crate::cmdu_reassembler::CmduReassemblyError;
-use crate::tlv_cmdu_codec::{TLV, TLVTrait};
 
 ///////////////////////////////////////////////////////////////////////////
 //DEFINITION OF CMDU TYPES and IEEE1905 TLVs
@@ -59,6 +59,14 @@ pub enum CMDUType {
     GenericPhyResponse,
     ApCapabilityQuery,
     ApCapabilityReport,
+    ProxiedEncapDpp,
+    DirectEncapDpp,
+    BssConfigurationRequest,
+    BssConfigurationResponse,
+    BssConfigurationResult,
+    ChirpNotification,
+    Ieee1905EncapEapol,
+    DppBootstrappingUriNotification,
     Unknown(u16), // To handle unknown or unsupported CMDU types
 }
 
@@ -79,6 +87,14 @@ impl CMDUType {
             0x0012 => CMDUType::GenericPhyResponse,
             0x8001 => CMDUType::ApCapabilityQuery,
             0x8002 => CMDUType::ApCapabilityReport,
+            0x8029 => CMDUType::ProxiedEncapDpp,
+            0x802a => CMDUType::DirectEncapDpp,
+            0x802c => CMDUType::BssConfigurationRequest,
+            0x802d => CMDUType::BssConfigurationResponse,
+            0x802e => CMDUType::BssConfigurationResult,
+            0x802f => CMDUType::ChirpNotification,
+            0x8030 => CMDUType::Ieee1905EncapEapol,
+            0x8031 => CMDUType::DppBootstrappingUriNotification,
             _ => CMDUType::Unknown(value), // For unrecognized CMDU types
         }
     }
@@ -99,6 +115,14 @@ impl CMDUType {
             CMDUType::GenericPhyResponse => 0x0012,
             CMDUType::ApCapabilityQuery => 0x8001,
             CMDUType::ApCapabilityReport => 0x8002,
+            CMDUType::ProxiedEncapDpp => 0x8029,
+            CMDUType::DirectEncapDpp => 0x802a,
+            CMDUType::BssConfigurationRequest => 0x802c,
+            CMDUType::BssConfigurationResponse => 0x802d,
+            CMDUType::BssConfigurationResult => 0x802e,
+            CMDUType::ChirpNotification => 0x802f,
+            CMDUType::Ieee1905EncapEapol => 0x8030,
+            CMDUType::DppBootstrappingUriNotification => 0x8031,
             CMDUType::Unknown(value) => value, // Return the unknown value as-is
         }
     }
@@ -155,10 +179,10 @@ pub enum IEEE1905TLVType {
     LinkMetricResultCode,
     SearchedRole,
     SupportedRole,
-    GenericPhyDeviceInformation,
     SupportedFreqBand,
-    Ipv6,
+    GenericPhyDeviceInformation,
     DeviceIdentificationType,
+    Ipv6,
     Ieee1905ProfileVersion,
     SupportedService,
     ClientAssociation,
@@ -167,10 +191,19 @@ pub enum IEEE1905TLVType {
     EncryptedPayload,
     MultiApProfile,
     Profile2ApCapability,
+    BssConfigurationReport,
+    BssConfigurationRequest,
+    BssConfigurationResponse,
+    AkmSuiteCapabilities,
+    Ieee1905EncapDpp,
+    Ieee1905EncapEapol,
+    DppBootstrappingUriNotification,
+    DppMessage,
+    DppCceIndication,
+    DppChirpValue,
     DeviceInventory,
     Unknown(u8), // To handle unknown or unsupported TLV types
 }
-
 impl IEEE1905TLVType {
     // Convert a u8 into the appropriate TLVType enum variant
     pub fn from_u8(value: u8) -> Self {
@@ -189,10 +222,10 @@ impl IEEE1905TLVType {
             0x0c => IEEE1905TLVType::LinkMetricResultCode,
             0x0d => IEEE1905TLVType::SearchedRole,
             0x0f => IEEE1905TLVType::SupportedRole,
-            0x14 => IEEE1905TLVType::GenericPhyDeviceInformation,
             0x10 => IEEE1905TLVType::SupportedFreqBand,
-            0x18 => IEEE1905TLVType::Ipv6,
+            0x14 => IEEE1905TLVType::GenericPhyDeviceInformation,
             0x15 => IEEE1905TLVType::DeviceIdentificationType,
+            0x18 => IEEE1905TLVType::Ipv6,
             0x1a => IEEE1905TLVType::Ieee1905ProfileVersion,
             0x80 => IEEE1905TLVType::SupportedService,
             0x92 => IEEE1905TLVType::ClientAssociation,
@@ -201,6 +234,16 @@ impl IEEE1905TLVType {
             0xac => IEEE1905TLVType::EncryptedPayload,
             0xb3 => IEEE1905TLVType::MultiApProfile,
             0xb4 => IEEE1905TLVType::Profile2ApCapability,
+            0xb7 => IEEE1905TLVType::BssConfigurationReport,
+            0xbb => IEEE1905TLVType::BssConfigurationRequest,
+            0xbd => IEEE1905TLVType::BssConfigurationResponse,
+            0xcc => IEEE1905TLVType::AkmSuiteCapabilities,
+            0xcd => IEEE1905TLVType::Ieee1905EncapDpp,
+            0xce => IEEE1905TLVType::Ieee1905EncapEapol,
+            0xcf => IEEE1905TLVType::DppBootstrappingUriNotification,
+            0xd1 => IEEE1905TLVType::DppMessage,
+            0xd2 => IEEE1905TLVType::DppCceIndication,
+            0xd3 => IEEE1905TLVType::DppChirpValue,
             0xd4 => IEEE1905TLVType::DeviceInventory,
             _ => IEEE1905TLVType::Unknown(value), // For unrecognized types
         }
@@ -223,10 +266,10 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::LinkMetricResultCode => 0x0c,
             IEEE1905TLVType::SearchedRole => 0x0d,
             IEEE1905TLVType::SupportedRole => 0x0f,
-            IEEE1905TLVType::GenericPhyDeviceInformation => 0x14,
-            IEEE1905TLVType::Ipv6 => 0x18,
             IEEE1905TLVType::SupportedFreqBand => 0x10,
+            IEEE1905TLVType::GenericPhyDeviceInformation => 0x14,
             IEEE1905TLVType::DeviceIdentificationType => 0x15,
+            IEEE1905TLVType::Ipv6 => 0x18,
             IEEE1905TLVType::Ieee1905ProfileVersion => 0x1a,
             IEEE1905TLVType::SupportedService => 0x80,
             IEEE1905TLVType::ClientAssociation => 0x92,
@@ -235,6 +278,16 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::EncryptedPayload => 0xac,
             IEEE1905TLVType::MultiApProfile => 0xb3,
             IEEE1905TLVType::Profile2ApCapability => 0xb4,
+            IEEE1905TLVType::BssConfigurationReport => 0xb7,
+            IEEE1905TLVType::BssConfigurationRequest => 0xbb,
+            IEEE1905TLVType::BssConfigurationResponse => 0xbd,
+            IEEE1905TLVType::AkmSuiteCapabilities => 0xcc,
+            IEEE1905TLVType::Ieee1905EncapDpp => 0xcd,
+            IEEE1905TLVType::Ieee1905EncapEapol => 0xce,
+            IEEE1905TLVType::DppBootstrappingUriNotification => 0xcf,
+            IEEE1905TLVType::DppMessage => 0xd1,
+            IEEE1905TLVType::DppCceIndication => 0xd2,
+            IEEE1905TLVType::DppChirpValue => 0xd3,
             IEEE1905TLVType::DeviceInventory => 0xd4,
             IEEE1905TLVType::Unknown(value) => value, // Return the unknown value as-is
         }
@@ -1286,6 +1339,405 @@ impl TLVTrait for EncryptedPayload {
 }
 
 ///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct AkmSuiteSelector {
+    pub oui: [u8; 3],
+    pub akm_suite_type: u8,
+}
+
+impl AkmSuiteSelector {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, oui) = take_n_bytes::<3>(input)?;
+        let (input, akm_suite_type) = be_u8(input)?;
+
+        let this = Self {
+            oui: *oui,
+            akm_suite_type,
+        };
+
+        Ok((input, this))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::with_capacity(4);
+        vec.extend(self.oui);
+        vec.extend(self.akm_suite_type.to_be_bytes());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct AkmSuiteCapabilities {
+    pub backhaul_selectors: Vec<AkmSuiteSelector>,
+    pub fronthaul_selectors: Vec<AkmSuiteSelector>,
+}
+
+impl TLVTrait for AkmSuiteCapabilities {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::AkmSuiteCapabilities;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, backhaul_selectors) = length_count(u8, AkmSuiteSelector::parse).parse(input)?;
+        let (input, fronthaul_selectors) =
+            length_count(u8, AkmSuiteSelector::parse).parse(input)?;
+
+        let this = Self {
+            backhaul_selectors,
+            fronthaul_selectors,
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend((self.backhaul_selectors.len() as u8).to_be_bytes());
+        vec.extend(self.backhaul_selectors.iter().flat_map(|e| e.serialize()));
+        vec.extend((self.fronthaul_selectors.len() as u8).to_be_bytes());
+        vec.extend(self.fronthaul_selectors.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct Ieee1905EncapEapol {
+    pub eapol_frame: Vec<u8>,
+}
+
+impl TLVTrait for Ieee1905EncapEapol {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::Ieee1905EncapEapol;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let eapol_frame = input.to_vec();
+        Ok((&[], Self { eapol_frame }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        self.eapol_frame.clone()
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct Ieee1905EncapDpp {
+    pub dpp_frame_indicator: bool,
+    pub destination_sta_mac: Option<MacAddr>,
+    pub frame_type: u8,
+    pub encapsulated_frame: Vec<u8>,
+}
+
+impl TLVTrait for Ieee1905EncapDpp {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::Ieee1905EncapDpp;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, flags) = be_u8(input)?;
+        let enrollee_mac_present = ((flags >> 7) & 0b1) == 1;
+        let dpp_frame_indicator = ((flags >> 6) & 0b1) == 1;
+        let (input, destination_sta_mac) =
+            cond(enrollee_mac_present, take_mac_addr).parse(input)?;
+        let (input, frame_type) = be_u8(input)?;
+        let (input, frame_len) = be_u16(input)?;
+        let (input, encapsulated_frame) = take(frame_len as usize).parse(input)?;
+
+        let this = Self {
+            dpp_frame_indicator,
+            destination_sta_mac,
+            frame_type,
+            encapsulated_frame: encapsulated_frame.to_vec(),
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut flags = 0u8;
+        if self.destination_sta_mac.is_some() {
+            flags |= 1 << 7;
+        }
+        if self.dpp_frame_indicator {
+            flags |= 1 << 6;
+        }
+
+        let mut vec = Vec::new();
+        vec.extend(flags.to_be_bytes());
+        vec.extend(self.destination_sta_mac.iter().flat_map(|e| e.octets()));
+        vec.extend(self.frame_type.to_be_bytes());
+        vec.extend((self.encapsulated_frame.len() as u16).to_be_bytes());
+        vec.extend(self.encapsulated_frame.as_slice());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct DppBootstrappingUriNotification {
+    pub ruid: MacAddr,
+    pub bssid: MacAddr,
+    pub backhaul_sta_address: MacAddr,
+    pub dpp_uri: String,
+}
+
+impl TLVTrait for DppBootstrappingUriNotification {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::DppBootstrappingUriNotification;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, ruid) = take_mac_addr(input)?;
+        let (input, bssid) = take_mac_addr(input)?;
+        let (input, backhaul_sta_address) = take_mac_addr(input)?;
+        let (input, dpp_uri) = take_utf8(input, input.len())?;
+
+        let this = Self {
+            ruid,
+            bssid,
+            backhaul_sta_address,
+            dpp_uri,
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.ruid.octets());
+        vec.extend(self.bssid.octets());
+        vec.extend(self.backhaul_sta_address.octets());
+        vec.extend(self.dpp_uri.as_bytes());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct DppMessage {
+    pub dpp_frame: Vec<u8>,
+}
+
+impl TLVTrait for DppMessage {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::DppMessage;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let dpp_frame = input.to_vec();
+        Ok((&[], Self { dpp_frame }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        self.dpp_frame.clone()
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct DppCceIndication {
+    pub advertise_cce: bool,
+}
+
+impl TLVTrait for DppCceIndication {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::DppCceIndication;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, advertise_cce) = be_u8(input)?;
+
+        let this = Self {
+            advertise_cce: advertise_cce != 0,
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        vec![self.advertise_cce as u8]
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct DppChirpValue {
+    pub hash_validity: bool,
+    pub destination_sta_mac: Option<MacAddr>,
+    pub hash_value: Vec<u8>,
+}
+
+impl TLVTrait for DppChirpValue {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::DppChirpValue;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, flags) = be_u8(input)?;
+        let enrollee_mac_present = ((flags >> 7) & 0b1) == 1;
+        let hash_validity = ((flags >> 6) & 0b1) == 1;
+        let (input, destination_sta_mac) =
+            cond(enrollee_mac_present, take_mac_addr).parse(input)?;
+        let (input, hash_len) = be_u8(input)?;
+        let (input, hash_value) = take(hash_len as usize).parse(input)?;
+
+        let this = Self {
+            hash_validity,
+            destination_sta_mac,
+            hash_value: hash_value.to_vec(),
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut flags = 0u8;
+        if self.destination_sta_mac.is_some() {
+            flags |= 1 << 7;
+        }
+        if self.hash_validity {
+            flags |= 1 << 6;
+        }
+
+        let mut vec = Vec::new();
+        vec.extend(flags.to_be_bytes());
+        vec.extend(self.destination_sta_mac.iter().flat_map(|e| e.octets()));
+        vec.extend((self.hash_value.len() as u8).to_be_bytes());
+        vec.extend(self.hash_value.as_slice());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct BssConfigurationReportBss {
+    pub bssid: MacAddr,
+    pub backhaul_bss: bool,
+    pub fronthaul_bss: bool,
+    pub ssid: String,
+}
+
+impl BssConfigurationReportBss {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, bssid) = take_mac_addr(input)?;
+        let (input, flags) = be_u8(input)?;
+        let (input, ssid_len) = be_u8(input)?;
+        let (input, ssid) = take_utf8(input, ssid_len as usize)?;
+
+        let this = Self {
+            bssid,
+            backhaul_bss: ((flags >> 7) & 0b1) == 1,
+            fronthaul_bss: ((flags >> 6) & 0b1) == 1,
+            ssid,
+        };
+
+        Ok((input, this))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut flags = 0u8;
+        if self.backhaul_bss {
+            flags |= 1 << 7;
+        }
+        if self.fronthaul_bss {
+            flags |= 1 << 6;
+        }
+
+        let mut vec = Vec::new();
+        vec.extend(self.bssid.octets());
+        vec.extend(flags.to_be_bytes());
+        vec.extend((self.ssid.len() as u8).to_be_bytes());
+        vec.extend(self.ssid.as_bytes());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct BssConfigurationReportRadio {
+    pub ruid: MacAddr,
+    pub bss_list: Vec<BssConfigurationReportBss>,
+}
+
+impl BssConfigurationReportRadio {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, ruid) = take_mac_addr(input)?;
+        let (input, bss_list) = length_count(u8, BssConfigurationReportBss::parse).parse(input)?;
+
+        Ok((input, Self { ruid, bss_list }))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.ruid.octets());
+        vec.extend((self.bss_list.len() as u8).to_be_bytes());
+        vec.extend(self.bss_list.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct BssConfigurationReport {
+    pub radio_list: Vec<BssConfigurationReportRadio>,
+}
+
+impl TLVTrait for BssConfigurationReport {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::BssConfigurationReport;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, radio_list) =
+            length_count(u8, BssConfigurationReportRadio::parse).parse(input)?;
+
+        Ok((input, Self { radio_list }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend((self.radio_list.len() as u8).to_be_bytes());
+        vec.extend(self.radio_list.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct BssConfigurationRequest {
+    pub encapsulated_request: Vec<u8>,
+}
+
+impl TLVTrait for BssConfigurationRequest {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::BssConfigurationRequest;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let this = Self {
+            encapsulated_request: input.to_vec(),
+        };
+        Ok((&[], this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        self.encapsulated_request.clone()
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct BssConfigurationResponse {
+    pub encapsulated_response: Vec<u8>,
+}
+
+impl TLVTrait for BssConfigurationResponse {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::BssConfigurationResponse;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let this = Self {
+            encapsulated_response: input.to_vec(),
+        };
+        Ok((&[], this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        self.encapsulated_response.clone()
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MultiApProfile {
     Profile1,     // 0x01
@@ -2300,6 +2752,17 @@ fn take_ipv6_addr(input: &[u8]) -> IResult<&[u8], Ipv6Addr> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    #[track_caller]
+    fn assert_tlv_round_trip<T>(value: T)
+    where
+        T: TLVTrait + PartialEq + Debug,
+    {
+        let bytes = value.serialize();
+        let (rest, parsed) = T::parse(&bytes).expect("TLV value should parse");
+        assert!(rest.is_empty(), "parser left {} trailing bytes", rest.len());
+        assert_eq!(parsed, value);
+    }
 
     // A helper function for creating some dummy TLV with provided payload
     fn make_dummy_tlv(index: u8, size: usize) -> TLV {
@@ -4507,5 +4970,166 @@ pub mod tests {
             CmduReassemblyError::MissingFragments,
             reassembled.unwrap_err()
         );
+    }
+
+    #[test]
+    fn test_security_onboarding_tlv_type_ids() {
+        let pairs = [
+            (0xb7u8, IEEE1905TLVType::BssConfigurationReport),
+            (0xbb, IEEE1905TLVType::BssConfigurationRequest),
+            (0xbd, IEEE1905TLVType::BssConfigurationResponse),
+            (0xcc, IEEE1905TLVType::AkmSuiteCapabilities),
+            (0xcd, IEEE1905TLVType::Ieee1905EncapDpp),
+            (0xce, IEEE1905TLVType::Ieee1905EncapEapol),
+            (0xcf, IEEE1905TLVType::DppBootstrappingUriNotification),
+            (0xd1, IEEE1905TLVType::DppMessage),
+            (0xd2, IEEE1905TLVType::DppCceIndication),
+            (0xd3, IEEE1905TLVType::DppChirpValue),
+        ];
+        for (id, ty) in pairs {
+            assert_eq!(ty.to_u8(), id);
+            assert_eq!(IEEE1905TLVType::from_u8(id), ty);
+        }
+    }
+
+    #[test]
+    fn test_security_onboarding_cmdu_type_ids() {
+        let pairs = [
+            (0x8029u16, CMDUType::ProxiedEncapDpp),
+            (0x802a, CMDUType::DirectEncapDpp),
+            (0x802c, CMDUType::BssConfigurationRequest),
+            (0x802d, CMDUType::BssConfigurationResponse),
+            (0x802e, CMDUType::BssConfigurationResult),
+            (0x802f, CMDUType::ChirpNotification),
+            (0x8030, CMDUType::Ieee1905EncapEapol),
+            (0x8031, CMDUType::DppBootstrappingUriNotification),
+        ];
+        for (id, ty) in pairs {
+            assert_eq!(ty.to_u16(), id);
+            assert_eq!(CMDUType::from_u16(id), ty);
+        }
+    }
+
+    #[test]
+    fn test_akm_suite_capabilities_round_trip() {
+        assert_tlv_round_trip(AkmSuiteCapabilities {
+            backhaul_selectors: vec![AkmSuiteSelector {
+                oui: [0x50, 0x6f, 0x9a],
+                akm_suite_type: 0x02,
+            }],
+            fronthaul_selectors: vec![
+                AkmSuiteSelector {
+                    oui: [0x00, 0x0f, 0xac],
+                    akm_suite_type: 0x08,
+                },
+                AkmSuiteSelector {
+                    oui: [0x00, 0x0f, 0xac],
+                    akm_suite_type: 0x18,
+                },
+            ],
+        });
+    }
+
+    #[test]
+    fn test_ieee1905_encap_eapol_round_trip() {
+        assert_tlv_round_trip(Ieee1905EncapEapol {
+            eapol_frame: vec![0x02, 0x03, 0x00, 0x5f, 0xde, 0xad, 0xbe, 0xef],
+        });
+    }
+
+    #[test]
+    fn test_ieee1905_encap_dpp_round_trip() {
+        assert_tlv_round_trip(Ieee1905EncapDpp {
+            dpp_frame_indicator: true,
+            destination_sta_mac: Some(MacAddr::new(0x02, 0x11, 0x22, 0x33, 0x44, 0x55)),
+            frame_type: 0x01,
+            encapsulated_frame: vec![0xde, 0xad, 0xbe, 0xef],
+        });
+        assert_tlv_round_trip(Ieee1905EncapDpp {
+            dpp_frame_indicator: false,
+            destination_sta_mac: None,
+            frame_type: 0x00,
+            encapsulated_frame: vec![0x01, 0x02, 0x03],
+        });
+    }
+
+    #[test]
+    fn test_dpp_bootstrapping_uri_notification_round_trip() {
+        assert_tlv_round_trip(DppBootstrappingUriNotification {
+            ruid: MacAddr::new(0x02, 0x00, 0x00, 0x00, 0x00, 0x01),
+            bssid: MacAddr::new(0x02, 0x00, 0x00, 0x00, 0x00, 0x02),
+            backhaul_sta_address: MacAddr::new(0x02, 0x00, 0x00, 0x00, 0x00, 0x03),
+            dpp_uri: "DPP:C:81/1;M:002233445566;K:base64key;;".to_string(),
+        });
+    }
+
+    #[test]
+    fn test_dpp_message_round_trip() {
+        assert_tlv_round_trip(DppMessage {
+            dpp_frame: vec![0x01, 0x02, 0x03, 0x04],
+        });
+    }
+
+    #[test]
+    fn test_dpp_cce_indication_round_trip() {
+        assert_tlv_round_trip(DppCceIndication {
+            advertise_cce: true,
+        });
+        assert_tlv_round_trip(DppCceIndication {
+            advertise_cce: false,
+        });
+    }
+
+    #[test]
+    fn test_dpp_chirp_value_round_trip() {
+        assert_tlv_round_trip(DppChirpValue {
+            hash_validity: true,
+            destination_sta_mac: Some(MacAddr::new(0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee)),
+            hash_value: vec![0x11; 32],
+        });
+        assert_tlv_round_trip(DppChirpValue {
+            hash_validity: false,
+            destination_sta_mac: None,
+            hash_value: vec![0x22; 32],
+        });
+    }
+
+    #[test]
+    fn test_bss_configuration_report_round_trip() {
+        assert_tlv_round_trip(BssConfigurationReport {
+            radio_list: vec![
+                BssConfigurationReportRadio {
+                    ruid: MacAddr::new(0x02, 0x00, 0x00, 0x00, 0x10, 0x01),
+                    bss_list: vec![
+                        BssConfigurationReportBss {
+                            bssid: MacAddr::new(0x02, 0x00, 0x00, 0x00, 0x10, 0x02),
+                            backhaul_bss: true,
+                            fronthaul_bss: false,
+                            ssid: "backhaul-ssid".to_string(),
+                        },
+                        BssConfigurationReportBss {
+                            bssid: MacAddr::new(0x02, 0x00, 0x00, 0x00, 0x10, 0x03),
+                            backhaul_bss: false,
+                            fronthaul_bss: true,
+                            ssid: "home-wifi".to_string(),
+                        },
+                    ],
+                },
+                BssConfigurationReportRadio {
+                    ruid: MacAddr::new(0x02, 0x00, 0x00, 0x00, 0x20, 0x01),
+                    bss_list: vec![],
+                },
+            ],
+        });
+    }
+
+    #[test]
+    fn test_bss_configuration_request_response_round_trip() {
+        assert_tlv_round_trip(BssConfigurationRequest {
+            encapsulated_request: vec![0x7b, 0x22, 0x6b, 0x65, 0x79, 0x22, 0x7d],
+        });
+        assert_tlv_round_trip(BssConfigurationResponse {
+            encapsulated_response: vec![0x7b, 0x7d],
+        });
     }
 }
