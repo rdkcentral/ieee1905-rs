@@ -1041,6 +1041,24 @@ This repository includes a GitHub Actions workflow (`.github/workflows/rust-rss-
 
 The report is generated on the Ubuntu runner after `ieee1905` has been running for 5 seconds and includes `/proc/<pid>/status` fields such as `VmSize`, `VmRSS`, `VmHWM`, `RssAnon`, and `RssFile`.
 
+#### GNU / glibc
+
+<p align="left">
+  <img
+    src="docs/footprint/ieee1905_gnu_vs_gnu_artifact_exchange_2026-06-25.png"
+    alt="IEEE 1905 GNU artifact exchange footprint"
+    width="850">
+</p>
+
+#### musl
+
+<p align="left">
+  <img
+    src="docs/footprint/ieee1905_musl_vs_musl_artifact_exchange_2026-06-25.png"
+    alt="IEEE 1905 musl artifact exchange footprint"
+    width="850">
+</p>
+
 ## 📦 Artifact Exchange Service
 
 Artifacts can be transferred automatically between the controller and the agent as an auxiliary service.
