@@ -123,8 +123,8 @@ async fn main() -> anyhow::Result<()> {
         };
 
     // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
-    let Some(if_info) = get_interface_info(&cli.interface) else {
-        anyhow::bail!("failed to get local interface {}", cli.interface);
+    let Some(if_info) = get_interface_info(&forwarding_interface) else {
+        anyhow::bail!("failed to get local interface {}", forwarding_interface);
     };
 
     let al_mac = if_info.mac;
@@ -132,7 +132,7 @@ async fn main() -> anyhow::Result<()> {
 
     // // Initialize Database
 
-    let topology_db = TopologyDatabase::get_instance(al_mac, &cli.interface);
+    let topology_db = TopologyDatabase::get_instance(al_mac, &forwarding_interface);
 
     // Upon every loop restart topology database role can change
     topology_db.set_local_role(None).await;
@@ -218,7 +218,7 @@ async fn main() -> anyhow::Result<()> {
     let cmdu_observer = CMDUObserver::new(Arc::clone(&cmdu_handler));
     // FLAG to enable and disable LLDP
     // Initialize LLDP Observer with chassis_id assuming al_mac an chassis id have the same value as idicated in IEEE1905
-    let lldp_observer = LLDPObserver::new(chassis_id, cli.interface.clone());
+    let lldp_observer = LLDPObserver::new(chassis_id, forwarding_interface.clone());
 
     tracing::info!("LLDP and CMDU observers initilized with local MAC: {al_mac}");
 
@@ -234,7 +234,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Sart of the discovery process
 
-    for interface in get_lldp_compatible_interfaces(&cli.interface).await {
+    for interface in get_lldp_compatible_interfaces(&forwarding_interface).await {
         tracing::info!(
             no_receiver = cli.no_lldp_receivers,
             "Starting LLDP Discovery on {}/{}",

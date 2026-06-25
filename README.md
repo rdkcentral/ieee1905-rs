@@ -521,7 +521,7 @@ journalctl -u ieee1905.service
 
 ### Service command line arguments
 
-By default service run with topology CLI disabled, info log level, listening on ```eth0``` interface and unix sockets named ```/tmp/al_control_socket``` and ```/tmp/al_data_socket```.
+By default, the service runs with the topology CLI disabled, info log level, listening on `eth0` interface, and Unix sockets named `/tmp/al_control_socket` and `/tmp/al_data_socket`.
 
 #### Enable topology CLI
 
@@ -691,7 +691,7 @@ Change unix sockets to ```ctrl.sock``` and ```data.sock```
 
 #### Change listening interface
 
-Change interface to ```eth1```. IEEE1905 uses this interface to derive the related bridge and filter the local interface list accordingly.
+Change interface to `eth1`. IEEE1905 uses this interface to derive the related bridge and filter the local interface list accordingly.
 
 ```shell
 /usr/bin/ieee1905 -i eth1

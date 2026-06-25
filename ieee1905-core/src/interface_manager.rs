@@ -140,7 +140,7 @@ pub async fn get_interfaces(
     // filter out interfaces that are not bridged with the forwarding interfaces
     filter_interfaces_by_bridge(forwarding_if_name, &mut links).await;
 
-    // filter out all virtual interfaces
+    // filter out veth (virtual) interfaces
     links.retain(|_, e| e.link_kind.as_deref() != Some("veth"));
 
     match get_wireless_interfaces(&mut links).await {
@@ -1026,7 +1026,7 @@ async fn call_ovs_list_bridge_interfaces(bridge_name: &str) -> anyhow::Result<In
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("ovs-vsctl list-ports failed: {stderr}");
+        anyhow::bail!("ovs-vsctl list-ifaces {bridge_name} failed: {stderr}");
     }
 
     let result = String::from_utf8_lossy(&output.stdout)
