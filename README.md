@@ -245,7 +245,7 @@ Based on the capability of devices to process IEEE1905 CMDU packets we can disti
 The topology construction process in IEEE1905 consists of the following steps:
 
 1. LLDP discovery:
-Before CMDU packet exchange, IEEE1905 will trigger LLDP protocol to discover neighbors with bridging capabilities, and include it as part of the topology graph. LLDPDU's use a link local multicast address being consumed by the platform bridge, such as a Linux bridge or OVS bridge, so in RDK-B use case will not reach the IEEE1905 service.
+Before CMDU packet exchange, IEEE1905 will trigger LLDP protocol to discover neighbors with bridging capabilities, and include it as part of the topology graph. LLDPDUs use a link-local multicast address being consumed by the platform bridge, such as a Linux bridge or OVS bridge, so in the RDK-B use case they will not reach the IEEE1905 service.
 
 2. Topology Discovery Advertisement:
 Each IEEE1905 device periodically broadcasts 1905 Topology Discovery Messages on all its available network interfaces (Wi-Fi, Ethernet, MoCA, PLC).
@@ -525,7 +525,7 @@ By default, the service runs with the topology CLI disabled, info log level, lis
 
 #### Enable topology CLI
 
-By default topology CLI is disabled.
+By default, topology CLI is disabled and requires `topology_ui` feature flag.
 When topology CLI is enabled. Log files are saved to a file and will not appear on standard output.
 
 ```shell

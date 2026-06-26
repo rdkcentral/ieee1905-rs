@@ -81,11 +81,11 @@ pub fn get_local_al_mac(interface_name: String) -> Option<MacAddr> {
 
 pub fn get_interface_info(if_name: &str) -> Option<InterfaceInfo> {
     let interfaces = datalink::interfaces();
-    let interface = interfaces.iter().find(|e| e.name == if_name)?;
+    let interface = interfaces.into_iter().find(|e| e.name == if_name)?;
     Some(InterfaceInfo {
         mac: interface.mac?,
         if_index: interface.index,
-        if_name: if_name.to_string(),
+        if_name: interface.name,
     })
 }
 
@@ -105,18 +105,6 @@ pub fn get_forwarding_interface_mac(interface_name: &str) -> MacAddr {
         tracing::debug!("No Ethernet interface found for forwarding, using default.");
         MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
     }
-}
-
-/// **Returns `Some(String)` if found, otherwise `None`.**
-pub fn get_forwarding_interface_name(interface_name: String) -> Option<String> {
-    // Fetch all network interfaces
-    let interfaces = datalink::interfaces();
-
-    // Find the first Ethernet interface (`ethX`) and return its name
-    interfaces
-        .iter()
-        .find(|iface| iface.name.starts_with(&interface_name))
-        .map(|iface| iface.name.clone()) // Extract and return interface name
 }
 
 /// **Gets the MAC address of a given network interface**
@@ -187,7 +175,7 @@ async fn filter_interfaces_by_bridge(
     if filter_interfaces_by_linux_bridge(forwarding_if_name, links) {
         return;
     }
-    debug!("forwarding interface has not bridge, removing others");
+    debug!("forwarding interface has no bridge, removing others");
     links.retain(|_, e| e.if_name == forwarding_if_name);
 }
 
@@ -998,7 +986,7 @@ async fn call_ovs_interface_to_bridge(if_name: &str) -> anyhow::Result<String> {
     debug!("ovs-vsctl iface-to-br {if_name}");
 
     let output = tokio::process::Command::new("ovs-vsctl")
-        .args(["--timeout=5", "iface-to-br", if_name])
+        .args(["--timeout=5", "--", "iface-to-br", if_name])
         .output()
         .await?;
 
@@ -1016,7 +1004,7 @@ async fn call_ovs_list_bridge_interfaces(bridge_name: &str) -> anyhow::Result<In
     debug!("ovs-vsctl list-ifaces {bridge_name}");
 
     let output = tokio::process::Command::new("ovs-vsctl")
-        .args(["--timeout=5", "list-ifaces", bridge_name])
+        .args(["--timeout=5", "--", "list-ifaces", bridge_name])
         .output()
         .await?;
 

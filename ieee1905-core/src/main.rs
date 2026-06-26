@@ -112,20 +112,12 @@ async fn main() -> anyhow::Result<()> {
 
     let mut join_sets = Vec::new();
 
-    //Set AL MAC & test MAC addresses
-    let forwarding_interface =
-        if let Some(iface) = get_forwarding_interface_name(cli.interface.clone()) {
-            tracing::info!("Forwarding interface: {}", iface);
-            iface
-        } else {
-            tracing::debug!("No Ethernet interface found for forwarding, using default.");
-            "eth_default".to_string() // Default interface name if none found
-        };
-
-    // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
-    let Some(if_info) = get_interface_info(&forwarding_interface) else {
-        anyhow::bail!("failed to get local interface {}", forwarding_interface);
+    let Some(if_info) = get_interface_info(&cli.interface) else {
+        anyhow::bail!("failed to get local interface {}", cli.interface);
     };
+
+    let forwarding_interface = if_info.if_name.clone();
+    tracing::info!("Forwarding interface: {forwarding_interface}");
 
     let al_mac = if_info.mac;
     tracing::info!("AL MAC address: {}", al_mac);
