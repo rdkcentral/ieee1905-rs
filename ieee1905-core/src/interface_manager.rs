@@ -184,50 +184,11 @@ async fn filter_interfaces_by_bridge(
     if filter_interfaces_by_ovs_bridge(forwarding_if_name, links).await {
         return;
     }
-
-    let Some(interface) = links.values().find(|e| e.if_name == forwarding_if_name) else {
-        return warn!("forwarding interface {forwarding_if_name:?} not found, filtering skipped");
-    };
-
-    let forwarding_bridge_if_index = match interface.link_kind.as_deref() {
-        Some("bridge") => {
-            debug!("forwarding interface {forwarding_if_name:?} is a bridge, filtering by it");
-            interface.if_index as u32
-        }
-        Some("veth") if interface.bridge_if_index.is_none() => {
-            let Some(pair_index) = interface.link_if_index else {
-                return warn!("veth interface {} doesn't have a pair", interface.if_name);
-            };
-            let Some(pair_interface) = links.get(&pair_index) else {
-                return warn!("veth interface {} pair not found", interface.if_name);
-            };
-            let Some(pair_bridge_if_index) = pair_interface.bridge_if_index else {
-                return;
-            };
-            let Some(pair_bridge) = links.get(&(pair_bridge_if_index as i32)) else {
-                return warn!("cannot find bridge interface {pair_bridge_if_index}");
-            };
-            if pair_bridge.link_kind.as_deref() != Some("bridge") {
-                return warn!("interface {:?} is not a bridge", pair_bridge.if_name);
-            }
-
-            debug!(
-                "forwarding interface {forwarding_if_name:?} is a veth, filtering by its bridge {:?}",
-                pair_bridge.if_name,
-            );
-            pair_bridge_if_index
-        }
-        _ => {
-            let Some(bridge_if_index) = interface.bridge_if_index else {
-                return;
-            };
-
-            debug!("forwarding interface {forwarding_if_name:?} has a bridge, filtering by it");
-            bridge_if_index
-        }
-    };
-
-    links.retain(|_, e| e.bridge_if_index == Some(forwarding_bridge_if_index));
+    if filter_interfaces_by_linux_bridge(forwarding_if_name, links) {
+        return;
+    }
+    debug!("forwarding interface has not bridge, removing others");
+    links.retain(|_, e| e.if_name == forwarding_if_name);
 }
 
 async fn filter_interfaces_by_ovs_bridge(
@@ -262,6 +223,41 @@ async fn filter_interfaces_by_ovs_bridge(
 
     debug!("filtering interfaces by {bridge:?} ovs bridge");
     links.retain(|_, e| interfaces.contains(&e.if_name));
+    true
+}
+
+fn filter_interfaces_by_linux_bridge(
+    forwarding_if_name: &str,
+    links: &mut IndexMap<i32, LinkInterfaceInfo>,
+) -> bool {
+    let Some(mut interface) = links.values().find(|e| e.if_name == forwarding_if_name) else {
+        warn!("forwarding interface {forwarding_if_name:?} not found, filtering skipped");
+        return false;
+    };
+
+    // select other veth pair endpoint if current endpoint is not connected to the bridge
+    if interface.link_kind.as_deref() == Some("veth")
+        && interface.bridge_if_index.is_none()
+        && let Some(pair_if_index) = interface.link_if_index
+        && let Some(pair_interface) = links.get(&pair_if_index)
+    {
+        interface = pair_interface;
+    }
+
+    // find interface bridge
+    let bridge = if interface.link_kind.as_deref() == Some("bridge") {
+        interface
+    } else if let Some(bridge_if_index) = interface.bridge_if_index
+        && let Some(bridge) = links.get(&(bridge_if_index as i32))
+    {
+        bridge
+    } else {
+        return false;
+    };
+
+    debug!("filtering interfaces by {:?} Linux bridge", bridge.if_name);
+    let bridge_if_index = bridge.if_index as u32;
+    links.retain(|_, e| e.bridge_if_index == Some(bridge_if_index));
     true
 }
 
