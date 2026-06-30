@@ -245,7 +245,7 @@ Based on the capability of devices to process IEEE1905 CMDU packets we can disti
 The topology construction process in IEEE1905 consists of the following steps:
 
 1. LLDP discovery:
-Before CMDU packet exchange, IEEE1905 will trigger LLDP protocol to discover neighbors with bridging capabilities, and include it as part of the topology graph. LLDPDU's use a link local multicast address being consumed by the linux bridge so in RDK-B use case will not reach the IEEE1905 service.
+Before CMDU packet exchange, IEEE1905 will trigger LLDP protocol to discover neighbors with bridging capabilities, and include it as part of the topology graph. LLDPDUs use a link-local multicast address being consumed by the platform bridge, such as a Linux bridge or OVS bridge, so in the RDK-B use case they will not reach the IEEE1905 service.
 
 2. Topology Discovery Advertisement:
 Each IEEE1905 device periodically broadcasts 1905 Topology Discovery Messages on all its available network interfaces (Wi-Fi, Ethernet, MoCA, PLC).
@@ -450,7 +450,8 @@ All the logic for the installation and activation has been included into the bui
 ### Managing the Service
 
 You can use this simple systemd unit to launch the ieee1905 service in the
-background:
+background. Set `-i`/`--interface` to the forwarding interface used by the platform;
+IEEE1905 derives the related bridge from this interface during local interface discovery:
 
 ```sh
 
@@ -466,7 +467,7 @@ After=network.target
 
 [Service]
 Type=notify
-ExecStart=/usr/bin/ieee1905
+ExecStart=/usr/bin/ieee1905 -i eth0
 
 [Install]
 WantedBy=multi-user.target
@@ -520,11 +521,11 @@ journalctl -u ieee1905.service
 
 ### Service command line arguments
 
-By default service run with topology CLI enabled, info log level, listening on ```eth0``` interface and unix sockets named ```/tmp/al_control_socket``` and ```/tmp/al_data_socket```.
+By default, the service runs with the topology CLI disabled, info log level, listening on `eth0` interface, and Unix sockets named `/tmp/al_control_socket` and `/tmp/al_data_socket`.
 
 #### Enable topology CLI
 
-By default topology CLI is disabled.
+By default, topology CLI is disabled and requires `topology_ui` feature flag.
 When topology CLI is enabled. Log files are saved to a file and will not appear on standard output.
 
 ```shell
@@ -690,7 +691,7 @@ Change unix sockets to ```ctrl.sock``` and ```data.sock```
 
 #### Change listening interface
 
-Change interface to ```eth1```
+Change interface to `eth1`. IEEE1905 uses this interface to derive the related bridge and filter the local interface list accordingly.
 
 ```shell
 /usr/bin/ieee1905 -i eth1

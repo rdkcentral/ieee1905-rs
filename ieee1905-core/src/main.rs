@@ -112,27 +112,19 @@ async fn main() -> anyhow::Result<()> {
 
     let mut join_sets = Vec::new();
 
-    //Set AL MAC & test MAC addresses
-    let forwarding_interface =
-        if let Some(iface) = get_forwarding_interface_name(cli.interface.clone()) {
-            tracing::info!("Forwarding interface: {}", iface);
-            iface
-        } else {
-            tracing::debug!("No Ethernet interface found for forwarding, using default.");
-            "eth_default".to_string() // Default interface name if none found
-        };
-
-    // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
     let Some(if_info) = get_interface_info(&cli.interface) else {
         anyhow::bail!("failed to get local interface {}", cli.interface);
     };
+
+    let forwarding_interface = if_info.if_name.clone();
+    tracing::info!("Forwarding interface: {forwarding_interface}");
 
     let al_mac = if_info.mac;
     tracing::info!("AL MAC address: {}", al_mac);
 
     // // Initialize Database
 
-    let topology_db = TopologyDatabase::get_instance(al_mac, &cli.interface);
+    let topology_db = TopologyDatabase::get_instance(al_mac, &forwarding_interface);
 
     // Upon every loop restart topology database role can change
     topology_db.set_local_role(None).await;
@@ -218,7 +210,7 @@ async fn main() -> anyhow::Result<()> {
     let cmdu_observer = CMDUObserver::new(Arc::clone(&cmdu_handler));
     // FLAG to enable and disable LLDP
     // Initialize LLDP Observer with chassis_id assuming al_mac an chassis id have the same value as idicated in IEEE1905
-    let lldp_observer = LLDPObserver::new(chassis_id, cli.interface.clone());
+    let lldp_observer = LLDPObserver::new(chassis_id, forwarding_interface.clone());
 
     tracing::info!("LLDP and CMDU observers initilized with local MAC: {al_mac}");
 
@@ -234,7 +226,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Sart of the discovery process
 
-    for interface in get_lldp_compatible_interfaces().await {
+    for interface in get_lldp_compatible_interfaces(&forwarding_interface).await {
         tracing::info!(
             no_receiver = cli.no_lldp_receivers,
             "Starting LLDP Discovery on {}/{}",
@@ -297,16 +289,8 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn get_lldp_compatible_interfaces() -> Vec<Ieee1905LocalInterface> {
-    let mut interfaces = get_interfaces().await.unwrap_or_default();
-
-    if let Some(bridge) = interfaces
-        .iter()
-        .find(|e| e.name.eq_ignore_ascii_case("brlan0"))
-    {
-        let bridge_index = bridge.index.cast_unsigned();
-        interfaces.retain(|e| e.bridging_tuple == Some(bridge_index));
-    }
+async fn get_lldp_compatible_interfaces(interface_name: &str) -> Vec<Ieee1905LocalInterface> {
+    let mut interfaces = get_interfaces(interface_name).await.unwrap_or_default();
 
     interfaces.retain(|e| e.media_type.is_ethernet());
     interfaces
