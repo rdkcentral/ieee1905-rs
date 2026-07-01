@@ -1170,15 +1170,15 @@ fn convert_if_type_to_role(if_type: Option<Nl80211IfType>, frequency: u32) -> Op
     Some(match if_type? {
         Nl80211IfType::Station => {
             if frequency > 57_000 {
-                0b1010
+                MediaTypeSpecialInfoWifi::ROLE_802_11AD_PCP_STA
             } else {
-                0b0100
+                MediaTypeSpecialInfoWifi::ROLE_NON_AP_NON_PCP_STA
             }
         }
-        Nl80211IfType::Ap => 0b0000,
-        Nl80211IfType::ApVlan => 0b0000,
-        Nl80211IfType::P2pClient => 0b1000,
-        Nl80211IfType::P2pGo => 0b1001,
+        Nl80211IfType::Ap => MediaTypeSpecialInfoWifi::ROLE_AP,
+        Nl80211IfType::ApVlan => MediaTypeSpecialInfoWifi::ROLE_AP,
+        Nl80211IfType::P2pClient => MediaTypeSpecialInfoWifi::ROLE_P2P_CLIENT,
+        Nl80211IfType::P2pGo => MediaTypeSpecialInfoWifi::ROLE_P2P_GROUP_OWNER,
         _ => return None,
     })
 }

@@ -3,13 +3,18 @@
 use crate::TopologyDatabase;
 use crate::cmdu_codec::MediaType;
 use crate::rbus::al_device::RBus_Al_Device;
+use crate::rbus::al_forwarding_table::RBus_Al_ForwardingTable;
+use crate::rbus::al_forwarding_table_forwarding_rule::RBus_Al_ForwardingTable_ForwardingRule;
 use crate::rbus::interface::RBus_Interface;
 use crate::rbus::interface_link::RBus_InterfaceLink;
 use crate::rbus::interface_link_metric::RBus_InterfaceLinkMetric;
+use crate::rbus::network::RBus_Al_Network;
 use crate::rbus::nt::RBus_NetworkTopology;
 use crate::rbus::nt_device::RBus_NetworkTopology_Ieee1905Device;
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
 use crate::rbus::nt_device_bridge_list::RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList;
+use crate::rbus::nt_device_interface::RBus_NetworkTopology_Ieee1905Device_Interface;
+use crate::rbus::nt_device_ipv4::RBus_NetworkTopology_Ieee1905Device_IPv4;
 use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
 use anyhow::bail;
 use pnet::datalink::MacAddr;
@@ -21,15 +26,22 @@ use rbus_provider::element::table::rbus_table;
 use rbus_provider::provider::{RBusProvider, RBusProviderError};
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
+use crate::rbus::nt_device_ipv6::RBus_NetworkTopology_Ieee1905Device_IPv6;
 
 mod al_device;
+mod al_forwarding_table;
+mod al_forwarding_table_forwarding_rule;
 mod interface;
 mod interface_link;
 mod interface_link_metric;
+mod network;
 mod nt;
 mod nt_device;
 mod nt_device_bridge;
 mod nt_device_bridge_list;
+mod nt_device_interface;
+mod nt_device_ipv4;
+mod nt_device_ipv6;
 mod nt_device_non_ieee1905_neighbor;
 
 ///
@@ -74,6 +86,14 @@ impl RBusConnection {
                     rbus_object("AL", (
                         rbus_object(format!("{instance}"), Self::register_nested()),
                     )),
+                    rbus_object("Network", (
+                        rbus_object("AL", (
+                            rbus_object(format!("{instance}"), (
+                                rbus_property("Status", RBus_Al_Network),
+                                rbus_property("ALNumberOfEntries", RBus_Al_Network),
+                            )),
+                        )),
+                    )),
                 )),
             ))
         })
@@ -83,11 +103,13 @@ impl RBusConnection {
     fn register_nested() -> impl RBusProviderElement {
         (
             rbus_property("IEEE1905Id", RBus_Al_Device),
+            rbus_property("Status", RBus_Al_Device),
             rbus_property("InterfaceNumberOfEntries", RBus_Al_Device),
             rbus_table("Interface", RBus_Interface, (
                 rbus_property("InterfaceId", RBus_Interface),
                 rbus_property("MediaType", RBus_Interface),
                 rbus_property("LinkNumberOfEntries", RBus_Interface),
+                rbus_property("VendorPropertiesNumberOfEntries", RBus_Interface),
                 rbus_table("Link", RBus_InterfaceLink, (
                     rbus_property("IEEE1905Id", RBus_InterfaceLink),
                     rbus_property("InterfaceId", RBus_InterfaceLink),
@@ -105,24 +127,70 @@ impl RBusConnection {
                     )),
                 )),
             )),
+            rbus_object("ForwardingTable", (
+                rbus_property("SetForwardingEnabled", RBus_Al_ForwardingTable),
+                rbus_property("ForwardingRuleNumberOfEntries", RBus_Al_ForwardingTable),
+                rbus_table("ForwardingRule", RBus_Al_ForwardingTable_ForwardingRule, (
+                    rbus_property("InterfaceList", RBus_Al_ForwardingTable_ForwardingRule),
+                    rbus_property("MACDestinationAddress", RBus_Al_ForwardingTable_ForwardingRule),
+                    rbus_property("MACDestinationAddressFlag", RBus_Al_ForwardingTable_ForwardingRule),
+                    rbus_property("MACSourceAddress", RBus_Al_ForwardingTable_ForwardingRule),
+                    rbus_property("MACSourceAddressFlag", RBus_Al_ForwardingTable_ForwardingRule),
+                    rbus_property("EtherType", RBus_Al_ForwardingTable_ForwardingRule),
+                    rbus_property("EtherTypeFlag", RBus_Al_ForwardingTable_ForwardingRule),
+                    rbus_property("Vid", RBus_Al_ForwardingTable_ForwardingRule),
+                    rbus_property("VidFlag", RBus_Al_ForwardingTable_ForwardingRule),
+                    rbus_property("PCP", RBus_Al_ForwardingTable_ForwardingRule),
+                    rbus_property("PCPFlag", RBus_Al_ForwardingTable_ForwardingRule),
+                )),
+            )),
             rbus_object("NetworkTopology", (
                 rbus_property("IEEE1905DeviceNumberOfEntries", RBus_NetworkTopology),
                 rbus_table("IEEE1905Device", RBus_NetworkTopology_Ieee1905Device, (
-                    rbus_property("IEEE1905Id", RBus_NetworkTopology_Ieee1905Device),
-                    rbus_property("Version", RBus_NetworkTopology_Ieee1905Device),
-                    rbus_property("RegistrarFreqBand", RBus_NetworkTopology_Ieee1905Device),
-                    rbus_property("FriendlyName", RBus_NetworkTopology_Ieee1905Device),
-                    rbus_property("ManufacturerName", RBus_NetworkTopology_Ieee1905Device),
-                    rbus_property("ManufacturerModel", RBus_NetworkTopology_Ieee1905Device),
-                    rbus_property("BridgingTupleNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
-                    rbus_table("BridgingTuple", RBus_NetworkTopology_Ieee1905Device_BridgingTuple, (
-                        rbus_property("InterfaceList", RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList),
-                    )),
-                    rbus_property("NonIEEE1905NeighborNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
-                    rbus_table("NonIEEE1905Neighbor", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor, (
-                        rbus_property("LocalInterface", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor),
-                        rbus_property("NeighborInterfaceId", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor),
-                    ))
+                    (
+                        rbus_property("IEEE1905Id", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_property("Version", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_property("RegistrarFreqBand", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_property("FriendlyName", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_property("ManufacturerName", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_property("ManufacturerModel", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_property("VendorPropertiesNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_property("L2NeighborNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
+                    ),
+                    (
+                        rbus_property("BridgingTupleNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_table("BridgingTuple", RBus_NetworkTopology_Ieee1905Device_BridgingTuple, (
+                            rbus_property("InterfaceList", RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList),
+                        )),
+                        rbus_property("NonIEEE1905NeighborNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_table("NonIEEE1905Neighbor", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor, (
+                            rbus_property("LocalInterface", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor),
+                            rbus_property("NeighborInterfaceId", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor),
+                        )),
+                        rbus_property("InterfaceNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_table("Interface", RBus_NetworkTopology_Ieee1905Device_Interface, (
+                            rbus_property("InterfaceId", RBus_NetworkTopology_Ieee1905Device_Interface),
+                            rbus_property("MediaType", RBus_NetworkTopology_Ieee1905Device_Interface),
+                            rbus_property("Role", RBus_NetworkTopology_Ieee1905Device_Interface),
+                            rbus_property("APChannelBand", RBus_NetworkTopology_Ieee1905Device_Interface),
+                            rbus_property("FrequencyIndex1", RBus_NetworkTopology_Ieee1905Device_Interface),
+                            rbus_property("FrequencyIndex2", RBus_NetworkTopology_Ieee1905Device_Interface),
+                        )),
+                        rbus_property("IPv4AddressNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_table("IPv4Address", RBus_NetworkTopology_Ieee1905Device_IPv4, (
+                            rbus_property("MACAddress", RBus_NetworkTopology_Ieee1905Device_IPv4),
+                            rbus_property("IPv4Address", RBus_NetworkTopology_Ieee1905Device_IPv4),
+                            rbus_property("IPv4AddressType", RBus_NetworkTopology_Ieee1905Device_IPv4),
+                            rbus_property("DHCPServer", RBus_NetworkTopology_Ieee1905Device_IPv4),
+                        )),
+                        rbus_property("IPv6AddressNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_table("IPv6Address", RBus_NetworkTopology_Ieee1905Device_IPv6, (
+                            rbus_property("MACAddress", RBus_NetworkTopology_Ieee1905Device_IPv6),
+                            rbus_property("IPv6Address", RBus_NetworkTopology_Ieee1905Device_IPv6),
+                            rbus_property("IPv6AddressType", RBus_NetworkTopology_Ieee1905Device_IPv6),
+                            rbus_property("IPv6AddressOrigin", RBus_NetworkTopology_Ieee1905Device_IPv6),
+                        )),
+                    ),
                 )),
             )),
         )

@@ -6,6 +6,7 @@ use rbus_provider::element::property::{RBusProviderGetter, RBusProviderGetterArg
 ///
 /// Device.IEEE1905.AL.{i}.
 /// - IEEE1905Id
+/// - Status
 /// - InterfaceNumberOfEntries
 ///
 pub struct RBus_Al_Device;
@@ -19,6 +20,10 @@ impl RBusProviderGetter for RBus_Al_Device {
         match args.path_name.as_bytes() {
             b"IEEE1905Id" => {
                 args.property.set(&format_mac_address(&db.al_mac_address));
+                Ok(())
+            }
+            b"Status" => {
+                args.property.set("Enabled");
                 Ok(())
             }
             b"InterfaceNumberOfEntries" => {

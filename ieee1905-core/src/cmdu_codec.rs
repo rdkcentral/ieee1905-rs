@@ -304,7 +304,7 @@ impl TLVTrait for MacAddress {
     }
 }
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv4 {
     pub entries: Vec<Ipv4Entry>,
 }
@@ -328,7 +328,7 @@ impl TLVTrait for Ipv4 {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv4Entry {
     pub mac: MacAddr,
     pub addresses: Vec<Ipv4Address>,
@@ -353,7 +353,7 @@ impl Ipv4Entry {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv4Address {
     pub kind: IPv4AddressType,
     pub address: Ipv4Addr,
@@ -386,7 +386,7 @@ impl Ipv4Address {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum IPv4AddressType {
     Unknown,
     DHCP,
@@ -406,13 +406,13 @@ impl IPv4AddressType {
         }
     }
 
-    fn to_u8(&self) -> u8 {
+    fn to_u8(self) -> u8 {
         match self {
             Self::Unknown => 0,
             Self::DHCP => 1,
             Self::Static => 2,
             Self::AutoIP => 3,
-            Self::Reserved(v) => *v,
+            Self::Reserved(v) => v,
         }
     }
 }
@@ -483,7 +483,7 @@ impl Ipv6AddressEntry {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv6Entry {
     pub mac_address: MacAddr,
     pub link_local_address: Ipv6Addr,
@@ -517,7 +517,7 @@ impl Ipv6Entry {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv6 {
     pub entries: Vec<Ipv6Entry>,
 }
@@ -1863,6 +1863,13 @@ pub enum MediaTypeSpecialInfo {
 }
 
 impl MediaTypeSpecialInfo {
+    pub fn as_wifi(&self) -> Option<&MediaTypeSpecialInfoWifi> {
+        match self {
+            MediaTypeSpecialInfo::Wifi(e) => Some(e),
+            MediaTypeSpecialInfo::Other(_) => None,
+        }
+    }
+
     pub fn parse(media_type: MediaType, input: &[u8]) -> IResult<&[u8], Self> {
         if (0x0100..0x0108).contains(&media_type.0) {
             // Wifi6 and Wifi7 don't have extras
@@ -1904,8 +1911,14 @@ pub struct MediaTypeSpecialInfoWifi {
 }
 
 impl MediaTypeSpecialInfoWifi {
-    const MASK_ROLE: u8 = 0x0F;
-    const MASK_RESERVED: u8 = 0xF0;
+    pub const MASK_ROLE: u8 = 0x0F;
+    pub const MASK_RESERVED: u8 = 0xF0;
+
+    pub const ROLE_802_11AD_PCP_STA: u8 = 0b1010;
+    pub const ROLE_NON_AP_NON_PCP_STA: u8 = 0b0100;
+    pub const ROLE_AP: u8 = 0b0000;
+    pub const ROLE_P2P_CLIENT: u8 = 0b1000;
+    pub const ROLE_P2P_GROUP_OWNER: u8 = 0b1001;
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, bssid) = take_mac_addr(input)?;

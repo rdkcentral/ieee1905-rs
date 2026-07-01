@@ -1,6 +1,10 @@
 use crate::TopologyDatabase;
-use crate::cmdu_codec::{DeviceIdentificationType, Ieee1905ProfileVersion, SupportedFreqBand};
+use crate::cmdu_codec::{
+    DeviceIdentificationType, Ieee1905ProfileVersion, Ipv4, Ipv6, SupportedFreqBand,
+};
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
+use crate::rbus::nt_device_ipv4::RBus_NetworkTopology_Ieee1905Device_IPv4;
+use crate::rbus::nt_device_ipv6::RBus_NetworkTopology_Ieee1905Device_IPv6;
 use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
 use crate::rbus::{format_mac_address, peek_topology_database};
 use crate::topology_manager::{
@@ -22,8 +26,13 @@ use tokio::sync::RwLockReadGuard;
 /// - FriendlyName
 /// - ManufacturerName
 /// - ManufacturerModel
+/// - VendorPropertiesNumberOfEntries
+/// - IPv4AddressNumberOfEntries
+/// - IPv6AddressNumberOfEntries
+/// - L2NeighborNumberOfEntries
 /// - BridgingTupleNumberOfEntries
 /// - NonIEEE1905NeighborNumberOfEntries
+/// - InterfaceNumberOfEntries
 ///
 pub struct RBus_NetworkTopology_Ieee1905Device;
 
@@ -55,8 +64,7 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device {
             b"IEEE1905Id" => {
                 let al_mac_str = match node {
                     RBus_Ieee1905Device_Node::Local(_) => {
-                        let mac = format_mac_address(&db.local_mac.blocking_read());
-                        format!("{mac}-local",)
+                        format_mac_address(&db.local_mac.blocking_read())
                     }
                     RBus_Ieee1905Device_Node::Remote(e) => {
                         format_mac_address(&e.device_data.al_mac)
@@ -109,6 +117,24 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device {
                 args.property.set(value);
                 Ok(())
             }
+            b"VendorPropertiesNumberOfEntries" => {
+                args.property.set(&0u32);
+                Ok(())
+            }
+            b"IPv4AddressNumberOfEntries" => {
+                let pairs = RBus_NetworkTopology_Ieee1905Device_IPv4::get_ipv4_pairs(&node);
+                args.property.set(&(pairs.count() as u32));
+                Ok(())
+            }
+            b"IPv6AddressNumberOfEntries" => {
+                let pairs = RBus_NetworkTopology_Ieee1905Device_IPv6::get_ipv6_pairs(&node);
+                args.property.set(&(pairs.count() as u32));
+                Ok(())
+            }
+            b"L2NeighborNumberOfEntries" => {
+                args.property.set(&0u32);
+                Ok(())
+            }
             b"BridgingTupleNumberOfEntries" => {
                 let tuples = RBus_NetworkTopology_Ieee1905Device_BridgingTuple::get_tuples(&node);
                 args.property.set(&(tuples.len() as u32));
@@ -118,6 +144,10 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device {
                 let neighbors =
                     RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor::iter_neighbors(&node);
                 args.property.set(&(neighbors.count() as u32));
+                Ok(())
+            }
+            b"InterfaceNumberOfEntries" => {
+                args.property.set(&(node.local_interfaces().count() as u32));
                 Ok(())
             }
             _ => Err(RBusError::ElementDoesNotExists),
@@ -182,6 +212,20 @@ impl<'a> RBus_Ieee1905Device_Node<'a> {
                 let ifs = e.device_data.local_interface_list.as_deref();
                 Either::Right(ifs.unwrap_or_default().iter())
             }
+        }
+    }
+
+    pub fn ipv4_addresses(&self) -> Option<&Ipv4> {
+        match self {
+            RBus_Ieee1905Device_Node::Local(_) => None,
+            RBus_Ieee1905Device_Node::Remote(e) => e.device_data.ipv4.as_ref(),
+        }
+    }
+
+    pub fn ipv6_addresses(&self) -> Option<&Ipv6> {
+        match self {
+            RBus_Ieee1905Device_Node::Local(_) => None,
+            RBus_Ieee1905Device_Node::Remote(e) => e.device_data.ipv6.as_ref(),
         }
     }
 }

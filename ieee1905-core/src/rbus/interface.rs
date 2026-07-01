@@ -53,6 +53,10 @@ impl RBusProviderGetter for RBus_Interface {
                 args.property.set(&(iter.count() as u32));
                 Ok(())
             }
+            b"VendorPropertiesNumberOfEntries" => {
+                args.property.set(&0u32);
+                Ok(())
+            }
             _ => Err(RBusError::ElementDoesNotExists),
         }
     }
