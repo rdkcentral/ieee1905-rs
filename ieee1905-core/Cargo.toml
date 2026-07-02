@@ -47,11 +47,6 @@ reqwest = { version = "0.13.4", default-features = false, features = ["stream", 
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 serde_json = { version = "1.0.149", optional = true }
 
-# RUSTSEC transitive dependency overrides
-time = ">=0.3.51"
-rand = ">=0.10.1"
-rustls-webpki = ">=0.103.13"
-
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["async_tokio"] }
 tempfile = "3.20.0"
