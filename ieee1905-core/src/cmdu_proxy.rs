@@ -320,7 +320,6 @@ async fn inject_topology_response_tlvs(
         DeviceBridgingCapability::TYPE.to_u8(),
         Ieee1905NeighborDevice::TYPE.to_u8(),
         NonIeee1905NeighborDevices::TYPE.to_u8(),
-        Ipv6::TYPE.to_u8(),
     ];
     vec.retain(|e| !filtered_types.contains(&e.tlv_type));
 
@@ -663,7 +662,7 @@ pub async fn cmdu_link_metric_response_transmission(
                 neighbour_interface_mac: neighbour_if,
                 interface_type: interface.media_type,
                 packet_errors: to_u32_sat(link_stats.rx_errors),
-                transmitted_packets: to_u32_sat(link_stats.rx_packets),
+                packets_received: to_u32_sat(link_stats.rx_packets),
                 rssi: interface.signal_strength_dbm.unwrap_or(0xffu8 as i8),
             };
 

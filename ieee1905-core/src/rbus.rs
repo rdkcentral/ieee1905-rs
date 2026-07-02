@@ -13,8 +13,12 @@ use crate::rbus::nt::RBus_NetworkTopology;
 use crate::rbus::nt_device::RBus_NetworkTopology_Ieee1905Device;
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
 use crate::rbus::nt_device_bridge_list::RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList;
+use crate::rbus::nt_device_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor;
+use crate::rbus::nt_device_ieee1905_neighbor_metric::RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric;
 use crate::rbus::nt_device_interface::RBus_NetworkTopology_Ieee1905Device_Interface;
 use crate::rbus::nt_device_ipv4::RBus_NetworkTopology_Ieee1905Device_IPv4;
+use crate::rbus::nt_device_ipv6::RBus_NetworkTopology_Ieee1905Device_IPv6;
+use crate::rbus::nt_device_l2_neighbor::RBus_NetworkTopology_Ieee1905Device_L2Neighbor;
 use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
 use anyhow::bail;
 use pnet::datalink::MacAddr;
@@ -26,7 +30,6 @@ use rbus_provider::element::table::rbus_table;
 use rbus_provider::provider::{RBusProvider, RBusProviderError};
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
-use crate::rbus::nt_device_ipv6::RBus_NetworkTopology_Ieee1905Device_IPv6;
 
 mod al_device;
 mod al_forwarding_table;
@@ -39,9 +42,12 @@ mod nt;
 mod nt_device;
 mod nt_device_bridge;
 mod nt_device_bridge_list;
+mod nt_device_ieee1905_neighbor;
+mod nt_device_ieee1905_neighbor_metric;
 mod nt_device_interface;
 mod nt_device_ipv4;
 mod nt_device_ipv6;
+mod nt_device_l2_neighbor;
 mod nt_device_non_ieee1905_neighbor;
 
 ///
@@ -155,12 +161,29 @@ impl RBusConnection {
                         rbus_property("ManufacturerName", RBus_NetworkTopology_Ieee1905Device),
                         rbus_property("ManufacturerModel", RBus_NetworkTopology_Ieee1905Device),
                         rbus_property("VendorPropertiesNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
-                        rbus_property("L2NeighborNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
                     ),
                     (
                         rbus_property("BridgingTupleNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
                         rbus_table("BridgingTuple", RBus_NetworkTopology_Ieee1905Device_BridgingTuple, (
                             rbus_property("InterfaceList", RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList),
+                        )),
+                        rbus_property("IEEE1905NeighborNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_table("IEEE1905Neighbor", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor, (
+                            rbus_property("LocalInterface", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor),
+                            rbus_property("NeighborInterfaceId", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor),
+                            rbus_property("MetricNumberOfEntries", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor),
+                            rbus_table("Metric", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric, (
+                                rbus_property("NeighborMACAddress", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                                rbus_property("IEEE802dot1Bridge", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                                rbus_property("PacketErrors", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                                rbus_property("PacketErrorsReceived", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                                rbus_property("TransmittedPackets", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                                rbus_property("PacketsReceived", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                                rbus_property("MACThroughputCapacity", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                                rbus_property("LinkAvailability", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                                rbus_property("PHYRate", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                                rbus_property("RSSI", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                            )),
                         )),
                         rbus_property("NonIEEE1905NeighborNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
                         rbus_table("NonIEEE1905Neighbor", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor, (
@@ -176,6 +199,8 @@ impl RBusConnection {
                             rbus_property("FrequencyIndex1", RBus_NetworkTopology_Ieee1905Device_Interface),
                             rbus_property("FrequencyIndex2", RBus_NetworkTopology_Ieee1905Device_Interface),
                         )),
+                    ),
+                    (
                         rbus_property("IPv4AddressNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
                         rbus_table("IPv4Address", RBus_NetworkTopology_Ieee1905Device_IPv4, (
                             rbus_property("MACAddress", RBus_NetworkTopology_Ieee1905Device_IPv4),
@@ -189,6 +214,12 @@ impl RBusConnection {
                             rbus_property("IPv6Address", RBus_NetworkTopology_Ieee1905Device_IPv6),
                             rbus_property("IPv6AddressType", RBus_NetworkTopology_Ieee1905Device_IPv6),
                             rbus_property("IPv6AddressOrigin", RBus_NetworkTopology_Ieee1905Device_IPv6),
+                        )),
+                        rbus_property("L2NeighborNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_table("L2Neighbor", RBus_NetworkTopology_Ieee1905Device_L2Neighbor, (
+                            rbus_property("LocalInterface", RBus_NetworkTopology_Ieee1905Device_L2Neighbor),
+                            rbus_property("NeighborInterfaceId", RBus_NetworkTopology_Ieee1905Device_L2Neighbor),
+                            rbus_property("BehindInterfaceIds", RBus_NetworkTopology_Ieee1905Device_L2Neighbor),
                         )),
                     ),
                 )),

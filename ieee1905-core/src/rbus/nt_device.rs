@@ -3,8 +3,10 @@ use crate::cmdu_codec::{
     DeviceIdentificationType, Ieee1905ProfileVersion, Ipv4, Ipv6, SupportedFreqBand,
 };
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
+use crate::rbus::nt_device_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor;
 use crate::rbus::nt_device_ipv4::RBus_NetworkTopology_Ieee1905Device_IPv4;
 use crate::rbus::nt_device_ipv6::RBus_NetworkTopology_Ieee1905Device_IPv6;
+use crate::rbus::nt_device_l2_neighbor::RBus_NetworkTopology_Ieee1905Device_L2Neighbor;
 use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
 use crate::rbus::{format_mac_address, peek_topology_database};
 use crate::topology_manager::{
@@ -132,7 +134,8 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device {
                 Ok(())
             }
             b"L2NeighborNumberOfEntries" => {
-                args.property.set(&0u32);
+                let pairs = RBus_NetworkTopology_Ieee1905Device_L2Neighbor::iter(&node);
+                args.property.set(&(pairs.count() as u32));
                 Ok(())
             }
             b"BridgingTupleNumberOfEntries" => {
@@ -140,9 +143,14 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device {
                 args.property.set(&(tuples.len() as u32));
                 Ok(())
             }
+            b"IEEE1905NeighborNumberOfEntries" => {
+                let neighbors = RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor::iter(&node);
+                args.property.set(&(neighbors.count() as u32));
+                Ok(())
+            }
             b"NonIEEE1905NeighborNumberOfEntries" => {
                 let neighbors =
-                    RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor::iter_neighbors(&node);
+                    RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor::iter(&node);
                 args.property.set(&(neighbors.count() as u32));
                 Ok(())
             }

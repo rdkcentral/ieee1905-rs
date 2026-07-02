@@ -312,6 +312,8 @@ pub struct Ieee1905DeviceData {
     pub device_identification_type: Option<DeviceIdentificationType>,
     pub ipv4: Option<Ipv4>,
     pub ipv6: Option<Ipv6>,
+    pub link_metric_rx: Vec<LinkMetricRx>,
+    pub link_metric_tx: Vec<LinkMetricTx>,
 }
 
 impl Ieee1905DeviceData {
@@ -1059,10 +1061,11 @@ impl TopologyDatabase {
             return;
         }
 
-        if tracing::enabled!(tracing::Level::TRACE) {
-            trace!(%source, "link metric rx stats: {:#?}", Vec::from_iter(link_metric_rx));
-            trace!(%source, "link metric tx stats: {:#?}", Vec::from_iter(link_metric_tx));
-        }
+        node.device_data.link_metric_rx = link_metric_rx.into_iter().collect();
+        node.device_data.link_metric_tx = link_metric_tx.into_iter().collect();
+        
+        trace!(%source, "link metric rx stats: {:#?}", node.device_data.link_metric_rx);
+        trace!(%source, "link metric tx stats: {:#?}", node.device_data.link_metric_tx);
     }
 
     pub async fn handle_ap_auto_config_response(

@@ -25,18 +25,18 @@ use nom::{
     IResult, Parser,
     bytes::complete::take,
     error::{Error, ErrorKind},
-    number::complete::{be_i8, be_u8, be_u16, be_u32},
+    number::complete::{be_i8, be_u16, be_u32, be_u8},
 };
 
+// Internal modules
+use crate::cmdu_reassembler::CmduReassemblyError;
+use crate::tlv_cmdu_codec::{TLV, TLVTrait};
 use anyhow::bail;
 use nom::combinator::{all_consuming, cond};
 use nom::multi::{count, length_count, many0};
 use pnet::datalink::MacAddr;
 use std::fmt::{Debug, Display, Formatter};
 use std::net::{Ipv4Addr, Ipv6Addr};
-// Internal modules
-use crate::cmdu_reassembler::CmduReassemblyError;
-use crate::tlv_cmdu_codec::{TLV, TLVTrait};
 
 ///////////////////////////////////////////////////////////////////////////
 //DEFINITION OF CMDU TYPES and IEEE1905 TLVs
@@ -1566,7 +1566,7 @@ impl TLVTrait for LinkMetricQuery {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkMetricTx {
     pub source_al_mac: MacAddr,
     pub neighbour_al_mac: MacAddr,
@@ -1604,7 +1604,7 @@ impl TLVTrait for LinkMetricTx {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkMetricTxPair {
     pub receiver_interface_mac: MacAddr,
     pub neighbour_interface_mac: MacAddr,
@@ -1661,7 +1661,7 @@ impl LinkMetricTxPair {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkMetricRx {
     pub source_al_mac: MacAddr,
     pub neighbour_al_mac: MacAddr,
@@ -1699,13 +1699,13 @@ impl TLVTrait for LinkMetricRx {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkMetricRxPair {
     pub receiver_interface_mac: MacAddr,
     pub neighbour_interface_mac: MacAddr,
     pub interface_type: MediaType,
     pub packet_errors: u32,
-    pub transmitted_packets: u32,
+    pub packets_received: u32,
     pub rssi: i8,
 }
 
@@ -1725,7 +1725,7 @@ impl LinkMetricRxPair {
                 neighbour_interface_mac,
                 interface_type,
                 packet_errors,
-                transmitted_packets,
+                packets_received: transmitted_packets,
                 rssi,
             },
         ))
@@ -1737,7 +1737,7 @@ impl LinkMetricRxPair {
         vec.extend(self.neighbour_interface_mac.octets());
         vec.extend(self.interface_type.serialize());
         vec.extend(self.packet_errors.to_be_bytes());
-        vec.extend(self.transmitted_packets.to_be_bytes());
+        vec.extend(self.packets_received.to_be_bytes());
         vec.extend(self.rssi.to_be_bytes());
         vec
     }
@@ -4084,7 +4084,7 @@ pub mod tests {
         );
         assert_eq!(pair.interface_type, MediaType::ETHERNET_802_3ab);
         assert_eq!(pair.packet_errors, 0x13);
-        assert_eq!(pair.transmitted_packets, 0x42);
+        assert_eq!(pair.packets_received, 0x42);
         assert_eq!(pair.rssi, 0x10);
 
         let serialized = parsed.serialize();
