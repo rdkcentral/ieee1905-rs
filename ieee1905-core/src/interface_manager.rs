@@ -342,9 +342,29 @@ async fn call_rt_get_links() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo>>
 }
 
 async fn call_rt_get_bridge_fdb() -> anyhow::Result<IndexMap<MacAddr, IndexSet<i32>>> {
+    // primary path: RTM_GETNEIGH + ndmsg + AF_BRIDGE
+    match call_rt_get_bridge_fdb_ndmsg().await {
+        Ok(neighbours) if !neighbours.is_empty() => return Ok(neighbours),
+        Ok(_) => {
+            warn!("bridge fdb ndmsg dump returned no entries, retrying with ifinfomsg payload");
+        }
+        Err(error) => {
+            warn!(
+                %error,
+                "bridge fdb ndmsg dump failed, retrying with ifinfomsg payload"
+            );
+        }
+    }
+
+    // fallback path: RTM_GETNEIGH + ifinfomsg + PF_BRIDGE
+    call_rt_get_bridge_fdb_ifinfomsg().await
+}
+
+async fn call_rt_get_bridge_fdb_ndmsg() -> anyhow::Result<IndexMap<MacAddr, IndexSet<i32>>> {
     let (router, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).await?;
 
     const AF_BRIDGE: u8 = 7;
+    trace!("requesting bridge fdb dump with RTM_GETNEIGH + ndmsg + AF_BRIDGE");
     let if_info_msg = NdmsgBuilder::default()
         .ndm_family(RtAddrFamily::from(AF_BRIDGE))
         .ndm_index(0)
@@ -353,7 +373,7 @@ async fn call_rt_get_bridge_fdb() -> anyhow::Result<IndexMap<MacAddr, IndexSet<i
         .ndm_type(Rtn::Unicast)
         .build()?;
 
-    let mut recv: NlRouterReceiverHandle<Rtm, Ndmsg> = router
+    let recv: NlRouterReceiverHandle<Rtm, Ndmsg> = router
         .send(
             Rtm::Getneigh,
             NlmF::DUMP | NlmF::REQUEST | NlmF::ACK,
@@ -361,6 +381,42 @@ async fn call_rt_get_bridge_fdb() -> anyhow::Result<IndexMap<MacAddr, IndexSet<i
         )
         .await?;
 
+    let neighbours = collect_bridge_fdb_neighbors(recv).await?;
+    trace!(
+        entries = neighbours.len(),
+        "bridge fdb ndmsg dump completed"
+    );
+    Ok(neighbours)
+}
+
+async fn call_rt_get_bridge_fdb_ifinfomsg() -> anyhow::Result<IndexMap<MacAddr, IndexSet<i32>>> {
+    let (router, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).await?;
+
+    const PF_BRIDGE: u8 = 7;
+    trace!("requesting bridge fdb dump with RTM_GETNEIGH + ifinfomsg + PF_BRIDGE");
+    let if_info_msg = IfinfomsgBuilder::default()
+        .ifi_family(RtAddrFamily::from(PF_BRIDGE))
+        .build()?;
+
+    let recv: NlRouterReceiverHandle<Rtm, Ndmsg> = router
+        .send(
+            Rtm::Getneigh,
+            NlmF::DUMP | NlmF::REQUEST,
+            NlPayload::Payload(if_info_msg),
+        )
+        .await?;
+
+    let neighbours = collect_bridge_fdb_neighbors(recv).await?;
+    trace!(
+        entries = neighbours.len(),
+        "bridge fdb ifinfomsg dump completed"
+    );
+    Ok(neighbours)
+}
+
+async fn collect_bridge_fdb_neighbors(
+    mut recv: NlRouterReceiverHandle<Rtm, Ndmsg>,
+) -> anyhow::Result<IndexMap<MacAddr, IndexSet<i32>>> {
     let mut result = IndexMap::new();
     while let Some(message) = recv.next().await {
         let message: Nlmsghdr<Rtm, Ndmsg> = message?;
