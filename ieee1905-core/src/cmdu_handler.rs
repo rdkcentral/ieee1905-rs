@@ -374,7 +374,7 @@ impl CMDUHandler {
         let remote_al_mac = device_data.al_mac;
         let has_vendor_info = VendorSpecificInfo::find(tlvs).is_some_and(|e| e.oui == COMCAST_OUI);
 
-        let transmission_event = topology_db
+        let _transmission_event = topology_db
             .update_ieee1905_topology(
                 device_data,
                 UpdateType::QueryReceived {
@@ -392,7 +392,11 @@ impl CMDUHandler {
             "Topology Query Processed",
         );
 
-        match transmission_event {
+        // return false to forward the topology query to controller/co-located agent and let them
+        // send the topology response
+        return false;
+
+/*        match transmission_event {
             TransmissionEvent::SendTopologyResponse(destination_mac) => {
                 debug!(
                     remote = %remote_al_mac,
@@ -427,6 +431,7 @@ impl CMDUHandler {
                 false
             }
         }
+*/
     }
 
     /// Handles and logs TLVs for Topology Response.
