@@ -921,16 +921,18 @@ impl CMDUHandler {
             return true;
         };
 
-        let Some(device_identification) = DeviceIdentificationType::find(tlvs) else {
+        let Some(device) = DeviceIdentificationType::find(tlvs) else {
             error!("HigherLayerResponse CMDU missing DeviceIdentificationType TLV");
             return true;
         };
 
         let al_mac = al_mac.al_mac_address;
         let control_url = ControlUrl::find(tlvs);
+        let ipv4 = Ipv4::find(tlvs);
+        let ipv6 = Ipv6::find(tlvs);
 
         let result = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
-            .handle_higher_layer_response(al_mac, message_id, device_identification, control_url)
+            .handle_higher_layer_response(al_mac, message_id, device, control_url, ipv4, ipv6)
             .await;
 
         info!(source = %source_mac, "HigherLayerResponse Processed");

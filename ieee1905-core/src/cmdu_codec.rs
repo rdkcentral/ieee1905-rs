@@ -304,7 +304,7 @@ impl TLVTrait for MacAddress {
     }
 }
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv4 {
     pub entries: Vec<Ipv4Entry>,
 }
@@ -328,7 +328,7 @@ impl TLVTrait for Ipv4 {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv4Entry {
     pub mac: MacAddr,
     pub addresses: Vec<Ipv4Address>,
@@ -353,7 +353,7 @@ impl Ipv4Entry {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv4Address {
     pub kind: IPv4AddressType,
     pub address: Ipv4Addr,
@@ -386,7 +386,7 @@ impl Ipv4Address {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IPv4AddressType {
     Unknown,
     DHCP,
@@ -483,11 +483,11 @@ impl Ipv6AddressEntry {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv6Entry {
     pub mac_address: MacAddr,
     pub link_local_address: Ipv6Addr,
-    pub other_addresses: Vec<Ipv6AddressEntry>,
+    pub routable_addresses: Vec<Ipv6AddressEntry>,
 }
 
 impl Ipv6Entry {
@@ -500,24 +500,24 @@ impl Ipv6Entry {
         let this = Self {
             mac_address,
             link_local_address,
-            other_addresses: other,
+            routable_addresses: other,
         };
 
         Ok((input, this))
     }
 
     fn serialize(&self) -> Vec<u8> {
-        let mut vec = Vec::with_capacity(23 + self.other_addresses.len() * 33);
+        let mut vec = Vec::with_capacity(23 + self.routable_addresses.len() * 33);
         vec.extend(&self.mac_address.octets());
         vec.extend(&self.link_local_address.octets());
-        vec.extend((self.other_addresses.len() as u8).to_be_bytes());
-        vec.extend(self.other_addresses.iter().flat_map(|e| e.serialize()));
+        vec.extend((self.routable_addresses.len() as u8).to_be_bytes());
+        vec.extend(self.routable_addresses.iter().flat_map(|e| e.serialize()));
         vec
     }
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv6 {
     pub entries: Vec<Ipv6Entry>,
 }
@@ -3695,7 +3695,7 @@ pub mod tests {
             entries: vec![Ipv6Entry {
                 mac_address: MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02),
                 link_local_address: Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0042, 0xc0ff, 0xfea8, 0x6402),
-                other_addresses: vec![Ipv6AddressEntry {
+                routable_addresses: vec![Ipv6AddressEntry {
                     address_type: IPv6AddressType::SLAAC,
                     ipv6_address: Ipv6Addr::new(0x2001, 0x0db8, 0, 1, 0, 0, 0, 1),
                     ipv6_originator: Ipv6Addr::new(0x2001, 0x0db8, 0, 2, 0, 0, 0, 1),
