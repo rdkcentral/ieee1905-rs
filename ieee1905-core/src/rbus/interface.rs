@@ -1,5 +1,5 @@
 use crate::rbus::interface_link::RBus_InterfaceLink;
-use crate::rbus::{format_mac_address, format_media_type, peek_topology_database};
+use crate::rbus::{format_media_type, peek_topology_database};
 use nom::AsBytes;
 use rbus_core::RBusError;
 use rbus_provider::element::property::{RBusProviderGetter, RBusProviderGetterArgs};
@@ -40,7 +40,7 @@ impl RBusProviderGetter for RBus_Interface {
 
         match args.path_name.as_bytes() {
             b"InterfaceId" => {
-                args.property.set(&format_mac_address(&interface.mac));
+                args.property.set(&interface.mac.to_string());
                 Ok(())
             }
             b"MediaType" => {

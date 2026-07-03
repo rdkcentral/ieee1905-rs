@@ -1,5 +1,5 @@
 use crate::rbus::nt_device::RBus_Ieee1905Device_Node;
-use crate::rbus::{format_mac_address, peek_topology_database};
+use crate::rbus::peek_topology_database;
 use nom::AsBytes;
 use pnet::datalink::MacAddr;
 use rbus_core::RBusError;
@@ -60,7 +60,7 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neigh
                 Ok(())
             }
             b"NeighborInterfaceId" => {
-                args.property.set(&format_mac_address(&neighbour));
+                args.property.set(&neighbour.to_string());
                 Ok(())
             }
             _ => Err(RBusError::ElementDoesNotExists),
