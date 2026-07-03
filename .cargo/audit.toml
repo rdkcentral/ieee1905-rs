@@ -1,0 +1,8 @@
+[advisories]
+ignore = [
+    # paste is unmaintained but required transitively; awaiting upstream migration to a maintained alternative.
+    "RUSTSEC-2024-0436",
+    # quick-xml <0.41 is pulled via netdev -> plist and is gated to macos/ios. no upgrade is available at this time
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]
