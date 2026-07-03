@@ -10,6 +10,8 @@ use crate::rbus::nt::RBus_NetworkTopology;
 use crate::rbus::nt_device::RBus_NetworkTopology_Ieee1905Device;
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
 use crate::rbus::nt_device_bridge_list::RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList;
+use crate::rbus::nt_device_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor;
+use crate::rbus::nt_device_ieee1905_neighbor_metric::RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric;
 use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
 use anyhow::bail;
 use rbus_core::{RBusError, RBusLibrary, RBusLogHandler, RBusLogLevel, RBusLogRecord};
@@ -29,6 +31,8 @@ mod nt;
 mod nt_device;
 mod nt_device_bridge;
 mod nt_device_bridge_list;
+mod nt_device_ieee1905_neighbor;
+mod nt_device_ieee1905_neighbor_metric;
 mod nt_device_non_ieee1905_neighbor;
 
 ///
@@ -121,7 +125,25 @@ impl RBusConnection {
                     rbus_table("NonIEEE1905Neighbor", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor, (
                         rbus_property("LocalInterface", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor),
                         rbus_property("NeighborInterfaceId", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor),
-                    ))
+                    )),
+                    rbus_property("IEEE1905NeighborNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
+                    rbus_table("IEEE1905Neighbor", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor, (
+                        rbus_property("LocalInterface", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor),
+                        rbus_property("NeighborDeviceId", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor),
+                        rbus_property("MetricNumberOfEntries", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor),
+                        rbus_table("Metric", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric, (
+                            rbus_property("NeighborMACAddress", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                            rbus_property("IEEE802dot1Bridge", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                            rbus_property("PacketErrors", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                            rbus_property("PacketErrorsReceived", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                            rbus_property("TransmittedPackets", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                            rbus_property("PacketsReceived", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                            rbus_property("MACThroughputCapacity", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                            rbus_property("LinkAvailability", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                            rbus_property("PHYRate", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                            rbus_property("RSSI", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
+                        )),
+                    )),
                 )),
             )),
         )

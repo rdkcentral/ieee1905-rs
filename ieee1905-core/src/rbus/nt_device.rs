@@ -1,6 +1,7 @@
 use crate::TopologyDatabase;
 use crate::cmdu_codec::{DeviceIdentificationType, Ieee1905ProfileVersion, SupportedFreqBand};
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
+use crate::rbus::nt_device_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor;
 use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
 use crate::rbus::peek_topology_database;
 use crate::topology_manager::{
@@ -23,6 +24,7 @@ use tokio::sync::RwLockReadGuard;
 /// - ManufacturerName
 /// - ManufacturerModel
 /// - BridgingTupleNumberOfEntries
+/// - IEEE1905NeighborNumberOfEntries
 /// - NonIEEE1905NeighborNumberOfEntries
 ///
 pub struct RBus_NetworkTopology_Ieee1905Device;
@@ -114,10 +116,14 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device {
                 args.property.set(&(tuples.len() as u32));
                 Ok(())
             }
+            b"IEEE1905NeighborNumberOfEntries" => {
+                let iter = RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor::iter(&node);
+                args.property.set(&(iter.count() as u32));
+                Ok(())
+            }
             b"NonIEEE1905NeighborNumberOfEntries" => {
-                let neighbors =
-                    RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor::iter_neighbors(&node);
-                args.property.set(&(neighbors.count() as u32));
+                let iter = RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor::iter(&node);
+                args.property.set(&(iter.count() as u32));
                 Ok(())
             }
             _ => Err(RBusError::ElementDoesNotExists),

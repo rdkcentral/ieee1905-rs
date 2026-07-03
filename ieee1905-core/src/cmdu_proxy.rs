@@ -630,12 +630,11 @@ pub async fn cmdu_link_metric_response_transmission(
         let local_interfaces = topology_db.local_interface_list.read().await;
         let local_interfaces = local_interfaces.as_deref().unwrap_or_default();
 
-        let Some(interface) = local_interfaces.iter().find(|e| {
-            e.ieee1905_neighbors
-                .iter()
-                .flatten()
-                .any(|e| neighbor.device_data.has_port(e.neighbor_al_mac))
-        }) else {
+        let Some((rx, tx)) = local_interfaces
+            .iter()
+            .filter_map(|e| e.get_link_metric_pair(&neighbor.device_data))
+            .next()
+        else {
             warn!(
                 al_mac = %neighbor.device_data.al_mac,
                 source = %neighbor.device_data.destination_frame_mac,
@@ -644,54 +643,19 @@ pub async fn cmdu_link_metric_response_transmission(
             continue;
         };
 
-        let link_stats = interface.link_stats.unwrap_or_default();
-        let neighbour_if1 = neighbor.device_data.destination_mac;
-        let neighbour_if2 = neighbor.device_data.destination_frame_mac;
-        let neighbour_if = neighbour_if1.unwrap_or(neighbour_if2);
-
-        fn to_u16_sat(value: u64) -> u16 {
-            u16::try_from(value).unwrap_or(u16::MAX)
-        }
-
-        fn to_u32_sat(value: u64) -> u32 {
-            u32::try_from(value).unwrap_or(u32::MAX)
-        }
-
         if include_rx {
-            let pair = LinkMetricRxPair {
-                receiver_interface_mac: interface.mac,
-                neighbour_interface_mac: neighbour_if,
-                interface_type: interface.media_type,
-                packet_errors: to_u32_sat(link_stats.rx_errors),
-                transmitted_packets: to_u32_sat(link_stats.rx_packets),
-                rssi: interface.signal_strength_dbm.unwrap_or(0xffu8 as i8),
-            };
-
             tlvs.push(TLV::from(LinkMetricRx {
                 source_al_mac: local_al_mac_address,
                 neighbour_al_mac: neighbor.device_data.al_mac,
-                interface_pairs: vec![pair],
+                interface_pairs: vec![rx],
             }));
         }
 
         if include_tx {
-            let phy_rate = to_u16_sat(interface.phy_rate.unwrap_or_default() / 1_000_000);
-            let pair = LinkMetricTxPair {
-                receiver_interface_mac: interface.mac,
-                neighbour_interface_mac: neighbour_if,
-                interface_type: interface.media_type,
-                has_more_ieee802_bridges: interface.bridging_flag.into(),
-                packet_errors: to_u32_sat(link_stats.tx_errors),
-                transmitted_packets: to_u32_sat(link_stats.tx_packets),
-                mac_throughput_capacity: phy_rate,
-                link_availability: interface.link_availability.unwrap_or(100).into(),
-                phy_rate,
-            };
-
             tlvs.push(TLV::from(LinkMetricTx {
                 source_al_mac: local_al_mac_address,
                 neighbour_al_mac: neighbor.device_data.al_mac,
-                interface_pairs: vec![pair],
+                interface_pairs: vec![tx],
             }));
         }
     }

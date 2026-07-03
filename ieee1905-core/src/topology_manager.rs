@@ -23,7 +23,9 @@
 use crate::artifact_exchange_service::client::{
     ArtifactExchangeClient, ArtifactExchangeClientFactory,
 };
-use crate::cmdu_codec::{ControlUrl, LinkMetricRx, LinkMetricTx};
+use crate::cmdu_codec::{
+    ControlUrl, LinkMetricRx, LinkMetricRxPair, LinkMetricTx, LinkMetricTxPair,
+};
 use crate::interface_manager::get_interfaces;
 use crate::linux::if_link::RtnlLinkStats64;
 use crate::lldpdu::PortId;
@@ -109,6 +111,55 @@ pub struct Ieee1905LocalInterface {
     pub flags: Iff,
     pub link_stats: Option<RtnlLinkStats64>,
     pub data: Ieee1905InterfaceData,
+}
+
+impl Ieee1905LocalInterface {
+    pub fn get_link_metric_pair(
+        &self,
+        neighbor: &Ieee1905DeviceData,
+    ) -> Option<(LinkMetricRxPair, LinkMetricTxPair)> {
+        let neighbors = self.ieee1905_neighbors.as_ref()?;
+        neighbors
+            .iter()
+            .find(|e| neighbor.has_port(e.neighbor_al_mac))?;
+
+        let neighbour_if1 = neighbor.destination_mac;
+        let neighbour_if2 = neighbor.destination_frame_mac;
+        let neighbour_if = neighbour_if1.unwrap_or(neighbour_if2);
+
+        fn to_u16_sat(value: u64) -> u16 {
+            u16::try_from(value).unwrap_or(u16::MAX)
+        }
+
+        fn to_u32_sat(value: u64) -> u32 {
+            u32::try_from(value).unwrap_or(u32::MAX)
+        }
+
+        let link_stats = self.link_stats.unwrap_or_default();
+        let rx = LinkMetricRxPair {
+            receiver_interface_mac: self.mac,
+            neighbour_interface_mac: neighbour_if,
+            interface_type: self.media_type,
+            packet_errors: to_u32_sat(link_stats.rx_errors),
+            packets_received: to_u32_sat(link_stats.rx_packets),
+            rssi: self.signal_strength_dbm.unwrap_or(0xffu8 as i8),
+        };
+
+        let phy_rate = to_u16_sat(self.phy_rate.unwrap_or_default() / 1_000_000);
+        let tx = LinkMetricTxPair {
+            receiver_interface_mac: self.mac,
+            neighbour_interface_mac: neighbour_if,
+            interface_type: self.media_type,
+            has_more_ieee802_bridges: self.bridging_flag.into(),
+            packet_errors: to_u32_sat(link_stats.tx_errors),
+            transmitted_packets: to_u32_sat(link_stats.tx_packets),
+            mac_throughput_capacity: phy_rate,
+            link_availability: self.link_availability.unwrap_or(100).into(),
+            phy_rate,
+        };
+
+        Some((rx, tx))
+    }
 }
 
 impl Default for Ieee1905LocalInterface {
@@ -310,6 +361,8 @@ pub struct Ieee1905DeviceData {
     pub supported_freq_band: Option<SupportedFreqBand>,
     pub ieee1905profile_version: Option<Ieee1905ProfileVersion>,
     pub device_identification_type: Option<DeviceIdentificationType>,
+    pub link_metric_rx: Vec<LinkMetricRx>,
+    pub link_metric_tx: Vec<LinkMetricTx>,
 }
 
 impl Ieee1905DeviceData {
@@ -329,10 +382,7 @@ impl Ieee1905DeviceData {
             local_interface_mac,
             local_interface_list,
             registry_role,
-            supported_fragmentation: Default::default(),
-            supported_freq_band: None,
-            ieee1905profile_version: None,
-            device_identification_type: None,
+            ..Default::default()
         }
     }
 
@@ -1060,10 +1110,11 @@ impl TopologyDatabase {
             return;
         }
 
-        if tracing::enabled!(tracing::Level::TRACE) {
-            trace!(%source, "link metric rx stats: {:#?}", Vec::from_iter(link_metric_rx));
-            trace!(%source, "link metric tx stats: {:#?}", Vec::from_iter(link_metric_tx));
-        }
+        node.device_data.link_metric_rx = link_metric_rx.into_iter().collect();
+        node.device_data.link_metric_tx = link_metric_tx.into_iter().collect();
+
+        trace!(%source, "link metric rx stats: {:#?}", node.device_data.link_metric_rx);
+        trace!(%source, "link metric tx stats: {:#?}", node.device_data.link_metric_tx);
     }
 
     pub async fn handle_ap_auto_config_response(
