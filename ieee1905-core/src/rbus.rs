@@ -12,7 +12,6 @@ use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingT
 use crate::rbus::nt_device_bridge_list::RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList;
 use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
 use anyhow::bail;
-use pnet::datalink::MacAddr;
 use rbus_core::{RBusError, RBusLibrary, RBusLogHandler, RBusLogLevel, RBusLogRecord};
 use rbus_provider::element::RBusProviderElement;
 use rbus_provider::element::object::rbus_object;
@@ -131,10 +130,6 @@ impl RBusConnection {
 
 fn peek_topology_database() -> Result<&'static Arc<TopologyDatabase>, RBusError> {
     TopologyDatabase::peek_instance_sync().ok_or(RBusError::NotInitialized)
-}
-
-fn format_mac_address(mac: &MacAddr) -> String {
-    mac.octets().map(|e| format!("{e:02X}")).join("-")
 }
 
 fn format_media_type(media_type: MediaType) -> &'static str {

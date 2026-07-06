@@ -1,4 +1,4 @@
-use crate::rbus::{format_mac_address, peek_topology_database};
+use crate::rbus::peek_topology_database;
 use nom::AsBytes;
 use rbus_core::RBusError;
 use rbus_provider::element::property::{RBusProviderGetter, RBusProviderGetterArgs};
@@ -18,7 +18,7 @@ impl RBusProviderGetter for RBus_Al_Device {
 
         match args.path_name.as_bytes() {
             b"IEEE1905Id" => {
-                args.property.set(&format_mac_address(&db.al_mac_address));
+                args.property.set(&db.al_mac_address.to_string());
                 Ok(())
             }
             b"InterfaceNumberOfEntries" => {

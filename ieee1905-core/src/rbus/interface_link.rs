@@ -1,5 +1,5 @@
 use crate::TopologyDatabase;
-use crate::rbus::{format_mac_address, format_media_type, peek_topology_database};
+use crate::rbus::{format_media_type, peek_topology_database};
 use crate::topology_manager::{
     Ieee1905DeviceData, Ieee1905InterfaceData, Ieee1905LocalInterface, Ieee1905NodeInternal,
 };
@@ -79,12 +79,12 @@ impl RBusProviderGetter for RBus_InterfaceLink {
 
         match args.path_name.as_bytes() {
             b"IEEE1905Id" => {
-                args.property.set(&format_mac_address(&link.al_mac));
+                args.property.set(&link.al_mac.to_string());
                 Ok(())
             }
             b"InterfaceId" => {
                 match link.destination_mac {
-                    Some(e) => args.property.set(&format_mac_address(&e)),
+                    Some(e) => args.property.set(&e.to_string()),
                     None => return Err(RBusError::ElementDoesNotExists),
                 }
                 Ok(())

@@ -2,7 +2,7 @@ use crate::TopologyDatabase;
 use crate::cmdu_codec::{DeviceIdentificationType, Ieee1905ProfileVersion, SupportedFreqBand};
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
 use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
-use crate::rbus::{format_mac_address, peek_topology_database};
+use crate::rbus::peek_topology_database;
 use crate::topology_manager::{
     Ieee1905InterfaceData, Ieee1905LocalInterface, Ieee1905NodeInternal,
 };
@@ -55,11 +55,11 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device {
             b"IEEE1905Id" => {
                 let al_mac_str = match node {
                     RBus_Ieee1905Device_Node::Local(_) => {
-                        let mac = format_mac_address(&db.local_mac.blocking_read());
-                        format!("{mac}-local",)
+                        let mac = db.local_mac.blocking_read();
+                        format!("{mac}-local")
                     }
                     RBus_Ieee1905Device_Node::Remote(e) => {
-                        format_mac_address(&e.device_data.al_mac)
+                        e.device_data.al_mac.to_string()
                     }
                 };
                 args.property.set(&al_mac_str);
