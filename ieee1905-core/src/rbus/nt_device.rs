@@ -6,6 +6,7 @@ use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingT
 use crate::rbus::nt_device_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor;
 use crate::rbus::nt_device_ipv4::RBus_NetworkTopology_Ieee1905Device_IPv4;
 use crate::rbus::nt_device_ipv6::RBus_NetworkTopology_Ieee1905Device_IPv6;
+use crate::rbus::nt_device_l2_neighbor::RBus_NetworkTopology_Ieee1905Device_L2Neighbor;
 use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
 use crate::rbus::peek_topology_database;
 use crate::topology_manager::{
@@ -27,6 +28,7 @@ use tokio::sync::RwLockReadGuard;
 /// - FriendlyName
 /// - ManufacturerName
 /// - ManufacturerModel
+/// - L2NeighborNumberOfEntries
 /// - BridgingTupleNumberOfEntries
 /// - IEEE1905NeighborNumberOfEntries
 /// - NonIEEE1905NeighborNumberOfEntries
@@ -72,7 +74,7 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device {
                 Ok(())
             }
             b"Version" => {
-                let value = match node.ieee1905profile_version().unwrap_or_default() {
+                let value = match node.ieee1905profile_version() {
                     Ieee1905ProfileVersion::Ieee1905_1 => Cow::Borrowed("1905.1"),
                     Ieee1905ProfileVersion::Ieee1905_1a => Cow::Borrowed("1905.1a"),
                     Ieee1905ProfileVersion::Reserved(e) => format!("unknown({e})").into(),
@@ -113,6 +115,11 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device {
                     Some(e) => &e.manufacturer_model,
                 };
                 args.property.set(value);
+                Ok(())
+            }
+            b"L2NeighborNumberOfEntries" => {
+                let iter = RBus_NetworkTopology_Ieee1905Device_L2Neighbor::iter(&node);
+                args.property.set(&(iter.count() as u32));
                 Ok(())
             }
             b"BridgingTupleNumberOfEntries" => {
@@ -172,10 +179,10 @@ impl<'a> RBus_Ieee1905Device_Node<'a> {
         }
     }
 
-    pub fn ieee1905profile_version(&self) -> Option<Ieee1905ProfileVersion> {
+    pub fn ieee1905profile_version(&self) -> Ieee1905ProfileVersion {
         match self {
-            RBus_Ieee1905Device_Node::Local(_) => Some(Ieee1905ProfileVersion::Ieee1905_1),
-            RBus_Ieee1905Device_Node::Remote(e) => Some(e.device_data.ieee1905_profile_version),
+            RBus_Ieee1905Device_Node::Local(_) => Ieee1905ProfileVersion::Ieee1905_1,
+            RBus_Ieee1905Device_Node::Remote(e) => e.device_data.ieee1905_profile_version,
         }
     }
 

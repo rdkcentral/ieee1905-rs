@@ -19,6 +19,7 @@ use crate::rbus::nt_device_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Devic
 use crate::rbus::nt_device_ieee1905_neighbor_metric::RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric;
 use crate::rbus::nt_device_ipv4::RBus_NetworkTopology_Ieee1905Device_IPv4;
 use crate::rbus::nt_device_ipv6::RBus_NetworkTopology_Ieee1905Device_IPv6;
+use crate::rbus::nt_device_l2_neighbor::RBus_NetworkTopology_Ieee1905Device_L2Neighbor;
 use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
 use anyhow::bail;
 use rbus_core::{RBusError, RBusLibrary, RBusLogHandler, RBusLogLevel, RBusLogRecord};
@@ -47,6 +48,7 @@ mod nt_device_ieee1905_neighbor;
 mod nt_device_ieee1905_neighbor_metric;
 mod nt_device_ipv4;
 mod nt_device_ipv6;
+mod nt_device_l2_neighbor;
 mod nt_device_non_ieee1905_neighbor;
 
 ///
@@ -135,6 +137,14 @@ impl RBusConnection {
                         rbus_property("FriendlyName", RBus_NetworkTopology_Ieee1905Device),
                         rbus_property("ManufacturerName", RBus_NetworkTopology_Ieee1905Device),
                         rbus_property("ManufacturerModel", RBus_NetworkTopology_Ieee1905Device),
+                    ),
+                    (
+                        rbus_property("L2NeighborNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
+                        rbus_table("L2Neighbor", RBus_NetworkTopology_Ieee1905Device_L2Neighbor, (
+                            rbus_property("LocalInterface", RBus_NetworkTopology_Ieee1905Device_L2Neighbor),
+                            rbus_property("NeighborInterfaceId", RBus_NetworkTopology_Ieee1905Device_L2Neighbor),
+                            rbus_property("BehindInterfaceIds", RBus_NetworkTopology_Ieee1905Device_L2Neighbor),
+                        )),
                     ),
                     (
                         rbus_property("BridgingTupleNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),

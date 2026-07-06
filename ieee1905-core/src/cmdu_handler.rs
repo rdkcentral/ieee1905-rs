@@ -538,11 +538,13 @@ impl CMDUHandler {
         }
 
         let remote_al_mac = node.device_data.al_mac;
+        let l2_neighbor_devices = L2NeighborDevice::find_all(tlvs).collect();
         let updated_device_data = Ieee1905DeviceData {
             al_mac: remote_al_mac,
             destination_frame_mac: source_mac,
             local_interface_mac,
             local_interface_list: Some(interfaces.clone()),
+            l2_neighbor_devices,
             ..Default::default()
         };
 
