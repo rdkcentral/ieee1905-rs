@@ -921,6 +921,11 @@ impl CMDUHandler {
             return true;
         };
 
+        let Some(profile_version) = Ieee1905ProfileVersion::find(tlvs) else {
+            error!("HigherLayerResponse CMDU missing Ieee1905ProfileVersion TLV");
+            return true;
+        };
+
         let Some(device) = DeviceIdentificationType::find(tlvs) else {
             error!("HigherLayerResponse CMDU missing DeviceIdentificationType TLV");
             return true;
@@ -932,7 +937,15 @@ impl CMDUHandler {
         let ipv6 = Ipv6::find(tlvs);
 
         let result = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
-            .handle_higher_layer_response(al_mac, message_id, device, control_url, ipv4, ipv6)
+            .handle_higher_layer_response(
+                al_mac,
+                message_id,
+                profile_version,
+                device,
+                control_url,
+                ipv4,
+                ipv6,
+            )
             .await;
 
         info!(source = %source_mac, "HigherLayerResponse Processed");

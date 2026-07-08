@@ -175,7 +175,7 @@ impl<'a> RBus_Ieee1905Device_Node<'a> {
     pub fn ieee1905profile_version(&self) -> Option<Ieee1905ProfileVersion> {
         match self {
             RBus_Ieee1905Device_Node::Local(_) => Some(Ieee1905ProfileVersion::Ieee1905_1),
-            RBus_Ieee1905Device_Node::Remote(e) => e.device_data.ieee1905profile_version,
+            RBus_Ieee1905Device_Node::Remote(e) => Some(e.device_data.ieee1905_profile_version),
         }
     }
 

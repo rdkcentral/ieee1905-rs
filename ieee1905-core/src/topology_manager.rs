@@ -359,7 +359,8 @@ pub struct Ieee1905DeviceData {
     pub registry_role: Option<Role>,
     pub supported_fragmentation: CMDUFragmentation,
     pub supported_freq_band: Option<SupportedFreqBand>,
-    pub ieee1905profile_version: Option<Ieee1905ProfileVersion>,
+    pub ieee1905_profile_version: Ieee1905ProfileVersion,
+    pub control_url: Option<ControlUrl>,
     pub device_identification_type: Option<DeviceIdentificationType>,
     pub ipv4: Option<Ipv4>,
     pub ipv6: Option<Ipv6>,
@@ -398,14 +399,6 @@ impl Ieee1905DeviceData {
         if let Some(interfaces) = other.local_interface_list {
             changed = true;
             self.local_interface_list = Some(interfaces);
-        }
-        if let Some(value) = other.ieee1905profile_version {
-            changed = true;
-            self.ieee1905profile_version = Some(value);
-        }
-        if let Some(value) = other.device_identification_type {
-            changed = true;
-            self.device_identification_type = Some(value);
         }
         changed
     }
@@ -1160,6 +1153,7 @@ impl TopologyDatabase {
         &self,
         al_mac: MacAddr,
         message_id: u16,
+        profile_version: Ieee1905ProfileVersion,
         device_information: DeviceIdentificationType,
         control_url: Option<ControlUrl>,
         ipv4: Option<Ipv4>,
@@ -1183,10 +1177,20 @@ impl TopologyDatabase {
 
         node.device_data.ipv4 = ipv4;
         node.device_data.ipv6 = ipv6;
+        node.device_data.ieee1905_profile_version = profile_version;
+        node.device_data.control_url = control_url;
+
+        let device_information = node
+            .device_data
+            .device_identification_type
+            .insert(device_information);
 
         if device_information.friendly_name == Self::HLE_ARTIFACT_EXCHANGE_SERVICE {
             let factory = self.artifact_exchange_client_factory.lock();
-            node.update_artifact_exchange_client(factory.as_ref(), control_url.map(|e| e.url));
+            node.update_artifact_exchange_client(
+                factory.as_ref(),
+                node.device_data.control_url.as_ref().map(|e| e.url.clone()),
+            );
             return true;
         }
         false

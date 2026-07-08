@@ -1142,7 +1142,7 @@ impl TLVTrait for DeviceIdentificationType {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControlUrl {
     pub url: String,
 }

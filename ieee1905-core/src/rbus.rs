@@ -6,6 +6,11 @@ use crate::rbus::al_device::RBus_Al_Device;
 use crate::rbus::interface::RBus_Interface;
 use crate::rbus::interface_link::RBus_InterfaceLink;
 use crate::rbus::interface_link_metric::RBus_InterfaceLinkMetric;
+use crate::rbus::network::RBus_Network;
+use crate::rbus::network_al::RBus_Network_Al;
+use crate::rbus::network_al_bridge_tuple::RBus_Network_Al_BridgingTuple;
+use crate::rbus::network_al_ipv4::RBus_Network_Al_IPv4;
+use crate::rbus::network_al_ipv6::RBus_Network_Al_IPv6;
 use crate::rbus::nt::RBus_NetworkTopology;
 use crate::rbus::nt_device::RBus_NetworkTopology_Ieee1905Device;
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
@@ -29,6 +34,11 @@ mod al_device;
 mod interface;
 mod interface_link;
 mod interface_link_metric;
+mod network;
+mod network_al;
+mod network_al_bridge_tuple;
+mod network_al_ipv4;
+mod network_al_ipv6;
 mod nt;
 mod nt_device;
 mod nt_device_bridge;
@@ -80,6 +90,9 @@ impl RBusConnection {
                 rbus_object("IEEE1905", (
                     rbus_object("AL", (
                         rbus_object(format!("{instance}"), Self::register_nested()),
+                    )),
+                    rbus_object("Network", (
+                        rbus_object(format!("{instance}"), Self::build_network()),
                     )),
                 )),
             ))
@@ -175,6 +188,50 @@ impl RBusConnection {
                         )),
                     ),
                 )),
+            )),
+        )
+    }
+
+    #[rustfmt::skip]
+    fn build_network() -> impl RBusProviderElement {
+        (
+            rbus_property("Status", RBus_Network),
+            rbus_property("ALNumberOfEntries", RBus_Network),
+            rbus_table("AL", RBus_Network_Al, (
+                (
+                    rbus_property("IEEE1905Id", RBus_Network_Al),
+                    rbus_property("Version", RBus_Network_Al),
+                    rbus_property("RegistrarFreqBand", RBus_Network_Al),
+                    rbus_property("FriendlyName", RBus_Network_Al),
+                    rbus_property("ManufacturerName", RBus_Network_Al),
+                    rbus_property("ManufacturerModel", RBus_Network_Al),
+                    rbus_property("ControlURL", RBus_Network_Al),
+                ),
+                (
+                    rbus_property("IPv4AddressNumberOfEntries", RBus_Network_Al),
+                    rbus_table("IPv4Address", RBus_Network_Al_IPv4, (
+                        rbus_property("MACAddress", RBus_Network_Al_IPv4),
+                        rbus_property("IPv4Address", RBus_Network_Al_IPv4),
+                        rbus_property("IPv4AddressType", RBus_Network_Al_IPv4),
+                        rbus_property("DHCPServer", RBus_Network_Al_IPv4),
+                    ))
+                ),
+                (
+                    rbus_property("IPv6AddressNumberOfEntries", RBus_Network_Al),
+                    rbus_table("IPv6Address", RBus_Network_Al_IPv6, (
+                        rbus_property("MACAddress", RBus_Network_Al_IPv6),
+                        rbus_property("IPv6Address", RBus_Network_Al_IPv6),
+                        rbus_property("IPv6AddressType", RBus_Network_Al_IPv6),
+                        rbus_property("IPv6AddressOrigin", RBus_Network_Al_IPv6),
+                    ))
+                ),
+                (
+                    rbus_property("BridgingTupleNumberOfEntries", RBus_Network_Al),
+                    rbus_table("BridgingTuple", RBus_Network_Al_BridgingTuple, (
+                        rbus_property("InterfaceList", RBus_Network_Al_BridgingTuple),
+                    ))
+                ),
+                rbus_property("InterfaceNumberOfEntries", RBus_Network_Al),
             )),
         )
     }
