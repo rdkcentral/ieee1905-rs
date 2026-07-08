@@ -26,7 +26,7 @@ use crate::artifact_exchange_service::client::{
 use crate::cmdu_codec::{
     ControlUrl, Ipv4, Ipv6, LinkMetricRx, LinkMetricRxPair, LinkMetricTx, LinkMetricTxPair,
 };
-use crate::interface_manager::get_interfaces;
+use crate::interface_manager::{WirelessRadioBss, get_ap_operational_radios, get_interfaces};
 use crate::linux::if_link::RtnlLinkStats64;
 use crate::lldpdu::PortId;
 use crate::{
@@ -552,6 +552,7 @@ pub struct TopologyDatabase {
     pub interface_name: String,
     pub local_mac: Arc<RwLock<MacAddr>>,
     pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905LocalInterface>>>>,
+    pub ap_operational_bss: Arc<RwLock<Vec<WirelessRadioBss>>>,
     pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905NodeInternal>>>,
     pub local_role: Arc<RwLock<Option<Role>>>,
     artifact_exchange_client_factory: Mutex<Option<ArtifactExchangeClientFactory>>,
@@ -575,6 +576,7 @@ impl TopologyDatabase {
             interface_name,
             local_mac: Arc::new(RwLock::new(local_mac)),
             local_interface_list: Arc::new(RwLock::new(None)),
+            ap_operational_bss: Default::default(),
             nodes: Arc::new(RwLock::new(IndexMap::new())),
             local_role: Arc::new(RwLock::new(None)),
             artifact_exchange_client_factory: Default::default(),
@@ -800,6 +802,11 @@ impl TopologyDatabase {
                 Err(e) => {
                     error!("Interface scan task panicked: {:?}", e);
                 }
+            }
+
+            match get_ap_operational_radios().await {
+                Ok(radios) => *self.ap_operational_bss.write().await = radios,
+                Err(e) => warn!(%e, "get_ap_operational_radios failed"),
             }
 
             *self.local_mac.write().await = get_forwarding_interface_mac(&self.interface_name);
