@@ -320,6 +320,7 @@ async fn inject_topology_response_tlvs(
         DeviceBridgingCapability::TYPE.to_u8(),
         Ieee1905NeighborDevice::TYPE.to_u8(),
         NonIeee1905NeighborDevices::TYPE.to_u8(),
+        L2NeighborDevice::TYPE.to_u8(),
         Ipv6::TYPE.to_u8(),
     ];
     vec.retain(|e| !filtered_types.contains(&e.tlv_type));
@@ -407,6 +408,51 @@ async fn inject_topology_response_tlvs(
                 neighborhood_list: neighbors.to_owned(),
             }))
         }));
+    }
+
+    // injecting L2NeighborDevice
+    {
+        let local_interfaces = db.local_interface_list.read().await;
+        let local_interface_list = local_interfaces.as_deref().unwrap_or_default();
+        let local_interface_list = local_interface_list
+            .iter()
+            .filter_map(|e| {
+                let ieee1905_neighbors =
+                    e.ieee1905_neighbors
+                        .iter()
+                        .flatten()
+                        .map(|neighbor| L2Neighbor {
+                            mac_address: neighbor.neighbor_al_mac,
+                            behind_mac_addresses: Vec::new(),
+                        });
+
+                let non_ieee1905_neighbors =
+                    e.non_ieee1905_neighbors
+                        .iter()
+                        .flatten()
+                        .map(|neighbor| L2Neighbor {
+                            mac_address: *neighbor,
+                            behind_mac_addresses: Vec::new(),
+                        });
+
+                let neighbor_interface = L2NeighborLocalInterface {
+                    mac_address: e.mac,
+                    neighbors: ieee1905_neighbors.chain(non_ieee1905_neighbors).collect(),
+                };
+
+                if neighbor_interface.neighbors.is_empty() {
+                    None
+                } else {
+                    Some(neighbor_interface)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if !local_interface_list.is_empty() {
+            vec.push(TLV::from(L2NeighborDevice {
+                local_interfaces: local_interface_list,
+            }));
+        }
     }
 
     // injecting VendorInfo
@@ -982,6 +1028,16 @@ mod tests {
             MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x02, 0x02),
             MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x02, 0x03),
         ]);
+        if1.data.ieee1905_neighbors = Some(vec![
+            IEEE1905Neighbor {
+                neighbor_al_mac: MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x03, 0x01),
+                neighbor_flags: 0,
+            },
+            IEEE1905Neighbor {
+                neighbor_al_mac: MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x03, 0x02),
+                neighbor_flags: 0,
+            },
+        ]);
 
         let mut if2 = Ieee1905LocalInterface::default();
         if2.data.mac = MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x00, 0x02);
@@ -1041,6 +1097,18 @@ mod tests {
         assert_eq!(
             non_ieee1905_list.neighborhood_list,
             if1.non_ieee1905_neighbors.as_deref().unwrap_or_default()
+        );
+
+        let l2_neighbor_device = L2NeighborDevice::find(&vec).unwrap();
+        let l2_neighbor_device_if = &l2_neighbor_device.local_interfaces[0];
+        assert_eq!(l2_neighbor_device_if.mac_address, if1.mac);
+        assert_eq!(
+            l2_neighbor_device_if.neighbors[0].mac_address,
+            MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x03, 0x01)
+        );
+        assert_eq!(
+            l2_neighbor_device_if.neighbors[2].mac_address,
+            MacAddr::new(0x00, 0x00, 0x00, 0x00, 0x02, 0x01)
         );
 
         let Some(last) = vec.last() else {

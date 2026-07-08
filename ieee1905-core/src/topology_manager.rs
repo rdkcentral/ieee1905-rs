@@ -40,6 +40,7 @@ use crate::{
     spawn_named,
 };
 
+use crate::cmdu::L2NeighborDevice;
 #[cfg(feature = "topology_ui")]
 use crossterm::{
     event::EventStream,
@@ -366,6 +367,7 @@ pub struct Ieee1905DeviceData {
     pub ipv6: Option<Ipv6>,
     pub link_metric_rx: Vec<LinkMetricRx>,
     pub link_metric_tx: Vec<LinkMetricTx>,
+    pub l2_neighbor_devices: Vec<L2NeighborDevice>,
 }
 
 impl Ieee1905DeviceData {
@@ -904,6 +906,10 @@ impl TopologyDatabase {
                                     Some(StateLocal::ConvergedLocal),
                                     None,
                                 );
+
+                                node.device_data
+                                    .l2_neighbor_devices
+                                    .clone_from(&device_data.l2_neighbor_devices);
 
                                 debug!(
                                     current_local_interface_list = ?node.device_data.local_interface_list,

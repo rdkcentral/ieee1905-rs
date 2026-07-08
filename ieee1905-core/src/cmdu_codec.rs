@@ -25,7 +25,7 @@ use nom::{
     IResult, Parser,
     bytes::complete::take,
     error::{Error, ErrorKind},
-    number::complete::{be_i8, be_u16, be_u32, be_u8},
+    number::complete::{be_i8, be_u8, be_u16, be_u32},
 };
 
 // Internal modules
@@ -172,6 +172,7 @@ pub enum IEEE1905TLVType {
     DeviceIdentificationType,
     ControlUrl,
     Ieee1905ProfileVersion,
+    L2NeighborDevice,
     SupportedService,
     ClientAssociation,
     MultiApProfile,
@@ -205,6 +206,7 @@ impl IEEE1905TLVType {
             0x15 => IEEE1905TLVType::DeviceIdentificationType,
             0x16 => IEEE1905TLVType::ControlUrl,
             0x1a => IEEE1905TLVType::Ieee1905ProfileVersion,
+            0x1e => IEEE1905TLVType::L2NeighborDevice,
             0x80 => IEEE1905TLVType::SupportedService,
             0x92 => IEEE1905TLVType::ClientAssociation,
             0xb3 => IEEE1905TLVType::MultiApProfile,
@@ -238,6 +240,7 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::DeviceIdentificationType => 0x15,
             IEEE1905TLVType::ControlUrl => 0x16,
             IEEE1905TLVType::Ieee1905ProfileVersion => 0x1a,
+            IEEE1905TLVType::L2NeighborDevice => 0x1e,
             IEEE1905TLVType::SupportedService => 0x80,
             IEEE1905TLVType::ClientAssociation => 0x92,
             IEEE1905TLVType::MultiApProfile => 0xb3,
@@ -882,19 +885,107 @@ impl TLVTrait for Ieee1905NeighborDevice {
         let (input, neighborhood_list) =
             all_consuming(many0(IEEE1905Neighbor::parse)).parse(input)?;
 
-        Ok((
-            input,
-            Ieee1905NeighborDevice {
-                local_mac_address,
-                neighborhood_list,
-            },
-        ))
+        let this = Ieee1905NeighborDevice {
+            local_mac_address,
+            neighborhood_list,
+        };
+
+        Ok((input, this))
     }
 
     fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend(self.local_mac_address.octets());
         bytes.extend(self.neighborhood_list.iter().flat_map(|e| e.serialize()));
+        bytes
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct L2NeighborDevice {
+    pub local_interfaces: Vec<L2NeighborLocalInterface>,
+}
+
+impl TLVTrait for L2NeighborDevice {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::L2NeighborDevice;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, local_interfaces_len) = be_u8(input)?;
+        let (input, local_interfaces) = all_consuming(count(
+            L2NeighborLocalInterface::parse,
+            local_interfaces_len as usize,
+        ))
+        .parse(input)?;
+
+        Ok((input, Self { local_interfaces }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend((self.local_interfaces.len() as u8).to_be_bytes());
+        bytes.extend(self.local_interfaces.iter().flat_map(|e| e.serialize()));
+        bytes
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct L2NeighborLocalInterface {
+    pub mac_address: MacAddr,
+    pub neighbors: Vec<L2Neighbor>,
+}
+
+impl L2NeighborLocalInterface {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, mac_address) = take_mac_addr(input)?;
+        let (input, neighbors_len) = be_u16(input)?;
+        let (input, neighbors) = count(L2Neighbor::parse, neighbors_len as usize).parse(input)?;
+
+        let this = Self {
+            mac_address,
+            neighbors,
+        };
+
+        Ok((input, this))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(self.mac_address.octets());
+        bytes.extend((self.neighbors.len() as u16).to_be_bytes());
+        bytes.extend(self.neighbors.iter().flat_map(|e| e.serialize()));
+        bytes
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct L2Neighbor {
+    pub mac_address: MacAddr,
+    pub behind_mac_addresses: Vec<MacAddr>,
+}
+
+impl L2Neighbor {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, mac_address) = take_mac_addr(input)?;
+        let (input, behind_mac_addresses_len) = be_u16(input)?;
+        let (input, behind_mac_addresses) =
+            count(take_mac_addr, behind_mac_addresses_len as usize).parse(input)?;
+
+        let this = Self {
+            mac_address,
+            behind_mac_addresses,
+        };
+
+        Ok((input, this))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(self.mac_address.octets());
+        bytes.extend((self.behind_mac_addresses.len() as u16).to_be_bytes());
+        bytes.extend(self.behind_mac_addresses.iter().flat_map(|e| e.octets()));
         bytes
     }
 }
@@ -2513,18 +2604,9 @@ pub mod tests {
             IEEE1905TLVType::from_u8(0x10),
             IEEE1905TLVType::SupportedFreqBand
         );
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x16),
-            IEEE1905TLVType::ControlUrl
-        );
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x17),
-            IEEE1905TLVType::Ipv4
-        );
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x18),
-            IEEE1905TLVType::Ipv6
-        );
+        assert_eq!(IEEE1905TLVType::from_u8(0x16), IEEE1905TLVType::ControlUrl);
+        assert_eq!(IEEE1905TLVType::from_u8(0x17), IEEE1905TLVType::Ipv4);
+        assert_eq!(IEEE1905TLVType::from_u8(0x18), IEEE1905TLVType::Ipv6);
         assert_eq!(
             IEEE1905TLVType::from_u8(0x14),
             IEEE1905TLVType::GenericPhyDeviceInformation
@@ -2536,6 +2618,10 @@ pub mod tests {
         assert_eq!(
             IEEE1905TLVType::from_u8(0x1a),
             IEEE1905TLVType::Ieee1905ProfileVersion
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x1e),
+            IEEE1905TLVType::L2NeighborDevice
         );
         assert_eq!(
             IEEE1905TLVType::from_u8(0x80),
@@ -2929,6 +3015,68 @@ pub mod tests {
         assert_eq!(parsed_device.neighborhood_list.len(), 0);
     }
 
+    // Verify serializing and parsing L2 neighbor device
+    #[test]
+    fn test_l2_neighbor_device_parse_and_serialize() {
+        let input = [
+            0x02, // local interface count: 2
+            0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, // local interface MAC: aa:bb:cc:dd:ee:ff
+            0x00, 0x02, // L2 neighbor device count: 2
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, // L2 neighbor MAC: 11:22:33:44:55:66
+            0x00, 0x02, // behind MAC address count: 2
+            0x21, 0x22, 0x23, 0x24, 0x25, 0x26, // behind MAC address: 21:22:23:24:25:26
+            0x31, 0x32, 0x33, 0x34, 0x35, 0x36, // behind MAC address: 31:32:33:34:35:36
+            0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, // L2 neighbor MAC: 77:88:99:aa:bb:cc
+            0x00, 0x00, // behind MAC address count: 0
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // local interface MAC: 00:11:22:33:44:55
+            0x00, 0x00, // L2 neighbor device count: 0
+        ];
+        let expected = L2NeighborDevice {
+            local_interfaces: vec![
+                L2NeighborLocalInterface {
+                    mac_address: MacAddr::new(0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF),
+                    neighbors: vec![
+                        L2Neighbor {
+                            mac_address: MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66),
+                            behind_mac_addresses: vec![
+                                MacAddr::new(0x21, 0x22, 0x23, 0x24, 0x25, 0x26),
+                                MacAddr::new(0x31, 0x32, 0x33, 0x34, 0x35, 0x36),
+                            ],
+                        },
+                        L2Neighbor {
+                            mac_address: MacAddr::new(0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC),
+                            behind_mac_addresses: vec![],
+                        },
+                    ],
+                },
+                L2NeighborLocalInterface {
+                    mac_address: MacAddr::new(0x00, 0x11, 0x22, 0x33, 0x44, 0x55),
+                    neighbors: vec![],
+                },
+            ],
+        };
+
+        let (remaining, parsed) = L2NeighborDevice::parse(&input).unwrap();
+        assert!(remaining.is_empty());
+        assert_eq!(parsed, expected);
+        assert_eq!(parsed.serialize(), input);
+    }
+
+    // Verify L2 neighbor device parser rejects trailing bytes inside TLV value
+    #[test]
+    fn test_l2_neighbor_device_parse_rejects_trailing_bytes() {
+        let mut serialized = L2NeighborDevice {
+            local_interfaces: vec![L2NeighborLocalInterface {
+                mac_address: MacAddr::new(0x00, 0x11, 0x22, 0x33, 0x44, 0x55),
+                neighbors: vec![],
+            }],
+        }
+        .serialize();
+        serialized.push(0x00);
+
+        assert!(L2NeighborDevice::parse(&serialized).is_err());
+    }
+
     // Verify parsing and serializing vendor specific info
     #[test]
     fn test_vendor_specific_info_parse_and_serialize() {
@@ -3201,6 +3349,7 @@ pub mod tests {
         device_id[64..76].copy_from_slice(b"Manufacturer");
         device_id[128..137].copy_from_slice(b"ModelName");
 
+        #[rustfmt::skip]
         let input: Vec<u8> = [
             [0x00, 0x00, 0x00, 0x0E, 0xDB, 0x9E, 0x00, 0x80].as_slice(), // CMDU header
             &[0x01, 0x00, 0x06, 0x02, 0x42, 0xC0, 0xA8, 0x64, 0x02], // AlMacAddress TLV

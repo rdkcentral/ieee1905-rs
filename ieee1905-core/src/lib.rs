@@ -52,7 +52,8 @@ pub mod lldpdu {
 pub mod cmdu {
     pub use crate::cmdu_codec::{
         AlMacAddress, BridgingTuple, CMDU, CMDUType, DeviceBridgingCapability, DeviceInformation,
-        IEEE1905Neighbor, IEEE1905TLVType, Ieee1905NeighborDevice, LocalInterface, MacAddress,
+        IEEE1905Neighbor, IEEE1905TLVType, Ieee1905NeighborDevice, L2Neighbor, L2NeighborDevice,
+        L2NeighborLocalInterface, LocalInterface, MacAddress,
         NonIEEE1905LocalInterfaceNeighborhood, NonIEEE1905Neighbor, NonIeee1905NeighborDevices,
         VendorSpecificInfo,
     };
