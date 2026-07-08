@@ -20,9 +20,9 @@
 #![deny(warnings)]
 
 use netdev::interface::types::InterfaceType;
-use std::net::Ipv6Addr;
 // External crates
 use pnet::datalink::{self, MacAddr};
+use std::net::Ipv6Addr;
 
 // Standard library
 use crate::cmdu_codec::{MediaType, MediaTypeSpecialInfo, MediaTypeSpecialInfoWifi};
@@ -129,7 +129,7 @@ pub async fn get_interfaces(
     filter_interfaces_by_bridge(forwarding_if_name, &mut links).await;
 
     // filter out veth (virtual) interfaces
-    links.retain(|_, e| e.link_kind.as_deref() != Some("veth"));
+    links.retain(|_, e| e.if_name == forwarding_if_name || e.link_kind.as_deref() != Some("veth"));
 
     match get_wireless_interfaces(&mut links).await {
         Ok(e) => interfaces.extend(e),
@@ -180,20 +180,22 @@ async fn filter_interfaces_by_bridge(
 }
 
 async fn filter_interfaces_by_ovs_bridge(
-    mut forwarding_if_name: &str,
+    forwarding_if_name: &str,
     links: &mut IndexMap<i32, LinkInterfaceInfo>,
 ) -> bool {
+    let mut bridge_child_if_name = forwarding_if_name;
+
     // select other veth pair endpoint if current endpoint is not connected to the bridge
-    if let Some(forwarding_interface) = links.values().find(|e| e.if_name == forwarding_if_name)
+    if let Some(forwarding_interface) = links.values().find(|e| e.if_name == bridge_child_if_name)
         && forwarding_interface.link_kind.as_deref() == Some("veth")
         && forwarding_interface.bridge_if_index.is_none()
         && let Some(pair_if_index) = forwarding_interface.link_if_index
         && let Some(pair_interface) = links.get(&pair_if_index)
     {
-        forwarding_if_name = pair_interface.if_name.as_str();
+        bridge_child_if_name = pair_interface.if_name.as_str();
     }
 
-    let bridge = match call_ovs_interface_to_bridge(forwarding_if_name).await {
+    let bridge = match call_ovs_interface_to_bridge(bridge_child_if_name).await {
         Ok(e) => e,
         Err(e) => {
             debug!(%e, "ovs bridge not available");
@@ -210,7 +212,7 @@ async fn filter_interfaces_by_ovs_bridge(
     };
 
     debug!("filtering interfaces by {bridge:?} ovs bridge");
-    links.retain(|_, e| interfaces.contains(&e.if_name));
+    links.retain(|_, e| e.if_name == forwarding_if_name || interfaces.contains(&e.if_name));
     true
 }
 
@@ -245,7 +247,9 @@ fn filter_interfaces_by_linux_bridge(
 
     debug!("filtering interfaces by {:?} Linux bridge", bridge.if_name);
     let bridge_if_index = bridge.if_index as u32;
-    links.retain(|_, e| e.bridge_if_index == Some(bridge_if_index));
+    links.retain(|_, e| {
+        e.if_name == forwarding_if_name || e.bridge_if_index == Some(bridge_if_index)
+    });
     true
 }
 
