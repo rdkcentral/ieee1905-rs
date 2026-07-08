@@ -22,6 +22,7 @@ use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
+use crate::registration_codec::ServiceType;
 use crate::tlv_cmdu_codec::TLVTrait;
 use crate::topology_manager::{Ieee1905Node, Role, TopologyDatabase, UpdateType};
 use crate::{MessageIdGenerator, next_task_id};
@@ -321,7 +322,9 @@ async fn inject_topology_response_tlvs(
         Ieee1905NeighborDevice::TYPE.to_u8(),
         NonIeee1905NeighborDevices::TYPE.to_u8(),
         L2NeighborDevice::TYPE.to_u8(),
-        Ipv6::TYPE.to_u8(),
+        SupportedService::TYPE.to_u8(),
+        ApOperationalBss::TYPE.to_u8(),
+        BssConfigurationReport::TYPE.to_u8(),
     ];
     vec.retain(|e| !filtered_types.contains(&e.tlv_type));
 
@@ -454,6 +457,24 @@ async fn inject_topology_response_tlvs(
             }));
         }
     }
+
+    // injecting SupportedService
+    if let Some(al_sap) = AlServiceAccessPoint::get().await
+        && let Some(service_type) = al_sap.service_type()
+    {
+        vec.push(TLV::from(SupportedService {
+            services: vec![match service_type {
+                ServiceType::EasyMeshAgent => SupportedServiceType::Agent,
+                ServiceType::EasyMeshController => SupportedServiceType::Controller,
+            }],
+        }));
+    }
+
+    // injecting ApOperationalBss
+    vec.push(TLV::from(ApOperationalBss { radios: vec![] }));
+
+    // injecting BssConfigurationReport
+    vec.push(TLV::from(BssConfigurationReport { radios: vec![] }));
 
     // injecting VendorInfo
     if db.get_artifact_exchange_server_ip_address().is_some() {
@@ -1014,7 +1035,7 @@ mod tests {
         let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
         let response = inject_topology_response_tlvs(&mut vec, &db).await;
         assert!(response.is_ok());
-        assert_eq!(vec.len(), 3);
+        assert_eq!(vec.len(), 5);
     }
 
     #[tokio::test]
