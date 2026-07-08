@@ -787,6 +787,13 @@ pub async fn cmdu_higher_layer_response_transmission(
         TLV::from(ControlUrl {
             url: ArtifactExchangeServer::format_base_url(server_address),
         }),
+        TLV::from(Ipv6 {
+            entries: vec![Ipv6Entry {
+                mac_address: local_al_mac_address,
+                link_local_address: server_address,
+                routable_addresses: vec![],
+            }],
+        }),
         TLV::from(EndOfMessage),
     ];
 

@@ -24,7 +24,7 @@ use crate::artifact_exchange_service::client::{
     ArtifactExchangeClient, ArtifactExchangeClientFactory,
 };
 use crate::cmdu_codec::{
-    ControlUrl, LinkMetricRx, LinkMetricRxPair, LinkMetricTx, LinkMetricTxPair,
+    ControlUrl, Ipv4, Ipv6, LinkMetricRx, LinkMetricRxPair, LinkMetricTx, LinkMetricTxPair,
 };
 use crate::interface_manager::get_interfaces;
 use crate::linux::if_link::RtnlLinkStats64;
@@ -361,6 +361,8 @@ pub struct Ieee1905DeviceData {
     pub supported_freq_band: Option<SupportedFreqBand>,
     pub ieee1905profile_version: Option<Ieee1905ProfileVersion>,
     pub device_identification_type: Option<DeviceIdentificationType>,
+    pub ipv4: Option<Ipv4>,
+    pub ipv6: Option<Ipv6>,
     pub link_metric_rx: Vec<LinkMetricRx>,
     pub link_metric_tx: Vec<LinkMetricTx>,
 }
@@ -1160,6 +1162,8 @@ impl TopologyDatabase {
         message_id: u16,
         device_information: DeviceIdentificationType,
         control_url: Option<ControlUrl>,
+        ipv4: Option<Ipv4>,
+        ipv6: Option<Ipv6>,
     ) -> bool {
         let mut nodes = self.nodes.write().await;
         let Some(node) = Self::find_node_by_port_mut(nodes.values_mut(), al_mac) else {
@@ -1176,6 +1180,9 @@ impl TopologyDatabase {
             warn!(%al_mac, "higher_layer_response — unexpected message id");
             return false;
         }
+
+        node.device_data.ipv4 = ipv4;
+        node.device_data.ipv6 = ipv6;
 
         if device_information.friendly_name == Self::HLE_ARTIFACT_EXCHANGE_SERVICE {
             let factory = self.artifact_exchange_client_factory.lock();
