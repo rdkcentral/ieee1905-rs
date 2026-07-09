@@ -20,9 +20,9 @@
 #![deny(warnings)]
 
 use netdev::interface::types::InterfaceType;
+use std::net::Ipv6Addr;
 // External crates
 use pnet::datalink::{self, MacAddr};
-use std::net::Ipv6Addr;
 
 // Standard library
 use crate::cmdu_codec::{MediaType, MediaTypeSpecialInfo, MediaTypeSpecialInfoWifi};

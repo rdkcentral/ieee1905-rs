@@ -106,7 +106,7 @@ impl RBusConnection {
                         rbus_object(format!("{instance}"), Self::register_nested()),
                     )),
                     rbus_object("Network", (
-                        rbus_object(format!("{instance}"), Self::build_network()),
+                        rbus_object(format!("{instance}"), Self::build_network(instance)),
                     )),
                 )),
             ))
@@ -215,7 +215,7 @@ impl RBusConnection {
     }
 
     #[rustfmt::skip]
-    fn build_network() -> impl RBusProviderElement {
+    fn build_network(instance: u32) -> impl RBusProviderElement {
         (
             rbus_property("Status", RBus_Network),
             rbus_property("ALNumberOfEntries", RBus_Network),
@@ -287,10 +287,10 @@ impl RBusConnection {
                         ),
                         (
                             rbus_property("IEEE1905NeighborNumberOfEntries", RBus_Network_Al_Interface),
-                            rbus_table("IEEE1905Neighbor", RBus_Network_Al_Interface_Ieee1905Neighbor, (
-                                rbus_property("NeighborDeviceId", RBus_Network_Al_Interface_Ieee1905Neighbor),
-                                rbus_property("IEEE1905DeviceRef", RBus_Network_Al_Interface_Ieee1905Neighbor),
-                                rbus_property("IEEE802dot1Bridge", RBus_Network_Al_Interface_Ieee1905Neighbor),
+                            rbus_table("IEEE1905Neighbor", RBus_Network_Al_Interface_Ieee1905Neighbor { instance }, (
+                                rbus_property("NeighborDeviceId", RBus_Network_Al_Interface_Ieee1905Neighbor { instance }),
+                                rbus_property("IEEE1905DeviceRef", RBus_Network_Al_Interface_Ieee1905Neighbor { instance }),
+                                rbus_property("IEEE802dot1Bridge", RBus_Network_Al_Interface_Ieee1905Neighbor { instance }),
                             )),
                         ),
                         (

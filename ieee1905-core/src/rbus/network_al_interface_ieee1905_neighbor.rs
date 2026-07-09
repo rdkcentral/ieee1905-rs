@@ -13,7 +13,9 @@ use rbus_provider::element::table::{RBusProviderTableSync, RBusProviderTableSync
 /// - IEEE1905DeviceRef
 /// - IEEE802dot1Bridge
 ///
-pub struct RBus_Network_Al_Interface_Ieee1905Neighbor;
+pub struct RBus_Network_Al_Interface_Ieee1905Neighbor {
+    pub instance: u32,
+}
 
 impl RBusProviderTableSync for RBus_Network_Al_Interface_Ieee1905Neighbor {
     type UserData = ();
@@ -54,7 +56,7 @@ impl RBusProviderGetter for RBus_Network_Al_Interface_Ieee1905Neighbor {
                 let Some(index) = nodes.get_index_of(&neighbor.neighbor_al_mac) else {
                     return Err(RBusError::ElementDoesNotExists);
                 };
-                let value = format!("Device.IEEE1905.Network.AL.{index}");
+                let value = format!("Device.IEEE1905.Network.{}.AL.{index}", self.instance);
                 args.property.set(&value);
                 Ok(())
             }

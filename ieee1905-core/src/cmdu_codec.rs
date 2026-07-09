@@ -1956,6 +1956,13 @@ pub enum MediaTypeSpecialInfo {
 }
 
 impl MediaTypeSpecialInfo {
+    pub fn as_wifi(&self) -> Option<&MediaTypeSpecialInfoWifi> {
+        match self {
+            MediaTypeSpecialInfo::Wifi(e) => Some(e),
+            MediaTypeSpecialInfo::Other(_) => None,
+        }
+    }
+    
     pub fn parse(media_type: MediaType, input: &[u8]) -> IResult<&[u8], Self> {
         if (0x0100..0x0108).contains(&media_type.0) {
             // Wifi6 and Wifi7 don't have extras

@@ -1,4 +1,4 @@
-use crate::cmdu_codec::{MediaTypeSpecialInfo, MediaTypeSpecialInfoWifi};
+use crate::cmdu_codec::MediaTypeSpecialInfoWifi;
 use crate::rbus::format_media_type;
 use crate::rbus::network_al::RBus_Network_Al;
 use crate::rbus::network_al_interface_l2_neighbor::RBus_Network_Al_Interface_L2Neighbor;
@@ -76,46 +76,40 @@ impl RBusProviderGetter for RBus_Network_Al_Interface {
                 Ok(())
             }
             b"NetworkMembership" => {
-                let MediaTypeSpecialInfo::Wifi(extra) = &interface.media_type_extra else {
-                    return Err(RBusError::ElementDoesNotExists);
-                };
-                args.property.set(&extra.bssid.to_string());
+                let wifi = interface.media_type_extra.as_wifi();
+                let value = wifi.map(|e| e.bssid.to_string());
+                args.property.set(&value.unwrap_or_default());
                 Ok(())
             }
             b"Role" => {
-                let MediaTypeSpecialInfo::Wifi(extra) = &interface.media_type_extra else {
-                    return Err(RBusError::ElementDoesNotExists);
-                };
-                let value = match extra.role {
+                let wifi = interface.media_type_extra.as_wifi();
+                let value = wifi.map(|e| match e.role {
                     MediaTypeSpecialInfoWifi::ROLE_AP => "AP",
                     MediaTypeSpecialInfoWifi::ROLE_NO_AD_NO_PCP_STATION => "non-AP/non-PCP STA",
                     MediaTypeSpecialInfoWifi::ROLE_P2P_CLIENT => "Wi-Fi P2P Client",
                     MediaTypeSpecialInfoWifi::ROLE_P2P_GROUP_OWNER => "Wi-Fi P2P Group Owner",
                     MediaTypeSpecialInfoWifi::ROLE_802_11AD_PCP => "802.11adPCP",
-                    _ => return Err(RBusError::ElementDoesNotExists),
-                };
-                args.property.set(value);
+                    _ => "",
+                });
+                args.property.set(value.unwrap_or_default());
                 Ok(())
             }
             b"APChannelBand" => {
-                let MediaTypeSpecialInfo::Wifi(extra) = &interface.media_type_extra else {
-                    return Err(RBusError::ElementDoesNotExists);
-                };
-                args.property.set(&extra.ap_channel_band);
+                let wifi = interface.media_type_extra.as_wifi();
+                let value = wifi.map_or(0, |e| e.ap_channel_band);
+                args.property.set(&value);
                 Ok(())
             }
             b"FrequencyIndex1" => {
-                let MediaTypeSpecialInfo::Wifi(extra) = &interface.media_type_extra else {
-                    return Err(RBusError::ElementDoesNotExists);
-                };
-                args.property.set(&extra.ap_channel_center_frequency_index1);
+                let wifi = interface.media_type_extra.as_wifi();
+                let value = wifi.map_or(0, |e| e.ap_channel_center_frequency_index1);
+                args.property.set(&value);
                 Ok(())
             }
             b"FrequencyIndex2" => {
-                let MediaTypeSpecialInfo::Wifi(extra) = &interface.media_type_extra else {
-                    return Err(RBusError::ElementDoesNotExists);
-                };
-                args.property.set(&extra.ap_channel_center_frequency_index2);
+                let wifi = interface.media_type_extra.as_wifi();
+                let value = wifi.map_or(0, |e| e.ap_channel_center_frequency_index2);
+                args.property.set(&value);
                 Ok(())
             }
             b"LinkNumberOfEntries" => {
