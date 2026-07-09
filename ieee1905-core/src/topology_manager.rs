@@ -24,7 +24,8 @@ use crate::artifact_exchange_service::client::{
     ArtifactExchangeClient, ArtifactExchangeClientFactory,
 };
 use crate::cmdu_codec::{
-    ControlUrl, Ipv4, Ipv6, LinkMetricRx, LinkMetricRxPair, LinkMetricTx, LinkMetricTxPair,
+    ControlUrl, GenericPhyDeviceInformation, Ipv4, Ipv6, LinkMetricRx, LinkMetricRxPair,
+    LinkMetricTx, LinkMetricTxPair,
 };
 use crate::interface_manager::get_interfaces;
 use crate::linux::if_link::RtnlLinkStats64;
@@ -102,6 +103,7 @@ pub enum TransmissionEvent {
     SendTopologyNotification(MacAddr),
     StartLinkMetricQueryWorker((MacAddr, CancellationToken)),
     StartHigherLayerQueryWorker((MacAddr, CancellationToken)),
+    StartGenericPhyQueryWorker((MacAddr, CancellationToken)),
     None,
 }
 
@@ -266,6 +268,7 @@ pub struct Ieee1905NodeInfo {
     pub local_message_id: Option<u16>,
     pub local_link_metric_query_message_id: Option<(u16, Instant)>,
     pub local_hle_query_message_id: Option<(u16, Instant)>,
+    pub local_generic_phy_query_message_id: Option<(u16, Instant)>,
     /// last msg id received from this node
     /// this excludes response ids, those are always copied from the query
     pub remote_message_id: Option<u16>,
@@ -290,6 +293,7 @@ impl Ieee1905NodeInfo {
             local_message_id: None,
             local_link_metric_query_message_id: None,
             local_hle_query_message_id: None,
+            local_generic_phy_query_message_id: None,
             remote_message_id: None,
             lldp_neighbor,
             node_state_local,
@@ -368,6 +372,7 @@ pub struct Ieee1905DeviceData {
     pub link_metric_rx: Vec<LinkMetricRx>,
     pub link_metric_tx: Vec<LinkMetricTx>,
     pub l2_neighbor_devices: Vec<L2NeighborDevice>,
+    pub generic_phy_device_information: Option<GenericPhyDeviceInformation>,
 }
 
 impl Ieee1905DeviceData {
@@ -445,6 +450,7 @@ pub struct Ieee1905NodeInternal {
     artifact_exchange_client: Option<(String, ArtifactExchangeClient)>,
     link_metrics_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
     higher_layer_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
+    generic_phy_query_cancellation_token: Option<tokio_util::sync::DropGuard>,
 }
 
 impl Ieee1905NodeInternal {
@@ -456,6 +462,7 @@ impl Ieee1905NodeInternal {
             artifact_exchange_client: None,
             link_metrics_query_cancellation_token: None,
             higher_layer_query_cancellation_token: None,
+            generic_phy_query_cancellation_token: None,
         }
     }
 
@@ -498,6 +505,21 @@ impl Ieee1905NodeInternal {
         self.higher_layer_query_cancellation_token = Some(drop_guard);
 
         TransmissionEvent::StartHigherLayerQueryWorker((
+            self.device_data.destination_frame_mac,
+            cancellation_token,
+        ))
+    }
+
+    fn prepare_generic_phy_query_transmission_event_if_needed(&mut self) -> TransmissionEvent {
+        if self.generic_phy_query_cancellation_token.is_some() {
+            return TransmissionEvent::None;
+        }
+
+        let cancellation_token = CancellationToken::new();
+        let drop_guard = cancellation_token.clone().drop_guard();
+        self.generic_phy_query_cancellation_token = Some(drop_guard);
+
+        TransmissionEvent::StartGenericPhyQueryWorker((
             self.device_data.destination_frame_mac,
             cancellation_token,
         ))
@@ -927,8 +949,8 @@ impl TopologyDatabase {
                                     debug!("Event: Send Topology Notification");
                                     TransmissionEvent::SendTopologyNotification(multicast_mac)
                                 } else {
-                                    debug!("Device data unchanged — no transmission needed");
-                                    TransmissionEvent::None
+                                    debug!("Device data unchanged");
+                                    node.prepare_generic_phy_query_transmission_event_if_needed()
                                 }
                             } else {
                                 debug!("Ignoring ResponseReceived — not in ConvergingLocal state");
@@ -994,6 +1016,7 @@ impl TopologyDatabase {
                             local_message_id: local_msg_id,
                             local_link_metric_query_message_id: None,
                             local_hle_query_message_id: None,
+                            local_generic_phy_query_message_id: None,
                             remote_message_id: remote_msg_id,
                             lldp_neighbor,
                             node_state_local: StateLocal::Idle,
@@ -1002,6 +1025,7 @@ impl TopologyDatabase {
                         device_data,
                         link_metrics_query_cancellation_token: None,
                         higher_layer_query_cancellation_token: None,
+                        generic_phy_query_cancellation_token: None,
                         artifact_exchange_client: None,
                     };
 
@@ -1116,6 +1140,53 @@ impl TopologyDatabase {
 
         trace!(%source, "link metric rx stats: {:#?}", node.device_data.link_metric_rx);
         trace!(%source, "link metric tx stats: {:#?}", node.device_data.link_metric_tx);
+    }
+
+    pub async fn handle_generic_phy_response(
+        &self,
+        source: MacAddr,
+        message_id: u16,
+        generic_phy: GenericPhyDeviceInformation,
+    ) -> bool {
+        let mut nodes = self.nodes.write().await;
+        let Some(node) = Self::find_node_by_port_mut(nodes.values_mut(), source) else {
+            debug!(%source, "generic_phy_response — node not found");
+            return false;
+        };
+
+        if node.device_data.al_mac != generic_phy.al_mac {
+            warn!(
+                source = %source,
+                expected = %node.device_data.al_mac,
+                got = %generic_phy.al_mac,
+                "generic_phy_response — AL MAC mismatch",
+            );
+            return false;
+        }
+
+        let local_query_message_id = node
+            .metadata
+            .local_generic_phy_query_message_id
+            .take_if(|e| e.0 == message_id && e.1.elapsed() <= Duration::from_secs(1));
+
+        if local_query_message_id.is_none() {
+            warn!(
+                %source,
+                got = message_id,
+                exp = ?node.metadata.local_generic_phy_query_message_id,
+                "generic_phy_response — unexpected message id",
+            );
+            return false;
+        }
+
+        if node.device_data.generic_phy_device_information.as_ref() == Some(&generic_phy) {
+            debug!(%source, "generic_phy_response — data unchanged");
+            return false;
+        }
+
+        node.device_data.generic_phy_device_information = Some(generic_phy);
+        info!(%source, "generic_phy_response — topology Generic PHY data updated");
+        true
     }
 
     pub async fn handle_ap_auto_config_response(

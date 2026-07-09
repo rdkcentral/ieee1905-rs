@@ -738,6 +738,134 @@ pub async fn cmdu_link_metric_response_transmission(
 
 #[instrument(
     skip_all,
+    name = "cmdu_generic_phy_query_worker",
+    fields(task = next_task_id(), mac = %destination_mac),
+)]
+pub async fn cmdu_generic_phy_query_transmission_worker(
+    topo_db: Arc<TopologyDatabase>,
+    sender: Arc<EthernetSender>,
+    message_id_generator: Arc<MessageIdGenerator>,
+    interface_mac_address: MacAddr,
+    destination_mac: MacAddr,
+    cancellation_token: CancellationToken,
+) {
+    let mut ticker = interval(Duration::from_secs(30));
+
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => (),
+            _ = cancellation_token.cancelled() => return,
+        }
+
+        let message_id = message_id_generator.next_id();
+        debug!(%destination_mac, message_id, "Creating CMDU Generic PHY Query");
+
+        if let Some(mut node) = topo_db.lock_node_by_port_mut(destination_mac).await {
+            if node
+                .metadata
+                .local_generic_phy_query_message_id
+                .is_some_and(|e| e.1.elapsed() <= Duration::from_secs(1))
+            {
+                debug!(%destination_mac, "Generic PHY Query already pending");
+                continue;
+            }
+            node.metadata.local_generic_phy_query_message_id = Some((message_id, Instant::now()));
+        }
+
+        let cmdu = CMDU {
+            message_version: MessageVersion::Version2013.to_u8(),
+            reserved: 0,
+            message_type: CMDUType::GenericPhyQuery.to_u16(),
+            message_id,
+            fragment: 0,
+            flags: CMDU::FLAG_LAST_FRAGMENT,
+            payload: TLV::from(EndOfMessage).serialize(),
+        };
+
+        match sender
+            .enqueue_frame(
+                destination_mac,
+                interface_mac_address,
+                EthernetSender::ETHER_TYPE,
+                cmdu.serialize(),
+            )
+            .await
+        {
+            Ok(()) => {
+                info!(%destination_mac, message_id, "CMDU Generic PHY Query sent successfully")
+            }
+            Err(e) => error!(message_id, "Failed to send CMDU Generic PHY Query: {e}"),
+        }
+    }
+}
+
+#[instrument(
+    skip_all,
+    name = "cmdu_generic_phy_response_transmission",
+    fields(task = next_task_id(), al_mac = %remote_al_mac_address),
+)]
+pub async fn cmdu_generic_phy_response_transmission(
+    interface: String,
+    sender: Arc<EthernetSender>,
+    local_al_mac_address: MacAddr,
+    remote_al_mac_address: MacAddr,
+    interface_mac_address: MacAddr,
+    message_id: u16,
+) {
+    debug!(
+        interface = %interface,
+        message_id,
+        "Creating CMDU Generic PHY Response",
+    );
+
+    let db = TopologyDatabase::get_instance(local_al_mac_address, &interface);
+    let Some(node) = db.get_device(remote_al_mac_address).await else {
+        return warn!(al_mac = %remote_al_mac_address, "Node not found");
+    };
+
+    let generic_phy = build_local_generic_phy_device_information(&db).await;
+    let payload = [TLV::from(generic_phy), TLV::from(EndOfMessage)];
+
+    let cmdu = CMDU {
+        message_version: MessageVersion::Version2013.to_u8(),
+        reserved: 0,
+        message_type: CMDUType::GenericPhyResponse.to_u16(),
+        message_id,
+        fragment: 0,
+        flags: CMDU::FLAG_LAST_FRAGMENT,
+        payload: payload.iter().flat_map(TLV::serialize).collect(),
+    };
+
+    match enqueue_fragmented_cmdu(
+        &sender,
+        node.device_data.destination_frame_mac,
+        interface_mac_address,
+        cmdu,
+        node.device_data.supported_fragmentation,
+    )
+    .await
+    {
+        Ok(()) => info!(
+            interface = %interface,
+            message_id,
+            "CMDU Generic PHY Response sent successfully"
+        ),
+        Err(e) => error!(message_id, "Failed to send CMDU Generic PHY Response: {e}",),
+    }
+}
+
+async fn build_local_generic_phy_device_information(
+    db: &TopologyDatabase,
+) -> GenericPhyDeviceInformation {
+    // TODO: Add Generic PHY interface data
+    GenericPhyDeviceInformation {
+        al_mac: db.al_mac_address,
+        local_interfaces: Vec::new(),
+    }
+}
+
+#[instrument(
+    skip_all,
     name = "cmdu_higher_layer_query_worker",
     fields(task = next_task_id(), mac = %destination_mac),
 )]

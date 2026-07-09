@@ -213,6 +213,16 @@ impl CMDUHandler {
                     .handle_higher_layer_response(&tlvs, message_id, source_mac)
                     .await;
             }
+            CMDUType::GenericPhyQuery => {
+                handled = self
+                    .handle_generic_phy_query(&tlvs, message_id, source_mac)
+                    .await;
+            }
+            CMDUType::GenericPhyResponse => {
+                handled = self
+                    .handle_generic_phy_response(&tlvs, message_id, source_mac)
+                    .await;
+            }
             _ => handled = false,
         };
 
@@ -309,6 +319,20 @@ impl CMDUHandler {
                 spawn_named(
                     format!("proxy_hle_query/{destination}"),
                     cmdu_higher_layer_query_transmission_worker(
+                        topology_db.clone(),
+                        self.sender.clone(),
+                        self.message_id_generator.clone(),
+                        forwarding_interface_mac,
+                        destination,
+                        token,
+                    ),
+                );
+            }
+            TransmissionEvent::StartGenericPhyQueryWorker((destination, token)) => {
+                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+                spawn_named(
+                    format!("proxy_generic_phy_query/{destination}"),
+                    cmdu_generic_phy_query_transmission_worker(
                         topology_db.clone(),
                         self.sender.clone(),
                         self.message_id_generator.clone(),
@@ -586,6 +610,21 @@ impl CMDUHandler {
                     ),
                 );
                 true
+            }
+            TransmissionEvent::StartGenericPhyQueryWorker((destination, token)) => {
+                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+                spawn_named(
+                    format!("proxy_generic_phy_query/{destination}"),
+                    cmdu_generic_phy_query_transmission_worker(
+                        topology_db.clone(),
+                        self.sender.clone(),
+                        self.message_id_generator.clone(),
+                        forwarding_interface_mac,
+                        destination,
+                        token,
+                    ),
+                );
+                false
             }
             TransmissionEvent::None => {
                 debug!(
@@ -952,6 +991,97 @@ impl CMDUHandler {
 
         info!(source = %source_mac, "HigherLayerResponse Processed");
         result
+    }
+
+    #[instrument(skip_all, name = "generic_phy_query")]
+    async fn handle_generic_phy_query(
+        &self,
+        tlvs: &[TLV],
+        message_id: u16,
+        source_mac: MacAddr,
+    ) -> bool {
+        debug!(
+            source = %source_mac,
+            msg_id = message_id,
+            interface = self.interface_name,
+            "Handling GenericPhyQuery CMDU",
+        );
+
+        if EndOfMessage::find(tlvs).is_none() {
+            error!("GenericPhyQuery CMDU missing EndOfMessage TLV");
+            return true;
+        }
+
+        let topology_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
+        let Some(node) = topology_db.find_device_by_port(source_mac).await else {
+            warn!(%source_mac, "GenericPhyQuery source node not found");
+            return false;
+        };
+
+        let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+        let remote_al_mac = node.device_data.al_mac;
+
+        spawn_named(
+            format!("proxy_generic_phy_response/{remote_al_mac}"),
+            cmdu_generic_phy_response_transmission(
+                self.interface_name.clone(),
+                self.sender.clone(),
+                self.local_al_mac,
+                remote_al_mac,
+                forwarding_interface_mac,
+                message_id,
+            ),
+        );
+
+        info!(source = %source_mac, "GenericPhyQuery Processed");
+        true
+    }
+
+    #[instrument(skip_all, name = "generic_phy_response")]
+    async fn handle_generic_phy_response(
+        &self,
+        tlvs: &[TLV],
+        message_id: u16,
+        source_mac: MacAddr,
+    ) -> bool {
+        debug!(
+            source = %source_mac,
+            msg_id = message_id,
+            interface = self.interface_name,
+            "Handling GenericPhyResponse CMDU",
+        );
+
+        if EndOfMessage::find(tlvs).is_none() {
+            error!("GenericPhyResponse CMDU missing EndOfMessage TLV");
+            return true;
+        };
+
+        let Some(generic_phy) = GenericPhyDeviceInformation::find(tlvs) else {
+            error!("GenericPhyResponse CMDU missing GenericPhyDeviceInformation TLV");
+            return true;
+        };
+
+        let topology_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
+        let changed = topology_db
+            .handle_generic_phy_response(source_mac, message_id, generic_phy)
+            .await;
+
+        if changed {
+            let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+            spawn_named(
+                "proxy_topo_notification",
+                cmdu_topology_notification_transmission(
+                    self.interface_name.clone(),
+                    self.sender.clone(),
+                    self.message_id_generator.clone(),
+                    self.local_al_mac,
+                    forwarding_interface_mac,
+                ),
+            );
+        }
+
+        info!(source = %source_mac, "GenericPhyResponse Processed");
+        true
     }
 
     #[instrument(skip_all, name = "sdu_from_cmdu")]
