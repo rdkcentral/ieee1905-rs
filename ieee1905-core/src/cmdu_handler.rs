@@ -328,20 +328,6 @@ impl CMDUHandler {
                     ),
                 );
             }
-            TransmissionEvent::StartGenericPhyQueryWorker((destination, token)) => {
-                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
-                spawn_named(
-                    format!("proxy_generic_phy_query/{destination}"),
-                    cmdu_generic_phy_query_transmission_worker(
-                        topology_db.clone(),
-                        self.sender.clone(),
-                        self.message_id_generator.clone(),
-                        forwarding_interface_mac,
-                        destination,
-                        token,
-                    ),
-                );
-            }
             TransmissionEvent::None => {
                 debug!(
                     remote = %remote_al_mac,
