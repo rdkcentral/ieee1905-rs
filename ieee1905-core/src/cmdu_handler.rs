@@ -971,7 +971,7 @@ impl CMDUHandler {
         debug!(
             source = %source_mac,
             msg_id = message_id,
-            interface = self.interface_name,
+            interface = %self.interface_name,
             "Handling GenericPhyQuery CMDU",
         );
 
@@ -1019,7 +1019,7 @@ impl CMDUHandler {
         debug!(
             source = %source_mac,
             msg_id = message_id,
-            interface = self.interface_name,
+            interface = %self.interface_name,
             "Handling GenericPhyResponse CMDU",
         );
 
