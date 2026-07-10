@@ -104,7 +104,6 @@ pub enum TransmissionEvent {
     StartLinkMetricQueryWorker((MacAddr, CancellationToken)),
     StartHigherLayerQueryWorker((MacAddr, CancellationToken)),
     StartGenericPhyQueryWorker((MacAddr, CancellationToken)),
-    None,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -480,49 +479,55 @@ impl Ieee1905NodeInternal {
         }
     }
 
-    fn prepare_link_metrics_query_transmission_event_if_needed(&mut self) -> TransmissionEvent {
+    fn prepare_link_metrics_query_transmission_event_if_needed(
+        &mut self,
+    ) -> Option<TransmissionEvent> {
         if self.link_metrics_query_cancellation_token.is_some() {
-            return TransmissionEvent::None;
+            return None;
         }
 
         let cancellation_token = CancellationToken::new();
         let drop_guard = cancellation_token.clone().drop_guard();
         self.link_metrics_query_cancellation_token = Some(drop_guard);
 
-        TransmissionEvent::StartLinkMetricQueryWorker((
+        Some(TransmissionEvent::StartLinkMetricQueryWorker((
             self.device_data.destination_frame_mac,
             cancellation_token,
-        ))
+        )))
     }
 
-    fn prepare_higher_layer_query_transmission_event_if_needed(&mut self) -> TransmissionEvent {
+    fn prepare_higher_layer_query_transmission_event_if_needed(
+        &mut self,
+    ) -> Option<TransmissionEvent> {
         if self.higher_layer_query_cancellation_token.is_some() {
-            return TransmissionEvent::None;
+            return None;
         }
 
         let cancellation_token = CancellationToken::new();
         let drop_guard = cancellation_token.clone().drop_guard();
         self.higher_layer_query_cancellation_token = Some(drop_guard);
 
-        TransmissionEvent::StartHigherLayerQueryWorker((
+        Some(TransmissionEvent::StartHigherLayerQueryWorker((
             self.device_data.destination_frame_mac,
             cancellation_token,
-        ))
+        )))
     }
 
-    fn prepare_generic_phy_query_transmission_event_if_needed(&mut self) -> TransmissionEvent {
+    fn prepare_generic_phy_query_transmission_event_if_needed(
+        &mut self,
+    ) -> Option<TransmissionEvent> {
         if self.generic_phy_query_cancellation_token.is_some() {
-            return TransmissionEvent::None;
+            return None;
         }
 
         let cancellation_token = CancellationToken::new();
         let drop_guard = cancellation_token.clone().drop_guard();
         self.generic_phy_query_cancellation_token = Some(drop_guard);
 
-        TransmissionEvent::StartGenericPhyQueryWorker((
+        Some(TransmissionEvent::StartGenericPhyQueryWorker((
             self.device_data.destination_frame_mac,
             cancellation_token,
-        ))
+        )))
     }
 
     fn update_artifact_exchange_client(
@@ -844,9 +849,9 @@ impl TopologyDatabase {
         local_msg_id: Option<u16>,
         remote_msg_id: Option<u16>,
         lldp_neighbor: Option<PortId>,
-    ) -> TransmissionEvent {
+    ) -> Vec<TransmissionEvent> {
         let al_mac = device_data.al_mac;
-        let transmission_event;
+        let transmission_events;
 
         //TODO: use new update types.
         tracing::debug!("WAITING for write lock");
@@ -860,7 +865,7 @@ impl TopologyDatabase {
 
                     node.device_data.local_interface_mac = device_data.local_interface_mac;
 
-                    transmission_event = match operation {
+                    transmission_events = match operation {
                         UpdateType::DiscoveryReceived => {
                             let local_state = node.metadata.node_state_local;
 
@@ -875,9 +880,16 @@ impl TopologyDatabase {
                             );
 
                             if local_state == StateLocal::Idle {
-                                TransmissionEvent::SendTopologyQuery(al_mac)
+                                vec![TransmissionEvent::SendTopologyQuery(al_mac)]
                             } else {
-                                node.prepare_higher_layer_query_transmission_event_if_needed()
+                                let mut events = Vec::new();
+                                events.extend(
+                                    node.prepare_higher_layer_query_transmission_event_if_needed(),
+                                );
+                                events.extend(
+                                    node.prepare_generic_phy_query_transmission_event_if_needed(),
+                                );
+                                events
                             }
                         }
                         UpdateType::NotificationReceived => {
@@ -892,9 +904,9 @@ impl TopologyDatabase {
                                     Some(StateLocal::Idle),
                                     None,
                                 );
-                                TransmissionEvent::SendTopologyQuery(al_mac)
+                                vec![TransmissionEvent::SendTopologyQuery(al_mac)]
                             } else {
-                                TransmissionEvent::None
+                                vec![]
                             }
                         }
                         UpdateType::QueryReceived { force } => {
@@ -910,9 +922,9 @@ impl TopologyDatabase {
                                     Some(StateRemote::ConvergingRemote(Instant::now())),
                                 );
                                 debug!("Event: Send Topology Response");
-                                TransmissionEvent::SendTopologyResponse(al_mac)
+                                vec![TransmissionEvent::SendTopologyResponse(al_mac)]
                             } else {
-                                TransmissionEvent::None
+                                vec![]
                             }
                         }
 
@@ -947,14 +959,14 @@ impl TopologyDatabase {
                                     let multicast_mac =
                                         MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13);
                                     debug!("Event: Send Topology Notification");
-                                    TransmissionEvent::SendTopologyNotification(multicast_mac)
+                                    vec![TransmissionEvent::SendTopologyNotification(multicast_mac)]
                                 } else {
                                     debug!("Device data unchanged");
-                                    node.prepare_generic_phy_query_transmission_event_if_needed()
+                                    vec![]
                                 }
                             } else {
                                 debug!("Ignoring ResponseReceived — not in ConvergingLocal state");
-                                TransmissionEvent::None
+                                vec![]
                             }
                         }
 
@@ -969,7 +981,7 @@ impl TopologyDatabase {
                                     None,
                                 );
                             }
-                            TransmissionEvent::None
+                            vec![]
                         }
                         UpdateType::ResponseSent => {
                             if let StateRemote::ConvergingRemote(_) =
@@ -984,7 +996,7 @@ impl TopologyDatabase {
                                     Some(StateRemote::ConvergedRemote),
                                 );
                             }
-                            TransmissionEvent::None
+                            vec![]
                         }
                         UpdateType::LldpUpdate => {
                             node.metadata.update(
@@ -996,13 +1008,14 @@ impl TopologyDatabase {
                                 None,
                             );
                             debug!(al_mac = ?al_mac, lldp_neighbor = ?lldp_neighbor, "Updated LLDP neighbor status");
-                            TransmissionEvent::None
+                            vec![]
                             //If needed we can indicate here a notification event to update topology data base in al neighbors but for now it is not needed
                             //initial DB snapshot covers current uses cases for RDK-B but we can update this part if needed in the future
                         }
-                        UpdateType::ApAutoConfigSearch => {
-                            node.prepare_link_metrics_query_transmission_event_if_needed()
-                        }
+                        UpdateType::ApAutoConfigSearch => node
+                            .prepare_link_metrics_query_transmission_event_if_needed()
+                            .into_iter()
+                            .collect(),
                     };
                 }
                 None => {
@@ -1030,12 +1043,12 @@ impl TopologyDatabase {
                     };
 
                     let node_was_created;
-                    transmission_event = match operation {
+                    transmission_events = match operation {
                         UpdateType::DiscoveryReceived => {
                             nodes.insert(al_mac, new_node);
                             node_was_created = true;
                             debug!(al_mac = ?al_mac, "Inserted node from Discovery");
-                            TransmissionEvent::SendTopologyQuery(al_mac)
+                            vec![TransmissionEvent::SendTopologyQuery(al_mac)]
                         }
                         UpdateType::QueryReceived { .. } => {
                             new_node.metadata.node_state_remote =
@@ -1043,18 +1056,20 @@ impl TopologyDatabase {
                             nodes.insert(al_mac, new_node);
                             node_was_created = true;
                             debug!(al_mac = ?al_mac, "Inserted node from query");
-                            TransmissionEvent::SendTopologyResponse(al_mac)
+                            vec![TransmissionEvent::SendTopologyResponse(al_mac)]
                         }
                         UpdateType::ApAutoConfigSearch => {
                             let node = nodes.entry(al_mac).insert_entry(new_node).into_mut();
                             node_was_created = true;
                             debug!(al_mac = ?al_mac, "Inserted node from ApAutoConfigSearch");
                             node.prepare_link_metrics_query_transmission_event_if_needed()
+                                .into_iter()
+                                .collect()
                         }
                         _ => {
                             debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
                             node_was_created = false;
-                            TransmissionEvent::None
+                            vec![]
                         }
                     };
 
@@ -1069,7 +1084,7 @@ impl TopologyDatabase {
         }
 
         debug!("Lock released — function continues safely");
-        transmission_event
+        transmission_events
     }
 
     pub async fn handle_notification_sent(&self) {

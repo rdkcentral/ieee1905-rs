@@ -281,7 +281,7 @@ impl CMDUHandler {
             ..Default::default()
         };
 
-        let transmission_event = topology_db
+        let transmission_events = topology_db
             .update_ieee1905_topology(
                 device_data,
                 UpdateType::DiscoveryReceived,
@@ -298,44 +298,60 @@ impl CMDUHandler {
             "Topology Discovery Processed",
         );
 
-        // Now react to the event
-        match transmission_event {
-            TransmissionEvent::SendTopologyQuery(destination_al_mac) => {
-                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
-                spawn_named(
-                    format!("proxy_topo_query/{destination_al_mac}"),
-                    cmdu_topology_query_transmission(
-                        self.interface_name.clone(),
-                        self.sender.clone(),
-                        self.message_id_generator.clone(),
-                        self.local_al_mac,
-                        destination_al_mac,
-                        forwarding_interface_mac,
-                    ),
-                );
-            }
-            TransmissionEvent::StartHigherLayerQueryWorker((destination, token)) => {
-                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
-                spawn_named(
-                    format!("proxy_hle_query/{destination}"),
-                    cmdu_higher_layer_query_transmission_worker(
-                        topology_db.clone(),
-                        self.sender.clone(),
-                        self.message_id_generator.clone(),
-                        forwarding_interface_mac,
-                        destination,
-                        token,
-                    ),
-                );
-            }
-            TransmissionEvent::None => {
-                debug!(
-                    remote = %remote_al_mac,
-                    "No transmission needed after topology discovery update"
-                );
-            }
-            _ => {
-                warn!("Unexpected TransmissionEvent in handle_topology_discovery");
+        if transmission_events.is_empty() {
+            debug!(
+                remote = %remote_al_mac,
+                "No transmission needed after topology discovery update"
+            );
+        }
+
+        for transmission_event in transmission_events {
+            match transmission_event {
+                TransmissionEvent::SendTopologyQuery(destination_al_mac) => {
+                    let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+                    spawn_named(
+                        format!("proxy_topo_query/{destination_al_mac}"),
+                        cmdu_topology_query_transmission(
+                            self.interface_name.clone(),
+                            self.sender.clone(),
+                            self.message_id_generator.clone(),
+                            self.local_al_mac,
+                            destination_al_mac,
+                            forwarding_interface_mac,
+                        ),
+                    );
+                }
+                TransmissionEvent::StartHigherLayerQueryWorker((destination, token)) => {
+                    let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+                    spawn_named(
+                        format!("proxy_hle_query/{destination}"),
+                        cmdu_higher_layer_query_transmission_worker(
+                            topology_db.clone(),
+                            self.sender.clone(),
+                            self.message_id_generator.clone(),
+                            forwarding_interface_mac,
+                            destination,
+                            token,
+                        ),
+                    );
+                }
+                TransmissionEvent::StartGenericPhyQueryWorker((destination, token)) => {
+                    let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+                    spawn_named(
+                        format!("proxy_generic_phy_query/{destination}"),
+                        cmdu_generic_phy_query_transmission_worker(
+                            topology_db.clone(),
+                            self.sender.clone(),
+                            self.message_id_generator.clone(),
+                            forwarding_interface_mac,
+                            destination,
+                            token,
+                        ),
+                    );
+                }
+                _ => {
+                    warn!("Unexpected TransmissionEvent in handle_topology_discovery");
+                }
             }
         }
     }
@@ -384,7 +400,7 @@ impl CMDUHandler {
         let remote_al_mac = device_data.al_mac;
         let has_vendor_info = VendorSpecificInfo::find(tlvs).is_some_and(|e| e.oui == COMCAST_OUI);
 
-        let transmission_event = topology_db
+        let transmission_events = topology_db
             .update_ieee1905_topology(
                 device_data,
                 UpdateType::QueryReceived {
@@ -402,41 +418,45 @@ impl CMDUHandler {
             "Topology Query Processed",
         );
 
-        match transmission_event {
-            TransmissionEvent::SendTopologyResponse(destination_mac) => {
-                debug!(
-                    remote = %remote_al_mac,
-                    local = %self.local_al_mac,
-                    "Preparing to send Topology Response"
-                );
+        if transmission_events.is_empty() {
+            debug!(
+                remote = %remote_al_mac,
+                "No transmission needed after topology query update"
+            );
+            return false;
+        }
 
-                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+        let mut sent_response = false;
+        for transmission_event in transmission_events {
+            match transmission_event {
+                TransmissionEvent::SendTopologyResponse(destination_mac) => {
+                    debug!(
+                        remote = %remote_al_mac,
+                        local = %self.local_al_mac,
+                        "Preparing to send Topology Response"
+                    );
 
-                spawn_named(
-                    format!("proxy_topo_response/{destination_mac}"),
-                    cmdu_topology_response_transmission(
-                        self.interface_name.clone(),
-                        self.sender.clone(),
-                        self.local_al_mac,
-                        destination_mac,
-                        forwarding_interface_mac,
-                        message_id,
-                    ),
-                );
-                true
-            }
-            TransmissionEvent::None => {
-                debug!(
-                    remote = %remote_al_mac,
-                    "No transmission needed after topology query update"
-                );
-                false
-            }
-            _ => {
-                warn!("Unexpected TransmissionEvent in handle_topology_query");
-                false
+                    let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+
+                    spawn_named(
+                        format!("proxy_topo_response/{destination_mac}"),
+                        cmdu_topology_response_transmission(
+                            self.interface_name.clone(),
+                            self.sender.clone(),
+                            self.local_al_mac,
+                            destination_mac,
+                            forwarding_interface_mac,
+                            message_id,
+                        ),
+                    );
+                    sent_response = true;
+                }
+                _ => {
+                    warn!("Unexpected TransmissionEvent in handle_topology_query");
+                }
             }
         }
+        sent_response
     }
 
     /// Handles and logs TLVs for Topology Response.
@@ -558,7 +578,7 @@ impl CMDUHandler {
             ..Default::default()
         };
 
-        let transmission_event = topology_db
+        let transmission_events = topology_db
             .update_ieee1905_topology(
                 updated_device_data,
                 UpdateType::ResponseReceived,
@@ -575,56 +595,45 @@ impl CMDUHandler {
             "Topology Response Processed",
         );
 
-        match transmission_event {
-            TransmissionEvent::SendTopologyNotification(_destination_mac) => {
-                debug!(
-                    al_mac = %remote_al_mac,
-                    source = %source_mac,
-                    "Sending Topology Notification because topology changed"
-                );
+        if transmission_events.is_empty() {
+            debug!(
+                al_mac = %remote_al_mac,
+                source = %source_mac,
+                "Topology update did not require sending notification"
+            );
+            return false;
+        }
 
-                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+        let mut sent_notification = false;
+        for transmission_event in transmission_events {
+            match transmission_event {
+                TransmissionEvent::SendTopologyNotification(_destination_mac) => {
+                    debug!(
+                        al_mac = %remote_al_mac,
+                        source = %source_mac,
+                        "Sending Topology Notification because topology changed"
+                    );
 
-                spawn_named(
-                    "proxy_topo_notification",
-                    cmdu_topology_notification_transmission(
-                        self.interface_name.clone(),
-                        self.sender.clone(),
-                        self.message_id_generator.clone(),
-                        self.local_al_mac,
-                        forwarding_interface_mac,
-                    ),
-                );
-                true
-            }
-            TransmissionEvent::StartGenericPhyQueryWorker((destination, token)) => {
-                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
-                spawn_named(
-                    format!("proxy_generic_phy_query/{destination}"),
-                    cmdu_generic_phy_query_transmission_worker(
-                        topology_db.clone(),
-                        self.sender.clone(),
-                        self.message_id_generator.clone(),
-                        forwarding_interface_mac,
-                        destination,
-                        token,
-                    ),
-                );
-                false
-            }
-            TransmissionEvent::None => {
-                debug!(
-                    al_mac = %remote_al_mac,
-                    source = %source_mac,
-                    "Topology update did not require sending notification"
-                );
-                false
-            }
-            _ => {
-                warn!("Unexpected TransmissionEvent in handle_topology_response");
-                false
+                    let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+
+                    spawn_named(
+                        "proxy_topo_notification",
+                        cmdu_topology_notification_transmission(
+                            self.interface_name.clone(),
+                            self.sender.clone(),
+                            self.message_id_generator.clone(),
+                            self.local_al_mac,
+                            forwarding_interface_mac,
+                        ),
+                    );
+                    sent_notification = true;
+                }
+                _ => {
+                    warn!("Unexpected TransmissionEvent in handle_topology_response");
+                }
             }
         }
+        sent_notification
     }
 
     /// Handles and logs TLVs from the CMDU payload for Topology Notification.
@@ -668,7 +677,7 @@ impl CMDUHandler {
             ..Default::default()
         };
 
-        let transmission_event = topology_db
+        let transmission_events = topology_db
             .update_ieee1905_topology(
                 received_device_data,
                 UpdateType::NotificationReceived,
@@ -684,31 +693,35 @@ impl CMDUHandler {
             "Topology Notification Processed",
         );
 
-        match transmission_event {
-            TransmissionEvent::SendTopologyQuery(dest_mac) => {
-                let forwarding_interface = topology_db.get_forwarding_interface_mac().await;
-                spawn_named(
-                    format!("proxy_topo_query/{remote_al_mac_address}"),
-                    cmdu_topology_query_transmission(
-                        self.interface_name.clone(),
-                        self.sender.clone(),
-                        self.message_id_generator.clone(),
-                        self.local_al_mac,
-                        dest_mac,
-                        forwarding_interface,
-                    ),
-                );
-                true
-            }
-            TransmissionEvent::None => {
-                debug!("No transmission event triggered by Topology Notification");
-                false
-            }
-            _ => {
-                warn!("Unexpected TransmissionEvent in handle_topology_notification");
-                false
+        if transmission_events.is_empty() {
+            debug!("No transmission event triggered by Topology Notification");
+            return false;
+        }
+
+        let mut sent_query = false;
+        for transmission_event in transmission_events {
+            match transmission_event {
+                TransmissionEvent::SendTopologyQuery(dest_mac) => {
+                    let forwarding_interface = topology_db.get_forwarding_interface_mac().await;
+                    spawn_named(
+                        format!("proxy_topo_query/{remote_al_mac_address}"),
+                        cmdu_topology_query_transmission(
+                            self.interface_name.clone(),
+                            self.sender.clone(),
+                            self.message_id_generator.clone(),
+                            self.local_al_mac,
+                            dest_mac,
+                            forwarding_interface,
+                        ),
+                    );
+                    sent_query = true;
+                }
+                _ => {
+                    warn!("Unexpected TransmissionEvent in handle_topology_notification");
+                }
             }
         }
+        sent_query
     }
 
     /// Handles and logs TLVs for Link Metric Query.
@@ -807,7 +820,7 @@ impl CMDUHandler {
         };
 
         let topo_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
-        let transmission_event = topo_db
+        let transmission_events = topo_db
             .update_ieee1905_topology(
                 device_data,
                 UpdateType::ApAutoConfigSearch,
@@ -817,33 +830,39 @@ impl CMDUHandler {
             )
             .await;
 
-        match transmission_event {
-            TransmissionEvent::StartLinkMetricQueryWorker((destination, cancellation_token)) => {
-                debug!(
-                    al_mac = %al_mac.al_mac_address,
-                    source = %source_mac,
-                    "Topology update started link metric query worker"
-                );
-                spawn_named(
-                    format!("proxy_link_metric_query/{destination}"),
-                    cmdu_link_metric_query_transmission_worker(
-                        topo_db,
-                        self.sender.clone(),
-                        self.message_id_generator.clone(),
-                        local_interface_mac,
-                        destination,
-                        cancellation_token,
-                    ),
-                );
+        if transmission_events.is_empty() {
+            debug!(
+                al_mac = %al_mac.al_mac_address,
+                source = %source_mac,
+                "Topology update did not require sending notification"
+            );
+        }
+
+        for transmission_event in transmission_events {
+            match transmission_event {
+                TransmissionEvent::StartLinkMetricQueryWorker((
+                    destination,
+                    cancellation_token,
+                )) => {
+                    debug!(
+                        al_mac = %al_mac.al_mac_address,
+                        source = %source_mac,
+                        "Topology update started link metric query worker"
+                    );
+                    spawn_named(
+                        format!("proxy_link_metric_query/{destination}"),
+                        cmdu_link_metric_query_transmission_worker(
+                            topo_db.clone(),
+                            self.sender.clone(),
+                            self.message_id_generator.clone(),
+                            local_interface_mac,
+                            destination,
+                            cancellation_token,
+                        ),
+                    );
+                }
+                _ => warn!("Unexpected TransmissionEvent in handle_ap_auto_config_search"),
             }
-            TransmissionEvent::None => {
-                debug!(
-                    al_mac = %al_mac.al_mac_address,
-                    source = %source_mac,
-                    "Topology update did not require sending notification"
-                );
-            }
-            _ => warn!("Unexpected TransmissionEvent in handle_ap_auto_config_search"),
         }
 
         info!(source = %source_mac, "ApAutoConfigSearch Processed");

@@ -823,8 +823,14 @@ pub async fn cmdu_generic_phy_response_transmission(
         return warn!(al_mac = %remote_al_mac_address, "Node not found");
     };
 
-    let generic_phy = build_local_generic_phy_device_information(&db).await;
-    let payload = [TLV::from(generic_phy), TLV::from(EndOfMessage)];
+    // TODO: Add Generic PHY interface data
+    let payload = [
+        TLV::from(GenericPhyDeviceInformation {
+            al_mac: db.al_mac_address,
+            local_interfaces: Vec::new(),
+        }),
+        TLV::from(EndOfMessage),
+    ];
 
     let cmdu = CMDU {
         message_version: MessageVersion::Version2013.to_u8(),
@@ -851,16 +857,6 @@ pub async fn cmdu_generic_phy_response_transmission(
             "CMDU Generic PHY Response sent successfully"
         ),
         Err(e) => error!(message_id, "Failed to send CMDU Generic PHY Response: {e}",),
-    }
-}
-
-async fn build_local_generic_phy_device_information(
-    db: &TopologyDatabase,
-) -> GenericPhyDeviceInformation {
-    // TODO: Add Generic PHY interface data
-    GenericPhyDeviceInformation {
-        al_mac: db.al_mac_address,
-        local_interfaces: Vec::new(),
     }
 }
 
