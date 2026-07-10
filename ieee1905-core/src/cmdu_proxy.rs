@@ -761,14 +761,6 @@ pub async fn cmdu_generic_phy_query_transmission_worker(
         debug!(%destination_mac, message_id, "Creating CMDU Generic PHY Query");
 
         if let Some(mut node) = topo_db.lock_node_by_port_mut(destination_mac).await {
-            if node
-                .metadata
-                .local_generic_phy_query_message_id
-                .is_some_and(|e| e.1.elapsed() <= Duration::from_secs(1))
-            {
-                debug!(%destination_mac, "Generic PHY Query already pending");
-                continue;
-            }
             node.metadata.local_generic_phy_query_message_id = Some((message_id, Instant::now()));
         }
 
@@ -826,7 +818,7 @@ pub async fn cmdu_generic_phy_response_transmission(
     // TODO: Add Generic PHY interface data
     let payload = [
         TLV::from(GenericPhyDeviceInformation {
-            al_mac: db.al_mac_address,
+            al_mac: local_al_mac_address,
             local_interfaces: Vec::new(),
         }),
         TLV::from(EndOfMessage),

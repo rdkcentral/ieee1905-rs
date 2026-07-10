@@ -298,13 +298,6 @@ impl CMDUHandler {
             "Topology Discovery Processed",
         );
 
-        if transmission_events.is_empty() {
-            debug!(
-                remote = %remote_al_mac,
-                "No transmission needed after topology discovery update"
-            );
-        }
-
         for transmission_event in transmission_events {
             match transmission_event {
                 TransmissionEvent::SendTopologyQuery(destination_al_mac) => {
@@ -417,14 +410,6 @@ impl CMDUHandler {
             source = %source_mac,
             "Topology Query Processed",
         );
-
-        if transmission_events.is_empty() {
-            debug!(
-                remote = %remote_al_mac,
-                "No transmission needed after topology query update"
-            );
-            return false;
-        }
 
         let mut sent_response = false;
         for transmission_event in transmission_events {
@@ -595,15 +580,6 @@ impl CMDUHandler {
             "Topology Response Processed",
         );
 
-        if transmission_events.is_empty() {
-            debug!(
-                al_mac = %remote_al_mac,
-                source = %source_mac,
-                "Topology update did not require sending notification"
-            );
-            return false;
-        }
-
         let mut sent_notification = false;
         for transmission_event in transmission_events {
             match transmission_event {
@@ -692,11 +668,6 @@ impl CMDUHandler {
             source = %source_mac,
             "Topology Notification Processed",
         );
-
-        if transmission_events.is_empty() {
-            debug!("No transmission event triggered by Topology Notification");
-            return false;
-        }
 
         let mut sent_query = false;
         for transmission_event in transmission_events {
@@ -829,14 +800,6 @@ impl CMDUHandler {
                 None,
             )
             .await;
-
-        if transmission_events.is_empty() {
-            debug!(
-                al_mac = %al_mac.al_mac_address,
-                source = %source_mac,
-                "Topology update did not require sending notification"
-            );
-        }
 
         for transmission_event in transmission_events {
             match transmission_event {
@@ -1018,13 +981,17 @@ impl CMDUHandler {
         }
 
         let topology_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
-        let Some(node) = topology_db.find_device_by_port(source_mac).await else {
-            warn!(%source_mac, "GenericPhyQuery source node not found");
-            return false;
+        let remote_al_mac = {
+            let Some(mut node) = topology_db.lock_node_by_port_mut(source_mac).await else {
+                warn!(%source_mac, "GenericPhyQuery source node not found");
+                return false;
+            };
+
+            node.device_data.destination_frame_mac = source_mac;
+            node.device_data.al_mac
         };
 
         let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
-        let remote_al_mac = node.device_data.al_mac;
 
         spawn_named(
             format!("proxy_generic_phy_response/{remote_al_mac}"),
