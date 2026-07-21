@@ -1688,18 +1688,32 @@ impl BssConfigurationReportRadio {
 pub struct BssConfigurationReportInterface {
     pub bssid: MacAddr,
     pub flags: u8,
+    pub reserved: u8,
     pub ssid: Vec<u8>,
 }
 
 impl BssConfigurationReportInterface {
+    pub const FLAG_BACK_HAUL_BSS: u8 = 1 << 7;
+    pub const FLAG_FRONT_HAUL_BSS: u8 = 1 << 6;
+    pub const FLAG_R1_DISALLOWED_STATUS: u8 = 1 << 5;
+    pub const FLAG_R2_DISALLOWED_STATUS: u8 = 1 << 4;
+    pub const FLAG_MULTIPLE_BSSID: u8 = 1 << 3;
+    pub const FLAG_TRANSMITTED_BSSID: u8 = 1 << 2;
+
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         use nom::number::complete::u8;
 
         let (input, bssid) = take_mac_addr(input)?;
         let (input, flags) = be_u8(input)?;
+        let (input, flags_reserved) = be_u8(input)?;
         let (input, ssid) = length_count(u8, u8).parse(input)?;
 
-        let this = Self { bssid, flags, ssid };
+        let this = Self {
+            bssid,
+            flags,
+            reserved: flags_reserved,
+            ssid,
+        };
 
         Ok((input, this))
     }
@@ -1708,6 +1722,7 @@ impl BssConfigurationReportInterface {
         let mut vec = Vec::new();
         vec.extend(self.bssid.octets());
         vec.extend(self.flags.to_be_bytes());
+        vec.extend(self.reserved.to_be_bytes());
         vec.extend((self.ssid.len() as u8).to_be_bytes());
         vec.extend(self.ssid.as_slice());
         vec
@@ -4299,7 +4314,8 @@ pub mod tests {
                 radio_unique_id: MacAddr::new(0x00, 0x01, 0x02, 0x03, 0x04, 0x05),
                 bss: vec![BssConfigurationReportInterface {
                     bssid: MacAddr::new(0x01, 0x01, 0x02, 0x03, 0x04, 0x05),
-                    flags: 0,
+                    flags: BssConfigurationReportInterface::FLAG_BACK_HAUL_BSS,
+                    reserved: 0,
                     ssid: b"BestWifiEver".to_vec(),
                 }],
             }],

@@ -471,10 +471,47 @@ async fn inject_topology_response_tlvs(
     }
 
     // injecting ApOperationalBss
-    vec.push(TLV::from(ApOperationalBss { radios: vec![] }));
+    vec.push({
+        let radios = db.ap_operational_bss.read().await;
+        let radios = radios.iter().map(|radio| ApOperationalBssRadio {
+            radio_unique_id: radio.radio_unique_id,
+            bss: radio
+                .bss_list
+                .iter()
+                .map(|bss| ApOperationalBssInterface {
+                    ap_mac: bss.bssid,
+                    ssid: bss.ssid.clone(),
+                })
+                .collect(),
+        });
+
+        TLV::from(ApOperationalBss {
+            radios: radios.collect(),
+        })
+    });
 
     // injecting BssConfigurationReport
-    vec.push(TLV::from(BssConfigurationReport { radios: vec![] }));
+    vec.push({
+        let radios = db.ap_operational_bss.read().await;
+        let radios = radios.iter().map(|radio| BssConfigurationReportRadio {
+            radio_unique_id: radio.radio_unique_id,
+            bss: radio
+                .bss_list
+                .iter()
+                .map(|bss| BssConfigurationReportInterface {
+                    bssid: bss.bssid,
+                    flags: BssConfigurationReportInterface::FLAG_BACK_HAUL_BSS
+                        | BssConfigurationReportInterface::FLAG_FRONT_HAUL_BSS,
+                    reserved: 0,
+                    ssid: bss.ssid.clone(),
+                })
+                .collect(),
+        });
+
+        TLV::from(BssConfigurationReport {
+            radios: radios.collect(),
+        })
+    });
 
     // injecting VendorInfo
     if db.get_artifact_exchange_server_ip_address().is_some() {
