@@ -838,6 +838,8 @@ pub struct IEEE1905Neighbor {
 }
 
 impl IEEE1905Neighbor {
+    pub const FLAG_BRIDGED: u8 = 0b1000_0000;
+
     /// Parse an `IEEE1905Neighbor` from a byte slice
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         // Parse the neighbor_al_mac (6 bytes)
@@ -1954,6 +1956,13 @@ pub enum MediaTypeSpecialInfo {
 }
 
 impl MediaTypeSpecialInfo {
+    pub fn as_wifi(&self) -> Option<&MediaTypeSpecialInfoWifi> {
+        match self {
+            MediaTypeSpecialInfo::Wifi(e) => Some(e),
+            MediaTypeSpecialInfo::Other(_) => None,
+        }
+    }
+    
     pub fn parse(media_type: MediaType, input: &[u8]) -> IResult<&[u8], Self> {
         if (0x0100..0x0108).contains(&media_type.0) {
             // Wifi6 and Wifi7 don't have extras
@@ -1997,6 +2006,12 @@ pub struct MediaTypeSpecialInfoWifi {
 impl MediaTypeSpecialInfoWifi {
     const MASK_ROLE: u8 = 0x0F;
     const MASK_RESERVED: u8 = 0xF0;
+
+    pub const ROLE_NO_AD_NO_PCP_STATION: u8 = 0b0100;
+    pub const ROLE_AP: u8 = 0b0000;
+    pub const ROLE_P2P_CLIENT: u8 = 0b1000;
+    pub const ROLE_P2P_GROUP_OWNER: u8 = 0b1001;
+    pub const ROLE_802_11AD_PCP: u8 = 0b1010;
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, bssid) = take_mac_addr(input)?;

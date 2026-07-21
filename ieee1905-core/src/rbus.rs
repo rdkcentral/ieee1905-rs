@@ -9,6 +9,12 @@ use crate::rbus::interface_link_metric::RBus_InterfaceLinkMetric;
 use crate::rbus::network::RBus_Network;
 use crate::rbus::network_al::RBus_Network_Al;
 use crate::rbus::network_al_bridge_tuple::RBus_Network_Al_BridgingTuple;
+use crate::rbus::network_al_interface::RBus_Network_Al_Interface;
+use crate::rbus::network_al_interface_ieee1905_neighbor::RBus_Network_Al_Interface_Ieee1905Neighbor;
+use crate::rbus::network_al_interface_l2_neighbor::RBus_Network_Al_Interface_L2Neighbor;
+use crate::rbus::network_al_interface_link::RBus_Network_Al_Interface_Link;
+use crate::rbus::network_al_interface_link_metric::RBus_Network_Al_Interface_Link_Metric;
+use crate::rbus::network_al_interface_non_ieee1905_neighbor::RBus_Network_Al_Interface_NonIeee1905Neighbor;
 use crate::rbus::network_al_ipv4::RBus_Network_Al_IPv4;
 use crate::rbus::network_al_ipv6::RBus_Network_Al_IPv6;
 use crate::rbus::nt::RBus_NetworkTopology;
@@ -38,6 +44,12 @@ mod interface_link_metric;
 mod network;
 mod network_al;
 mod network_al_bridge_tuple;
+mod network_al_interface;
+mod network_al_interface_ieee1905_neighbor;
+mod network_al_interface_l2_neighbor;
+mod network_al_interface_link;
+mod network_al_interface_link_metric;
+mod network_al_interface_non_ieee1905_neighbor;
 mod network_al_ipv4;
 mod network_al_ipv6;
 mod nt;
@@ -94,7 +106,7 @@ impl RBusConnection {
                         rbus_object(format!("{instance}"), Self::register_nested()),
                     )),
                     rbus_object("Network", (
-                        rbus_object(format!("{instance}"), Self::build_network()),
+                        rbus_object(format!("{instance}"), Self::build_network(instance)),
                     )),
                 )),
             ))
@@ -203,7 +215,7 @@ impl RBusConnection {
     }
 
     #[rustfmt::skip]
-    fn build_network() -> impl RBusProviderElement {
+    fn build_network(instance: u32) -> impl RBusProviderElement {
         (
             rbus_property("Status", RBus_Network),
             rbus_property("ALNumberOfEntries", RBus_Network),
@@ -241,7 +253,61 @@ impl RBusConnection {
                         rbus_property("InterfaceList", RBus_Network_Al_BridgingTuple),
                     ))
                 ),
-                rbus_property("InterfaceNumberOfEntries", RBus_Network_Al),
+                (
+                    rbus_property("InterfaceNumberOfEntries", RBus_Network_Al),
+                    rbus_table("Interface", RBus_Network_Al_Interface, (
+                        (
+                            rbus_property("InterfaceId", RBus_Network_Al_Interface),
+                            rbus_property("MediaType", RBus_Network_Al_Interface),
+                            rbus_property("PowerState", RBus_Network_Al_Interface),
+                            rbus_property("NetworkMembership", RBus_Network_Al_Interface),
+                            rbus_property("Role", RBus_Network_Al_Interface),
+                            rbus_property("APChannelBand", RBus_Network_Al_Interface),
+                            rbus_property("FrequencyIndex1", RBus_Network_Al_Interface),
+                            rbus_property("FrequencyIndex2", RBus_Network_Al_Interface),
+                        ),
+                        (
+                            rbus_property("LinkNumberOfEntries", RBus_Network_Al_Interface),
+                            rbus_table("Link", RBus_Network_Al_Interface_Link, (
+                                rbus_property("InterfaceId", RBus_Network_Al_Interface_Link),
+                                rbus_property("IEEE1905Id", RBus_Network_Al_Interface_Link),
+                                rbus_property("MediaType", RBus_Network_Al_Interface_Link),
+                                rbus_object("Metric", (
+                                    rbus_property("IEEE802dot1Bridge", RBus_Network_Al_Interface_Link_Metric),
+                                    rbus_property("PacketErrors", RBus_Network_Al_Interface_Link_Metric),
+                                    rbus_property("PacketErrorsReceived", RBus_Network_Al_Interface_Link_Metric),
+                                    rbus_property("TransmittedPackets", RBus_Network_Al_Interface_Link_Metric),
+                                    rbus_property("PacketsReceived", RBus_Network_Al_Interface_Link_Metric),
+                                    rbus_property("MACThroughputCapacity", RBus_Network_Al_Interface_Link_Metric),
+                                    rbus_property("LinkAvailability", RBus_Network_Al_Interface_Link_Metric),
+                                    rbus_property("PHYRate", RBus_Network_Al_Interface_Link_Metric),
+                                    rbus_property("RSSI", RBus_Network_Al_Interface_Link_Metric),
+                                )),
+                            )),
+                        ),
+                        (
+                            rbus_property("IEEE1905NeighborNumberOfEntries", RBus_Network_Al_Interface),
+                            rbus_table("IEEE1905Neighbor", RBus_Network_Al_Interface_Ieee1905Neighbor { instance }, (
+                                rbus_property("NeighborDeviceId", RBus_Network_Al_Interface_Ieee1905Neighbor { instance }),
+                                rbus_property("IEEE1905DeviceRef", RBus_Network_Al_Interface_Ieee1905Neighbor { instance }),
+                                rbus_property("IEEE802dot1Bridge", RBus_Network_Al_Interface_Ieee1905Neighbor { instance }),
+                            )),
+                        ),
+                        (
+                            rbus_property("NonIEEE1905NeighborNumberOfEntries", RBus_Network_Al_Interface),
+                            rbus_table("NonIEEE1905Neighbor", RBus_Network_Al_Interface_NonIeee1905Neighbor, (
+                                rbus_property("NeighborInterfaceId", RBus_Network_Al_Interface_NonIeee1905Neighbor),
+                            )),
+                        ),
+                        (
+                            rbus_property("L2NeighborNumberOfEntries", RBus_Network_Al_Interface),
+                            rbus_table("L2Neighbor", RBus_Network_Al_Interface_L2Neighbor, (
+                                rbus_property("NeighborInterfaceId", RBus_Network_Al_Interface_L2Neighbor),
+                                rbus_property("BehindInterfaceIds", RBus_Network_Al_Interface_L2Neighbor),
+                            )),
+                        ),
+                    ))
+                ),
             )),
         )
     }
