@@ -253,6 +253,63 @@ fn filter_interfaces_by_linux_bridge(
     true
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WirelessRadioBss {
+    pub radio_unique_id: MacAddr,
+    pub bss_list: Vec<WirelessBssInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WirelessBssInfo {
+    pub bssid: MacAddr,
+    pub ssid: Vec<u8>,
+}
+
+pub async fn get_ap_operational_radios() -> anyhow::Result<Vec<WirelessRadioBss>> {
+    let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
+    let nl80211_family = router.resolve_genl_family(NL80211_GENL_NAME).await?;
+
+    let interfaces = call_nl80211_get_interfaces(&router, nl80211_family).await?;
+    let phy_map = call_nl80211_get_wiphy(&router, nl80211_family).await?;
+
+    let mut radios = IndexMap::new();
+    for interface in interfaces {
+        if !matches!(interface.if_type, Some(Nl80211IfType::Ap)) {
+            continue;
+        }
+        let Some(phy) = phy_map.get(&interface.phy_index) else {
+            continue;
+        };
+        let Some(phy_perm_addr) = phy.perm_addr else {
+            continue;
+        };
+
+        let ssid = interface.ssid.unwrap_or_default();
+        let radio = radios
+            .entry(interface.phy_index)
+            .or_insert_with(|| WirelessRadioBss {
+                radio_unique_id: phy_perm_addr,
+                bss_list: Vec::new(),
+            });
+
+        if !interface.mlo_link_macs.is_empty() {
+            for bssid in interface.mlo_link_macs {
+                radio.bss_list.push(WirelessBssInfo {
+                    bssid,
+                    ssid: ssid.clone(),
+                });
+            }
+        } else {
+            radio.bss_list.push(WirelessBssInfo {
+                bssid: interface.mac,
+                ssid,
+            });
+        }
+    }
+
+    Ok(radios.into_values().collect())
+}
+
 #[derive(Debug)]
 struct LinkInterfaceInfo {
     mac: MacAddr,
@@ -538,6 +595,8 @@ struct WirelessInterfaceInfo {
     if_index: i32,
     if_name: String,
     if_type: Option<Nl80211IfType>,
+    ssid: Option<Vec<u8>>,
+    mlo_link_macs: Vec<MacAddr>,
     frequency: u32,
     channel_width: Option<Nl80211ChannelWidth>,
     center_freq_index1: Option<u8>,
@@ -593,10 +652,26 @@ async fn call_nl80211_get_interfaces(
         };
 
         let if_type = handle.get_attr_payload_as(Nl80211Attribute::IfType).ok();
+        let ssid = handle.get_attr_payload_as_with_len(Nl80211Attribute::Ssid);
         let frequency = handle.get_attr_payload_as(Nl80211Attribute::WiphyFreq);
         let channel_width = handle.get_attr_payload_as(Nl80211Attribute::ChannelWidth);
         let center_freq1 = handle.get_attr_payload_as(Nl80211Attribute::CenterFreq1);
         let center_freq2 = handle.get_attr_payload_as(Nl80211Attribute::CenterFreq2);
+
+        let mut mlo_links = Vec::new();
+        if let Ok(links) = handle.get_nested_attributes::<u16>(Nl80211Attribute::MloLinks) {
+            for link in links.iter() {
+                let Ok(handle) = link.get_attr_handle::<Nl80211Attribute>() else {
+                    continue;
+                };
+                let Ok(mac) = handle.get_attr_payload_as::<[u8; 6]>(Nl80211Attribute::Mac) else {
+                    continue;
+                };
+                let link_id = *link.nla_type().nla_type();
+                mlo_links.push((link_id, MacAddr::from(mac)));
+            }
+            mlo_links.sort_by_key(|(link_id, _)| *link_id);
+        }
 
         interfaces.push(WirelessInterfaceInfo {
             mac: MacAddr::from(mac),
@@ -604,6 +679,8 @@ async fn call_nl80211_get_interfaces(
             if_index,
             if_name,
             if_type,
+            ssid: ssid.ok(),
+            mlo_link_macs: mlo_links.into_iter().map(|(_, mac)| mac).collect(),
             frequency: frequency.unwrap_or(0),
             channel_width: channel_width.ok(),
             center_freq_index1: center_freq1.ok().and_then(get_wifi_center_frequency_index),
@@ -721,6 +798,7 @@ async fn call_nl80211_get_survey(
 
 #[derive(Debug, Default)]
 struct WirelessPhyInfo {
+    perm_addr: Option<MacAddr>,
     bands: IndexMap<Nl80211Band, WirelessPhyBand>,
 }
 
@@ -770,6 +848,17 @@ async fn call_nl80211_get_wiphy(
         let handle = payload.attrs().get_attr_handle();
         let index = handle.get_attr_payload_as::<u32>(Nl80211Attribute::Wiphy)?;
         let phy = result.entry(index).or_insert_with(WirelessPhyInfo::default);
+
+        // The wiphy permanent MAC (perm_addr) is reported as NL80211_ATTR_MAC in
+        // the GetWiphy dump on Linux >= 5.4 (in any chunk of the split dump; the
+        // kernel emits it unconditionally, so all-zero values must be skipped).
+        if phy.perm_addr.is_none()
+            && let Ok(mac) = handle.get_attr_payload_as::<[u8; 6]>(Nl80211Attribute::Mac)
+            && let mac = MacAddr::from(mac)
+            && mac != MacAddr::zero()
+        {
+            phy.perm_addr = Some(mac);
+        }
 
         let bands = handle.get_nested_attributes::<Nl80211Band>(Nl80211Attribute::WiphyBands);
         for band in bands.ok().iter().flat_map(|e| e.iter()) {
