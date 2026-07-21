@@ -2055,8 +2055,10 @@ pub struct GenericPhyDeviceInformation {
     pub local_interfaces: Vec<GenericPhyLocalInterface>,
 }
 
-impl GenericPhyDeviceInformation {
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+impl TLVTrait for GenericPhyDeviceInformation {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::GenericPhyDeviceInformation;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, al_mac) = take_mac_addr(input)?;
         let (input, local_interfaces) =
             all_consuming(length_count(be_u8, GenericPhyLocalInterface::parse)).parse(input)?;
@@ -2069,7 +2071,7 @@ impl GenericPhyDeviceInformation {
         Ok((input, this))
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
+    fn serialize(&self) -> Vec<u8> {
         let mut vec = Vec::new();
         vec.extend(self.al_mac.octets());
         vec.extend((self.local_interfaces.len() as u8).to_be_bytes());
@@ -3406,6 +3408,64 @@ pub mod tests {
         assert!(remaining.is_empty());
         assert_eq!(parsed.message_type, CMDUType::HigherLayerResponse.to_u16());
         assert_eq!(parsed.message_id, 0xDB9E);
+        assert_eq!(parsed.fragment, 0);
+        assert_eq!(parsed.flags, 0x80);
+        assert_eq!(parsed.serialize(), input);
+    }
+
+    // Verify parsing and serializing of GenericPhyQuery CMDU
+    #[test]
+    fn test_generic_phy_query_cmdu_parse_and_serialize() {
+        let input = [
+            0x00, 0x00, // message_version, reserved
+            0x00, 0x11, // message_type: GenericPhyQuery
+            0xDB, 0x9F, // message_id
+            0x00, 0x80, // fragment, flags
+            0x00, 0x00, 0x00, // EndOfMessage TLV
+        ];
+
+        let (remaining, parsed) = CMDU::parse(&input).unwrap();
+        assert!(remaining.is_empty());
+        assert_eq!(parsed.message_type, CMDUType::GenericPhyQuery.to_u16());
+        assert_eq!(parsed.message_id, 0xDB9F);
+        assert_eq!(parsed.fragment, 0);
+        assert_eq!(parsed.flags, 0x80);
+        assert_eq!(parsed.payload, &[0x00, 0x00, 0x00]);
+        assert_eq!(parsed.serialize(), input);
+    }
+
+    // Verify parsing and serializing of GenericPhyResponse CMDU
+    #[test]
+    fn test_generic_phy_response_cmdu_parse_and_serialize() {
+        let mut variant_name = [0u8; 32];
+        variant_name[..10].copy_from_slice(b"GenericPHY");
+
+        let input: Vec<u8> = [
+            [0x00, 0x00, 0x00, 0x12, 0xDB, 0x9F, 0x00, 0x80].as_slice(), // CMDU header
+            &[
+                0x14, 0x00, 0x4A, // TLV: GenericPhyDeviceInformation
+                0x02, 0x42, 0xC0, 0xA8, 0x64, 0x02, // AL MAC address
+                0x01, // local interface count
+                0x02, 0x42, 0xC0, 0xA8, 0x64, 0x03, // local interface MAC
+                0x00, 0x11, 0x22, // OUI
+                0x07, // variant index
+            ],
+            variant_name.as_slice(),
+            &[
+                0x14, // XML URL length
+                0x03, // media specific info length
+                b'h', b't', b't', b'p', b':', b'/', b'/', b't', b'e', b's', b't', b'.', b'c', b'o',
+                b'm', b'/', b't', b'e', b's', b't', // XML URL: http://test.com/test
+                0xAA, 0xBB, 0xCC, // media specific info: AA BB CC
+                0x00, 0x00, 0x00, // EndOfMessage TLV
+            ],
+        ]
+        .concat();
+
+        let (remaining, parsed) = CMDU::parse(&input).unwrap();
+        assert!(remaining.is_empty());
+        assert_eq!(parsed.message_type, CMDUType::GenericPhyResponse.to_u16());
+        assert_eq!(parsed.message_id, 0xDB9F);
         assert_eq!(parsed.fragment, 0);
         assert_eq!(parsed.flags, 0x80);
         assert_eq!(parsed.serialize(), input);
