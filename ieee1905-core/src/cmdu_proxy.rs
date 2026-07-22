@@ -459,7 +459,8 @@ async fn inject_topology_response_tlvs(
     }
 
     // injecting SupportedService
-    if let Some(al_sap) = AlServiceAccessPoint::get().await
+    if !db.is_passive_mode()
+        && let Some(al_sap) = AlServiceAccessPoint::get().await
         && let Some(service_type) = al_sap.service_type()
     {
         vec.push(TLV::from(SupportedService {
@@ -470,7 +471,7 @@ async fn inject_topology_response_tlvs(
         }));
     }
 
-    {
+    if !db.is_passive_mode() {
         let radios = db.ap_operational_bss.read().await;
 
         // injecting ApOperationalBss
