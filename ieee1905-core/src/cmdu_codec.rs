@@ -175,6 +175,9 @@ pub enum IEEE1905TLVType {
     L2NeighborDevice,
     SupportedService,
     ClientAssociation,
+    Layer1905SecurityCapability,
+    MessageIntegrityCode,
+    EncryptedPayload,
     MultiApProfile,
     Profile2ApCapability,
     DeviceInventory,
@@ -209,6 +212,9 @@ impl IEEE1905TLVType {
             0x1e => IEEE1905TLVType::L2NeighborDevice,
             0x80 => IEEE1905TLVType::SupportedService,
             0x92 => IEEE1905TLVType::ClientAssociation,
+            0xa9 => IEEE1905TLVType::Layer1905SecurityCapability,
+            0xab => IEEE1905TLVType::MessageIntegrityCode,
+            0xac => IEEE1905TLVType::EncryptedPayload,
             0xb3 => IEEE1905TLVType::MultiApProfile,
             0xb4 => IEEE1905TLVType::Profile2ApCapability,
             0xd4 => IEEE1905TLVType::DeviceInventory,
@@ -243,6 +249,9 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::L2NeighborDevice => 0x1e,
             IEEE1905TLVType::SupportedService => 0x80,
             IEEE1905TLVType::ClientAssociation => 0x92,
+            IEEE1905TLVType::Layer1905SecurityCapability => 0xa9,
+            IEEE1905TLVType::MessageIntegrityCode => 0xab,
+            IEEE1905TLVType::EncryptedPayload => 0xac,
             IEEE1905TLVType::MultiApProfile => 0xb3,
             IEEE1905TLVType::Profile2ApCapability => 0xb4,
             IEEE1905TLVType::DeviceInventory => 0xd4,
@@ -1409,6 +1418,218 @@ impl TLVTrait for ClientAssociation {
 
         buf.push(assoc_byte);
         buf
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct Layer1905SecurityCapability {
+    pub onboarding_protocol: OnboardingProtocol,
+    pub mic_algorithm: MicAlgorithm,
+    pub encryption_algorithm: EncryptionAlgorithm,
+}
+
+impl TLVTrait for Layer1905SecurityCapability {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::Layer1905SecurityCapability;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, onboarding_protocol) = be_u8(input)?;
+        let (input, mic_algorithm) = be_u8(input)?;
+        let (input, encryption_algorithm) = be_u8(input)?;
+
+        let this = Self {
+            onboarding_protocol: OnboardingProtocol::from_u8(onboarding_protocol),
+            mic_algorithm: MicAlgorithm::from_u8(mic_algorithm),
+            encryption_algorithm: EncryptionAlgorithm::from_u8(encryption_algorithm),
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::with_capacity(13);
+        vec.extend(self.onboarding_protocol.to_u8().to_be_bytes());
+        vec.extend(self.mic_algorithm.to_u8().to_be_bytes());
+        vec.extend(self.encryption_algorithm.to_u8().to_be_bytes());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnboardingProtocol {
+    Device1905,
+    Reserved(u8),
+}
+
+impl OnboardingProtocol {
+    fn to_u8(self) -> u8 {
+        match self {
+            Self::Device1905 => 0,
+            Self::Reserved(e) => e,
+        }
+    }
+
+    fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::Device1905,
+            _ => Self::Reserved(value),
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MicAlgorithm {
+    HmacSha256,
+    Reserved(u8),
+}
+
+impl MicAlgorithm {
+    fn to_u8(self) -> u8 {
+        match self {
+            Self::HmacSha256 => 0,
+            Self::Reserved(e) => e,
+        }
+    }
+
+    fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::HmacSha256,
+            _ => Self::Reserved(value),
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncryptionAlgorithm {
+    AesSiv,
+    Reserved(u8),
+}
+
+impl EncryptionAlgorithm {
+    fn to_u8(self) -> u8 {
+        match self {
+            Self::AesSiv => 0,
+            Self::Reserved(e) => e,
+        }
+    }
+
+    fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::AesSiv,
+            _ => Self::Reserved(value),
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct MessageIntegrityCode {
+    pub gtk_key_id: u8,
+    pub mic_version: MicVersion,
+    pub integrity_transmission_counter: [u8; 6],
+    pub source_1905_al_mac_address: MacAddr,
+    pub code: Vec<u8>,
+}
+
+impl TLVTrait for MessageIntegrityCode {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::MessageIntegrityCode;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, flags) = be_u8(input)?;
+        let (input, &integrity_transmission_counter) = take_n_bytes(input)?;
+        let (input, source_1905_al_mac_address) = take_mac_addr(input)?;
+        let (input, code_len) = be_u16(input)?;
+        let (input, code) = take(code_len as usize).parse(input)?;
+
+        let this = Self {
+            gtk_key_id: (flags >> 6) & 0b11,
+            mic_version: MicVersion::from_u8((flags >> 4) & 0b11),
+            integrity_transmission_counter,
+            source_1905_al_mac_address,
+            code: code.to_vec(),
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let flag0 = (self.gtk_key_id & 0b11) << 6;
+        let flag1 = (self.mic_version.to_u8() & 0b11) << 4;
+        let flags = flag0 | flag1;
+
+        let mut vec = Vec::with_capacity(13);
+        vec.extend(flags.to_be_bytes());
+        vec.extend(self.integrity_transmission_counter);
+        vec.extend(self.source_1905_al_mac_address.octets());
+        vec.extend((self.code.len() as u16).to_be_bytes());
+        vec.extend(self.code.as_slice());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MicVersion {
+    Version1,
+    Reserved(u8),
+}
+
+impl MicVersion {
+    pub fn to_u8(self) -> u8 {
+        match self {
+            MicVersion::Version1 => 0,
+            MicVersion::Reserved(e) => e,
+        }
+    }
+
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::Version1,
+            _ => Self::Reserved(value),
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq)]
+pub struct EncryptedPayload {
+    pub encryption_transmission_counter: [u8; 6],
+    pub source_1905_al_mac_address: MacAddr,
+    pub destination_1905_al_mac_address: MacAddr,
+    pub payload: Vec<u8>,
+}
+
+impl TLVTrait for EncryptedPayload {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::EncryptedPayload;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, &encryption_transmission_counter) = take_n_bytes(input)?;
+        let (input, source_1905_al_mac_address) = take_mac_addr(input)?;
+        let (input, destination_1905_al_mac_address) = take_mac_addr(input)?;
+        let (input, payload_len) = be_u16(input)?;
+        let (input, payload) = take(payload_len as usize).parse(input)?;
+
+        let this = Self {
+            encryption_transmission_counter,
+            source_1905_al_mac_address,
+            destination_1905_al_mac_address,
+            payload: payload.to_vec(),
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::with_capacity(13);
+        vec.extend(self.encryption_transmission_counter);
+        vec.extend(self.source_1905_al_mac_address.octets());
+        vec.extend(self.destination_1905_al_mac_address.octets());
+        vec.extend((self.payload.len() as u16).to_be_bytes());
+        vec.extend(self.payload.as_slice());
+        vec
     }
 }
 
@@ -2647,6 +2868,18 @@ pub mod tests {
             IEEE1905TLVType::ClientAssociation,
         );
         assert_eq!(
+            IEEE1905TLVType::from_u8(0xa9),
+            IEEE1905TLVType::Layer1905SecurityCapability,
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0xab),
+            IEEE1905TLVType::MessageIntegrityCode,
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0xac),
+            IEEE1905TLVType::EncryptedPayload,
+        );
+        assert_eq!(
             IEEE1905TLVType::from_u8(0xb3),
             IEEE1905TLVType::MultiApProfile,
         );
@@ -2694,6 +2927,15 @@ pub mod tests {
         assert_eq!(SupportedRole::TYPE, IEEE1905TLVType::SupportedRole);
         assert_eq!(SupportedService::TYPE, IEEE1905TLVType::SupportedService);
         assert_eq!(ClientAssociation::TYPE, IEEE1905TLVType::ClientAssociation);
+        assert_eq!(
+            Layer1905SecurityCapability::TYPE,
+            IEEE1905TLVType::Layer1905SecurityCapability
+        );
+        assert_eq!(
+            MessageIntegrityCode::TYPE,
+            IEEE1905TLVType::MessageIntegrityCode
+        );
+        assert_eq!(EncryptedPayload::TYPE, IEEE1905TLVType::EncryptedPayload);
         assert_eq!(MultiApProfile::TYPE, IEEE1905TLVType::MultiApProfile);
         assert_eq!(
             Profile2ApCapability::TYPE,
@@ -2730,6 +2972,9 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::Ieee1905ProfileVersion.to_u8(), 0x1a);
         assert_eq!(IEEE1905TLVType::SupportedService.to_u8(), 0x80);
         assert_eq!(IEEE1905TLVType::ClientAssociation.to_u8(), 0x92);
+        assert_eq!(IEEE1905TLVType::Layer1905SecurityCapability.to_u8(), 0xa9);
+        assert_eq!(IEEE1905TLVType::MessageIntegrityCode.to_u8(), 0xab);
+        assert_eq!(IEEE1905TLVType::EncryptedPayload.to_u8(), 0xac);
         assert_eq!(IEEE1905TLVType::MultiApProfile.to_u8(), 0xb3);
         assert_eq!(IEEE1905TLVType::Profile2ApCapability.to_u8(), 0xb4);
         assert_eq!(IEEE1905TLVType::DeviceInventory.to_u8(), 0xd4);
@@ -4041,6 +4286,51 @@ pub mod tests {
 
         let parsed = ClientAssociation::parse(&bytes).unwrap().1;
         assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn test_layer1905_security_capability_serialization() {
+        let original = Layer1905SecurityCapability {
+            onboarding_protocol: OnboardingProtocol::Device1905,
+            mic_algorithm: MicAlgorithm::HmacSha256,
+            encryption_algorithm: EncryptionAlgorithm::AesSiv,
+        };
+
+        let serialized = original.serialize();
+        let parsed = Layer1905SecurityCapability::parse(&serialized).unwrap().1;
+
+        assert_eq!(original, parsed);
+    }
+
+    #[test]
+    fn test_message_integrity_code_serialization() {
+        let original = MessageIntegrityCode {
+            gtk_key_id: 2,
+            mic_version: MicVersion::Version1,
+            integrity_transmission_counter: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06],
+            source_1905_al_mac_address: MacAddr::from([0x11, 0x12, 0x13, 0x14, 0x15, 0x16]),
+            code: [42; 64].to_vec(),
+        };
+
+        let serialized = original.serialize();
+        let parsed = MessageIntegrityCode::parse(&serialized).unwrap().1;
+
+        assert_eq!(original, parsed);
+    }
+
+    #[test]
+    fn test_encrypted_payload_serialization() {
+        let original = EncryptedPayload {
+            encryption_transmission_counter: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06],
+            source_1905_al_mac_address: MacAddr::from([0x11, 0x12, 0x13, 0x14, 0x15, 0x16]),
+            destination_1905_al_mac_address: MacAddr::from([0x21, 0x22, 0x23, 0x24, 0x25, 0x26]),
+            payload: [42; 64].to_vec(),
+        };
+
+        let serialized = original.serialize();
+        let parsed = EncryptedPayload::parse(&serialized).unwrap().1;
+
+        assert_eq!(original, parsed);
     }
 
     #[test]
