@@ -26,7 +26,7 @@ use crate::artifact_exchange_service::client::{
 use crate::cmdu_codec::{
     ControlUrl, Ipv4, Ipv6, LinkMetricRx, LinkMetricRxPair, LinkMetricTx, LinkMetricTxPair,
 };
-use crate::interface_manager::{WirelessRadioBss, get_ap_operational_radios, get_interfaces};
+use crate::interface_manager::{WirelessRadioBss, get_interfaces};
 use crate::linux::if_link::RtnlLinkStats64;
 use crate::lldpdu::PortId;
 use crate::{
@@ -784,29 +784,26 @@ impl TopologyDatabase {
             interval.tick().await;
 
             match get_interfaces(&self.interface_name).await {
-                Ok(mut interfaces) => {
+                Ok(mut result) => {
                     Self::update_local_neighbours_ieee1905_compatibility(
-                        &mut interfaces,
+                        &mut result.interfaces,
                         &*self.nodes.read().await,
                     );
 
+                    *self.ap_operational_bss.write().await = result.radios;
+
                     let mut list = self.local_interface_list.write().await;
-                    if interfaces.is_empty() {
+                    if result.interfaces.is_empty() {
                         *list = None;
                         debug!("No interfaces found — set to None");
                     } else {
-                        *list = Some(interfaces);
+                        *list = Some(result.interfaces);
                         debug!("Updated local interfaces");
                     }
                 }
                 Err(e) => {
                     error!("Interface scan task panicked: {:?}", e);
                 }
-            }
-
-            match get_ap_operational_radios().await {
-                Ok(radios) => *self.ap_operational_bss.write().await = radios,
-                Err(e) => warn!(%e, "get_ap_operational_radios failed"),
             }
 
             *self.local_mac.write().await = get_forwarding_interface_mac(&self.interface_name);
