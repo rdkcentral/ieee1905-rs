@@ -20,21 +20,19 @@
 #![deny(warnings)]
 
 use netdev::interface::types::InterfaceType;
-// External crates
 use pnet::datalink::{self, MacAddr};
 use std::net::Ipv6Addr;
 
-// Standard library
 use crate::cmdu_codec::{MediaType, MediaTypeSpecialInfo, MediaTypeSpecialInfoWifi};
 use crate::linux::eth_tool::{
-    ETH_TOOL_GENL_NAME, EthToolBitsetAttr, EthToolBitsetBitAttr, EthToolHeaderAttribute,
-    EthToolLinkMode, EthToolLinkModesAttribute, EthToolMessage,
+    EthToolBitsetAttr, EthToolBitsetBitAttr, EthToolHeaderAttribute, EthToolLinkMode,
+    EthToolLinkModesAttribute, EthToolMessage, ETH_TOOL_GENL_NAME,
 };
 use crate::linux::if_link::{RtnlLinkStats, RtnlLinkStats64};
 use crate::linux::nl80211::{
-    NL80211_GENL_NAME, Nl80211Attribute, Nl80211Band, Nl80211BandAttr, Nl80211BandIfTypeAttr,
-    Nl80211BitrateAttr, Nl80211ChannelWidth, Nl80211Command, Nl80211IfType, Nl80211RateInfo,
-    Nl80211StaInfo, Nl80211SurveyInfoAttr,
+    Nl80211Attribute, Nl80211Band, Nl80211BandAttr, Nl80211BandIfTypeAttr, Nl80211BitrateAttr,
+    Nl80211ChannelWidth, Nl80211Command, Nl80211IfType, Nl80211RateInfo, Nl80211StaInfo,
+    Nl80211SurveyInfoAttr, NL80211_GENL_NAME,
 };
 use crate::topology_manager::{Ieee1905InterfaceData, Ieee1905LocalInterface};
 use indexmap::{IndexMap, IndexSet};
@@ -261,6 +259,7 @@ pub struct WirelessRadioBss {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WirelessBssInfo {
+    pub if_name: String,
     pub bssid: MacAddr,
     pub ssid: Vec<u8>,
 }
@@ -272,42 +271,79 @@ pub async fn get_ap_operational_radios() -> anyhow::Result<Vec<WirelessRadioBss>
     let interfaces = call_nl80211_get_interfaces(&router, nl80211_family).await?;
     let phy_map = call_nl80211_get_wiphy(&router, nl80211_family).await?;
 
-    let mut radios = IndexMap::new();
-    for interface in interfaces {
+    // group operational AP BSSes by radio + frequency
+    let mut radios = IndexMap::<(u32, u32), Vec<WirelessBssInfo>>::new();
+    for interface in &interfaces {
         if !matches!(interface.if_type, Some(Nl80211IfType::Ap)) {
             continue;
         }
-        let Some(phy) = phy_map.get(&interface.phy_index) else {
+        if interface.frequency == 0 {
             continue;
-        };
-        let Some(phy_perm_addr) = phy.perm_addr else {
-            continue;
-        };
-
-        let ssid = interface.ssid.unwrap_or_default();
-        let radio = radios
-            .entry(interface.phy_index)
-            .or_insert_with(|| WirelessRadioBss {
-                radio_unique_id: phy_perm_addr,
-                bss_list: Vec::new(),
-            });
-
-        if !interface.mlo_link_macs.is_empty() {
-            for bssid in interface.mlo_link_macs {
-                radio.bss_list.push(WirelessBssInfo {
-                    bssid,
-                    ssid: ssid.clone(),
-                });
-            }
-        } else {
-            radio.bss_list.push(WirelessBssInfo {
-                bssid: interface.mac,
-                ssid,
-            });
         }
+
+        radios
+            .entry((interface.phy_index, interface.frequency))
+            .or_default()
+            .push(WirelessBssInfo {
+                if_name: interface.if_name.clone(),
+                bssid: interface.mac,
+                ssid: interface.ssid.clone().unwrap_or_default(),
+            });
     }
 
-    Ok(radios.into_values().collect())
+    // count how many interfaces each phy contains
+    let mut radios_per_phy = IndexMap::<u32, usize>::new();
+    for (phy_index, _freq) in radios.keys() {
+        *radios_per_phy.entry(*phy_index).or_default() += 1;
+    }
+
+    // helper closure to find wifi interface parent radio by name (wifi0.1 -> wifi0)
+    let find_parent_wifi_radio_mac = |if_name: &str| {
+        let interface = interfaces.iter().find(|interface| {
+            if_name
+                .strip_prefix(&interface.if_name)
+                .is_some_and(|e| !e.is_empty())
+        })?;
+        Some(interface.mac)
+    };
+
+    // building final BSS configuration collection
+    let mut result = Vec::new();
+    for ((phy_index, _frequency), mut bss_list) in radios {
+        let Some(bss0) = bss_list.first() else {
+            continue;
+        };
+
+        // searching for wifi interface radio with priority:
+        // 1. by name (wifi0 is parent of wifi0.1)
+        // 2. by phy, only when contains only one interface for uniqueness
+        // 3. lowest Mac in group
+        // 4. first interface in group
+        let radio_unique_id = find_parent_wifi_radio_mac(&bss0.if_name)
+            .or_else(|| {
+                phy_map
+                    .get(&phy_index)
+                    .and_then(|phy| phy.perm_addr)
+                    .filter(|_| radios_per_phy.get(&phy_index).copied() == Some(1))
+            })
+            .or_else(|| {
+                bss_list
+                    .iter()
+                    .map(|bss| bss.bssid.octets())
+                    .min()
+                    .map(MacAddr::from)
+            })
+            .unwrap_or(bss0.bssid);
+
+        bss_list.sort_by_key(|e| e.bssid);
+        result.push(WirelessRadioBss {
+            radio_unique_id,
+            bss_list,
+        });
+    }
+
+    result.sort_by_key(|e| e.radio_unique_id.octets());
+    Ok(result)
 }
 
 #[derive(Debug)]
@@ -596,7 +632,6 @@ struct WirelessInterfaceInfo {
     if_name: String,
     if_type: Option<Nl80211IfType>,
     ssid: Option<Vec<u8>>,
-    mlo_link_macs: Vec<MacAddr>,
     frequency: u32,
     channel_width: Option<Nl80211ChannelWidth>,
     center_freq_index1: Option<u8>,
@@ -658,21 +693,6 @@ async fn call_nl80211_get_interfaces(
         let center_freq1 = handle.get_attr_payload_as(Nl80211Attribute::CenterFreq1);
         let center_freq2 = handle.get_attr_payload_as(Nl80211Attribute::CenterFreq2);
 
-        let mut mlo_links = Vec::new();
-        if let Ok(links) = handle.get_nested_attributes::<u16>(Nl80211Attribute::MloLinks) {
-            for link in links.iter() {
-                let Ok(handle) = link.get_attr_handle::<Nl80211Attribute>() else {
-                    continue;
-                };
-                let Ok(mac) = handle.get_attr_payload_as::<[u8; 6]>(Nl80211Attribute::Mac) else {
-                    continue;
-                };
-                let link_id = *link.nla_type().nla_type();
-                mlo_links.push((link_id, MacAddr::from(mac)));
-            }
-            mlo_links.sort_by_key(|(link_id, _)| *link_id);
-        }
-
         interfaces.push(WirelessInterfaceInfo {
             mac: MacAddr::from(mac),
             phy_index,
@@ -680,7 +700,6 @@ async fn call_nl80211_get_interfaces(
             if_name,
             if_type,
             ssid: ssid.ok(),
-            mlo_link_macs: mlo_links.into_iter().map(|(_, mac)| mac).collect(),
             frequency: frequency.unwrap_or(0),
             channel_width: channel_width.ok(),
             center_freq_index1: center_freq1.ok().and_then(get_wifi_center_frequency_index),
