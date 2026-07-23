@@ -26,7 +26,7 @@ use crate::artifact_exchange_service::client::{
 use crate::cmdu_codec::{
     ControlUrl, Ipv4, Ipv6, LinkMetricRx, LinkMetricRxPair, LinkMetricTx, LinkMetricTxPair,
 };
-use crate::interface_manager::get_interfaces;
+use crate::interface_manager::{WirelessRadioBss, get_interfaces};
 use crate::linux::if_link::RtnlLinkStats64;
 use crate::lldpdu::PortId;
 use crate::{
@@ -552,6 +552,7 @@ pub struct TopologyDatabase {
     pub interface_name: String,
     pub local_mac: Arc<RwLock<MacAddr>>,
     pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905LocalInterface>>>>,
+    pub ap_operational_bss: Arc<RwLock<Vec<WirelessRadioBss>>>,
     pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905NodeInternal>>>,
     pub local_role: Arc<RwLock<Option<Role>>>,
     artifact_exchange_client_factory: Mutex<Option<ArtifactExchangeClientFactory>>,
@@ -575,6 +576,7 @@ impl TopologyDatabase {
             interface_name,
             local_mac: Arc::new(RwLock::new(local_mac)),
             local_interface_list: Arc::new(RwLock::new(None)),
+            ap_operational_bss: Default::default(),
             nodes: Arc::new(RwLock::new(IndexMap::new())),
             local_role: Arc::new(RwLock::new(None)),
             artifact_exchange_client_factory: Default::default(),
@@ -782,18 +784,20 @@ impl TopologyDatabase {
             interval.tick().await;
 
             match get_interfaces(&self.interface_name).await {
-                Ok(mut interfaces) => {
+                Ok(mut result) => {
                     Self::update_local_neighbours_ieee1905_compatibility(
-                        &mut interfaces,
+                        &mut result.interfaces,
                         &*self.nodes.read().await,
                     );
 
+                    *self.ap_operational_bss.write().await = result.radios;
+
                     let mut list = self.local_interface_list.write().await;
-                    if interfaces.is_empty() {
+                    if result.interfaces.is_empty() {
                         *list = None;
                         debug!("No interfaces found — set to None");
                     } else {
-                        *list = Some(interfaces);
+                        *list = Some(result.interfaces);
                         debug!("Updated local interfaces");
                     }
                 }

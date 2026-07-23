@@ -290,7 +290,10 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn get_lldp_compatible_interfaces(interface_name: &str) -> Vec<Ieee1905LocalInterface> {
-    let mut interfaces = get_interfaces(interface_name).await.unwrap_or_default();
+    let mut interfaces = get_interfaces(interface_name)
+        .await
+        .unwrap_or_default()
+        .interfaces;
 
     interfaces.retain(|e| e.media_type.is_ethernet());
     interfaces

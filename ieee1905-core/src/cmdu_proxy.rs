@@ -22,6 +22,7 @@ use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
+use crate::registration_codec::ServiceType;
 use crate::tlv_cmdu_codec::TLVTrait;
 use crate::topology_manager::{Ieee1905Node, Role, TopologyDatabase, UpdateType};
 use crate::{MessageIdGenerator, next_task_id};
@@ -321,7 +322,9 @@ async fn inject_topology_response_tlvs(
         Ieee1905NeighborDevice::TYPE.to_u8(),
         NonIeee1905NeighborDevices::TYPE.to_u8(),
         L2NeighborDevice::TYPE.to_u8(),
-        Ipv6::TYPE.to_u8(),
+        SupportedService::TYPE.to_u8(),
+        ApOperationalBss::TYPE.to_u8(),
+        BssConfigurationReport::TYPE.to_u8(),
     ];
     vec.retain(|e| !filtered_types.contains(&e.tlv_type));
 
@@ -453,6 +456,59 @@ async fn inject_topology_response_tlvs(
                 local_interfaces: local_interface_list,
             }));
         }
+    }
+
+    // injecting SupportedService
+    if let Some(al_sap) = AlServiceAccessPoint::get().await
+        && let Some(service_type) = al_sap.service_type()
+    {
+        vec.push(TLV::from(SupportedService {
+            services: vec![match service_type {
+                ServiceType::EasyMeshAgent => SupportedServiceType::Agent,
+                ServiceType::EasyMeshController => SupportedServiceType::Controller,
+            }],
+        }));
+    }
+
+    {
+        let radios = db.ap_operational_bss.read().await;
+
+        // injecting ApOperationalBss
+        let ap_radios = radios.iter().map(|radio| ApOperationalBssRadio {
+            radio_unique_id: radio.radio_unique_id,
+            bss: radio
+                .bss_list
+                .iter()
+                .map(|bss| ApOperationalBssInterface {
+                    ap_mac: bss.bssid,
+                    ssid: bss.ssid.clone(),
+                })
+                .collect(),
+        });
+
+        vec.push(TLV::from(ApOperationalBss {
+            radios: ap_radios.collect(),
+        }));
+
+        // injecting BssConfigurationReport
+        let bss_radios = radios.iter().map(|radio| BssConfigurationReportRadio {
+            radio_unique_id: radio.radio_unique_id,
+            bss: radio
+                .bss_list
+                .iter()
+                .map(|bss| BssConfigurationReportInterface {
+                    bssid: bss.bssid,
+                    flags: BssConfigurationReportInterface::FLAG_BACK_HAUL_BSS
+                        | BssConfigurationReportInterface::FLAG_FRONT_HAUL_BSS,
+                    reserved: 0,
+                    ssid: bss.ssid.clone(),
+                })
+                .collect(),
+        });
+
+        vec.push(TLV::from(BssConfigurationReport {
+            radios: bss_radios.collect(),
+        }));
     }
 
     // injecting VendorInfo
@@ -1014,7 +1070,7 @@ mod tests {
         let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
         let response = inject_topology_response_tlvs(&mut vec, &db).await;
         assert!(response.is_ok());
-        assert_eq!(vec.len(), 3);
+        assert_eq!(vec.len(), 5);
     }
 
     #[tokio::test]

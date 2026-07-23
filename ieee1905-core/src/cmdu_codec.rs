@@ -174,9 +174,11 @@ pub enum IEEE1905TLVType {
     Ieee1905ProfileVersion,
     L2NeighborDevice,
     SupportedService,
+    ApOperationalBss,
     ClientAssociation,
     MultiApProfile,
     Profile2ApCapability,
+    BssConfigurationReport,
     DeviceInventory,
     Unknown(u8), // To handle unknown or unsupported TLV types
 }
@@ -208,9 +210,11 @@ impl IEEE1905TLVType {
             0x1a => IEEE1905TLVType::Ieee1905ProfileVersion,
             0x1e => IEEE1905TLVType::L2NeighborDevice,
             0x80 => IEEE1905TLVType::SupportedService,
+            0x83 => IEEE1905TLVType::ApOperationalBss,
             0x92 => IEEE1905TLVType::ClientAssociation,
             0xb3 => IEEE1905TLVType::MultiApProfile,
             0xb4 => IEEE1905TLVType::Profile2ApCapability,
+            0xb7 => IEEE1905TLVType::BssConfigurationReport,
             0xd4 => IEEE1905TLVType::DeviceInventory,
             _ => IEEE1905TLVType::Unknown(value), // For unrecognized types
         }
@@ -242,9 +246,11 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::Ieee1905ProfileVersion => 0x1a,
             IEEE1905TLVType::L2NeighborDevice => 0x1e,
             IEEE1905TLVType::SupportedService => 0x80,
+            IEEE1905TLVType::ApOperationalBss => 0x83,
             IEEE1905TLVType::ClientAssociation => 0x92,
             IEEE1905TLVType::MultiApProfile => 0xb3,
             IEEE1905TLVType::Profile2ApCapability => 0xb4,
+            IEEE1905TLVType::BssConfigurationReport => 0xb7,
             IEEE1905TLVType::DeviceInventory => 0xd4,
             IEEE1905TLVType::Unknown(value) => value, // Return the unknown value as-is
         }
@@ -1351,6 +1357,88 @@ impl TLVTrait for SupportedService {
 }
 
 ///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApOperationalBss {
+    pub radios: Vec<ApOperationalBssRadio>,
+}
+
+impl TLVTrait for ApOperationalBss {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::ApOperationalBss;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, radios) = length_count(u8, ApOperationalBssRadio::parse).parse(input)?;
+
+        Ok((input, Self { radios }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend((self.radios.len() as u8).to_be_bytes());
+        vec.extend(self.radios.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApOperationalBssRadio {
+    pub radio_unique_id: MacAddr,
+    pub bss: Vec<ApOperationalBssInterface>,
+}
+
+impl ApOperationalBssRadio {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, radio_unique_id) = take_mac_addr(input)?;
+        let (input, bss) = length_count(u8, ApOperationalBssInterface::parse).parse(input)?;
+
+        let this = Self {
+            radio_unique_id,
+            bss,
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.radio_unique_id.octets());
+        vec.extend((self.bss.len() as u8).to_be_bytes());
+        vec.extend(self.bss.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApOperationalBssInterface {
+    pub ap_mac: MacAddr,
+    pub ssid: Vec<u8>,
+}
+
+impl ApOperationalBssInterface {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, ap_mac) = take_mac_addr(input)?;
+        let (input, ssid) = length_count(u8, u8).parse(input)?;
+
+        Ok((input, Self { ap_mac, ssid }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.ap_mac.octets());
+        vec.extend((self.ssid.len() as u8).to_be_bytes());
+        vec.extend(self.ssid.as_slice());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssociationState {
     LeftBss,
@@ -1536,6 +1624,108 @@ impl ByteCounterUnits {
             ByteCounterUnits::MiB => 2,
             ByteCounterUnits::Reserved => 3,
         }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BssConfigurationReport {
+    pub radios: Vec<BssConfigurationReportRadio>,
+}
+
+impl TLVTrait for BssConfigurationReport {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::BssConfigurationReport;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, radios) = length_count(u8, BssConfigurationReportRadio::parse).parse(input)?;
+
+        Ok((input, Self { radios }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend((self.radios.len() as u8).to_be_bytes());
+        vec.extend(self.radios.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BssConfigurationReportRadio {
+    pub radio_unique_id: MacAddr,
+    pub bss: Vec<BssConfigurationReportInterface>,
+}
+
+impl BssConfigurationReportRadio {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, radio_unique_id) = take_mac_addr(input)?;
+        let (input, bss) = length_count(u8, BssConfigurationReportInterface::parse).parse(input)?;
+
+        let this = Self {
+            radio_unique_id,
+            bss,
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.radio_unique_id.octets());
+        vec.extend((self.bss.len() as u8).to_be_bytes());
+        vec.extend(self.bss.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BssConfigurationReportInterface {
+    pub bssid: MacAddr,
+    pub flags: u8,
+    pub reserved: u8,
+    pub ssid: Vec<u8>,
+}
+
+impl BssConfigurationReportInterface {
+    pub const FLAG_BACK_HAUL_BSS: u8 = 1 << 7;
+    pub const FLAG_FRONT_HAUL_BSS: u8 = 1 << 6;
+    pub const FLAG_R1_DISALLOWED_STATUS: u8 = 1 << 5;
+    pub const FLAG_R2_DISALLOWED_STATUS: u8 = 1 << 4;
+    pub const FLAG_MULTIPLE_BSSID: u8 = 1 << 3;
+    pub const FLAG_TRANSMITTED_BSSID: u8 = 1 << 2;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, bssid) = take_mac_addr(input)?;
+        let (input, flags) = be_u8(input)?;
+        let (input, flags_reserved) = be_u8(input)?;
+        let (input, ssid) = length_count(u8, u8).parse(input)?;
+
+        let this = Self {
+            bssid,
+            flags,
+            reserved: flags_reserved,
+            ssid,
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.bssid.octets());
+        vec.extend(self.flags.to_be_bytes());
+        vec.extend(self.reserved.to_be_bytes());
+        vec.extend((self.ssid.len() as u8).to_be_bytes());
+        vec.extend(self.ssid.as_slice());
+        vec
     }
 }
 
@@ -2643,6 +2833,10 @@ pub mod tests {
             IEEE1905TLVType::SupportedService,
         );
         assert_eq!(
+            IEEE1905TLVType::from_u8(0x83),
+            IEEE1905TLVType::ApOperationalBss,
+        );
+        assert_eq!(
             IEEE1905TLVType::from_u8(0x92),
             IEEE1905TLVType::ClientAssociation,
         );
@@ -2653,6 +2847,10 @@ pub mod tests {
         assert_eq!(
             IEEE1905TLVType::from_u8(0xb4),
             IEEE1905TLVType::Profile2ApCapability,
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0xb7),
+            IEEE1905TLVType::BssConfigurationReport,
         );
         assert_eq!(
             IEEE1905TLVType::from_u8(0xd4),
@@ -2693,11 +2891,16 @@ pub mod tests {
         assert_eq!(SearchedRole::TYPE, IEEE1905TLVType::SearchedRole);
         assert_eq!(SupportedRole::TYPE, IEEE1905TLVType::SupportedRole);
         assert_eq!(SupportedService::TYPE, IEEE1905TLVType::SupportedService);
+        assert_eq!(ApOperationalBss::TYPE, IEEE1905TLVType::ApOperationalBss);
         assert_eq!(ClientAssociation::TYPE, IEEE1905TLVType::ClientAssociation);
         assert_eq!(MultiApProfile::TYPE, IEEE1905TLVType::MultiApProfile);
         assert_eq!(
             Profile2ApCapability::TYPE,
             IEEE1905TLVType::Profile2ApCapability,
+        );
+        assert_eq!(
+            BssConfigurationReport::TYPE,
+            IEEE1905TLVType::BssConfigurationReport,
         );
         assert_eq!(DeviceInventory::TYPE, IEEE1905TLVType::DeviceInventory);
     }
@@ -2729,9 +2932,11 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::DeviceIdentificationType.to_u8(), 0x15);
         assert_eq!(IEEE1905TLVType::Ieee1905ProfileVersion.to_u8(), 0x1a);
         assert_eq!(IEEE1905TLVType::SupportedService.to_u8(), 0x80);
+        assert_eq!(IEEE1905TLVType::ApOperationalBss.to_u8(), 0x83);
         assert_eq!(IEEE1905TLVType::ClientAssociation.to_u8(), 0x92);
         assert_eq!(IEEE1905TLVType::MultiApProfile.to_u8(), 0xb3);
         assert_eq!(IEEE1905TLVType::Profile2ApCapability.to_u8(), 0xb4);
+        assert_eq!(IEEE1905TLVType::BssConfigurationReport.to_u8(), 0xb7);
         assert_eq!(IEEE1905TLVType::DeviceInventory.to_u8(), 0xd4);
     }
 
@@ -4022,6 +4227,23 @@ pub mod tests {
     }
 
     #[test]
+    fn test_ap_operational_bss_parse_and_serialize() {
+        let original = ApOperationalBss {
+            radios: vec![ApOperationalBssRadio {
+                radio_unique_id: MacAddr::new(0x00, 0x01, 0x02, 0x03, 0x04, 0x05),
+                bss: vec![ApOperationalBssInterface {
+                    ap_mac: MacAddr::new(0x01, 0x02, 0x03, 0x04, 0x05, 0x06),
+                    ssid: b"NestWifiEver".to_vec(),
+                }],
+            }],
+        };
+
+        let serialized = original.serialize();
+        let parsed = ApOperationalBss::parse(&serialized).unwrap().1;
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
     fn test_client_association_serialization() {
         let original = ClientAssociation {
             sta_mac: MacAddr::new(1, 2, 3, 4, 5, 6),
@@ -4083,6 +4305,25 @@ pub mod tests {
         assert_eq!(ByteCounterUnits::KiB.to_u8(), 0x01);
         assert_eq!(ByteCounterUnits::MiB.to_u8(), 0x02);
         assert_eq!(ByteCounterUnits::Reserved.to_u8(), 0x03);
+    }
+
+    #[test]
+    fn test_bss_configuration_report_serialization() {
+        let original = BssConfigurationReport {
+            radios: vec![BssConfigurationReportRadio {
+                radio_unique_id: MacAddr::new(0x00, 0x01, 0x02, 0x03, 0x04, 0x05),
+                bss: vec![BssConfigurationReportInterface {
+                    bssid: MacAddr::new(0x01, 0x01, 0x02, 0x03, 0x04, 0x05),
+                    flags: BssConfigurationReportInterface::FLAG_BACK_HAUL_BSS,
+                    reserved: 0,
+                    ssid: b"BestWifiEver".to_vec(),
+                }],
+            }],
+        };
+
+        let serialized = original.serialize();
+        let parsed = BssConfigurationReport::parse(&serialized).unwrap().1;
+        assert_eq!(parsed, original);
     }
 
     #[test]
