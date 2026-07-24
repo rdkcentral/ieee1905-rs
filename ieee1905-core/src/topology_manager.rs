@@ -24,7 +24,8 @@ use crate::artifact_exchange_service::client::{
     ArtifactExchangeClient, ArtifactExchangeClientFactory,
 };
 use crate::cmdu_codec::{
-    ControlUrl, Ipv4, Ipv6, LinkMetricRx, LinkMetricRxPair, LinkMetricTx, LinkMetricTxPair,
+    ControlUrl, IEEE1905_CONTROL_ADDRESS, Ipv4, Ipv6, LinkMetricRx, LinkMetricRxPair, LinkMetricTx,
+    LinkMetricTxPair,
 };
 use crate::interface_manager::get_interfaces;
 use crate::linux::if_link::RtnlLinkStats64;
@@ -39,6 +40,7 @@ use crate::{
     },
     spawn_named,
 };
+use std::collections::HashSet;
 
 use crate::cmdu::L2NeighborDevice;
 #[cfg(feature = "topology_ui")]
@@ -47,6 +49,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use either::Either;
 use indexmap::IndexMap;
 use neli::consts::rtnl::Iff;
 use parking_lot::Mutex;
@@ -553,9 +556,12 @@ pub struct TopologyDatabase {
     pub local_mac: Arc<RwLock<MacAddr>>,
     pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905LocalInterface>>>>,
     pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905NodeInternal>>>,
-    pub local_role: Arc<RwLock<Option<Role>>>,
+    local_role: Mutex<Option<Role>>,
     artifact_exchange_client_factory: Mutex<Option<ArtifactExchangeClientFactory>>,
     artifact_exchange_server_ip_address: Mutex<Option<Ipv6Addr>>,
+    /// Stores remote controllers that won the tiebreaker against us
+    /// This helps to avoid a linear search through all nodes to find remote controllers
+    remote_controllers_cache: Mutex<HashSet<MacAddr>>,
 }
 
 impl TopologyDatabase {
@@ -576,9 +582,10 @@ impl TopologyDatabase {
             local_mac: Arc::new(RwLock::new(local_mac)),
             local_interface_list: Arc::new(RwLock::new(None)),
             nodes: Arc::new(RwLock::new(IndexMap::new())),
-            local_role: Arc::new(RwLock::new(None)),
+            local_role: Default::default(),
             artifact_exchange_client_factory: Default::default(),
             artifact_exchange_server_ip_address: Default::default(),
+            remote_controllers_cache: Default::default(),
         });
         spawn_named(
             "db/refresh_topology",
@@ -591,14 +598,26 @@ impl TopologyDatabase {
         this
     }
 
-    /// ** Returns the local role
-    pub async fn get_local_role(&self) -> Option<Role> {
-        *self.local_role.read().await
+    /// Returns the local role
+    pub fn get_requested_local_role(&self) -> Option<Role> {
+        *self.local_role.lock()
     }
-    /// ** Sets the local role
-    pub async fn set_local_role(&self, role: Option<Role>) {
-        let mut write_guard = self.local_role.write().await;
-        *write_guard = role;
+
+    /// Returns the actual local role
+    pub fn get_actual_local_role(&self) -> Option<Role> {
+        let role = (*self.local_role.lock())?;
+        if role == Role::Registrar {
+            // downgrade to an agent when any controller which won a tiebreaker is present
+            if !self.remote_controllers_cache.lock().is_empty() {
+                return Some(Role::Enrollee);
+            }
+        }
+        Some(role)
+    }
+
+    /// Sets the local role
+    pub fn set_local_role(&self, role: Option<Role>) {
+        *self.local_role.lock() = role;
     }
 
     pub async fn get_forwarding_interface_mac(&self) -> MacAddr {
@@ -692,6 +711,24 @@ impl TopologyDatabase {
         ))
     }
 
+    fn add_remote_controller(&self, al_mac: MacAddr) {
+        if Self::tiebreaker(self.al_mac_address, al_mac).is_left() {
+            return;
+        }
+
+        let mut cache = self.remote_controllers_cache.lock();
+        if cache.insert(al_mac) && cache.len() == 1 {
+            info!("remote controllers that won a tiebreaker are available");
+        }
+    }
+
+    fn remove_remote_controller(&self, al_mac: MacAddr) {
+        let mut cache = self.remote_controllers_cache.lock();
+        if cache.remove(&al_mac) && cache.is_empty() {
+            info!("remote controllers that won a tiebreaker are no longer available");
+        }
+    }
+
     fn update_local_neighbours_ieee1905_compatibility(
         interfaces: &mut [Ieee1905LocalInterface],
         ieee1905_nodes: &IndexMap<MacAddr, Ieee1905NodeInternal>,
@@ -724,7 +761,7 @@ impl TopologyDatabase {
             let mut nodes = self.nodes.write().await;
             let now = Instant::now();
 
-            nodes.retain(|al_mac, node| {
+            let removed_nodes = nodes.extract_if(.., |al_mac, node| {
                 // Remove nodes stuck in ConvergingLocal state
                 if let StateLocal::ConvergingLocal(when) = node.metadata.node_state_local
                     && now.duration_since(when) >= Duration::from_secs(5)
@@ -734,7 +771,7 @@ impl TopologyDatabase {
                         state = ?node.metadata.last_update,
                         "Removing node stuck in local convergence for too long",
                     );
-                    return false; // Remove from database
+                    return true; // Remove from database
                 }
 
                 // Remove nodes stuck in ConvergingRemote state
@@ -746,7 +783,7 @@ impl TopologyDatabase {
                         state = ?node.metadata.last_update,
                         "Removing node stuck in remote convergence for too long",
                     );
-                    return false; // Remove from database
+                    return true; // Remove from database
                 }
 
                 // Remove nodes that have been inactive
@@ -757,7 +794,7 @@ impl TopologyDatabase {
                         state = ?node.metadata.last_update,
                         "Removing node due to timeout",
                     );
-                    return false; // Remove from database
+                    return true; // Remove from database
                 }
 
                 debug!(
@@ -765,8 +802,12 @@ impl TopologyDatabase {
                     elapsed_time = elapsed.as_secs_f64(),
                     "Node Last Seen"
                 );
-                true // Keep the node
+                false // Keep the node
             });
+
+            for removed_node in removed_nodes {
+                self.remove_remote_controller(removed_node.0);
+            }
 
             if nodes.is_empty() {
                 debug!("No nodes in the topology, waiting for updates...");
@@ -806,14 +847,21 @@ impl TopologyDatabase {
         }
     }
 
-    /// Tie breaker function in case we need to give priority in case of collision
-    pub async fn tiebreaker(&self, remote_al_mac: MacAddr) -> bool {
-        let local_mac = self.al_mac_address;
-        let local_last = local_mac.5;
-        let remote_last = remote_al_mac.5;
+    /// Tiebreaker function in case we need to give priority in case of collision
+    pub fn tiebreaker(mac1: MacAddr, mac2: MacAddr) -> Either<MacAddr, MacAddr> {
+        let mut octets1 = mac1.octets();
+        let mut octets2 = mac2.octets();
 
-        local_last < remote_last
+        octets1.reverse();
+        octets2.reverse();
+
+        if octets1 >= octets2 {
+            Either::Left(mac1)
+        } else {
+            Either::Right(mac2)
+        }
     }
+
     /// **Adds or updates a node in the topology database**
     pub async fn update_ieee1905_topology(
         &self,
@@ -917,14 +965,38 @@ impl TopologyDatabase {
                                     "Comparing local_interface_list"
                                 );
 
+                                let mut send_notification = false;
+                                if node.device_data.registry_role != device_data.registry_role {
+                                    debug!(
+                                        role = ?device_data.registry_role,
+                                        "Device data changed (registry_role)",
+                                    );
+
+                                    node.device_data.registry_role = device_data.registry_role;
+
+                                    let old_role = self.get_actual_local_role();
+                                    if device_data.registry_role == Some(Role::Registrar) {
+                                        self.add_remote_controller(al_mac);
+                                    } else {
+                                        self.remove_remote_controller(al_mac);
+                                    }
+
+                                    let new_role = self.get_actual_local_role();
+                                    if new_role != old_role {
+                                        send_notification = true;
+                                    }
+                                }
+
                                 if node.device_data.has_changed(&device_data) {
-                                    debug!("Device data changed local_interface_list)");
+                                    debug!("Device data changed (local_interface_list)");
 
                                     node.device_data.update_from(device_data);
+                                    send_notification = true;
+                                }
 
-                                    let multicast_mac =
-                                        MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13);
+                                if send_notification {
                                     debug!("Event: Send Topology Notification");
+                                    let multicast_mac = IEEE1905_CONTROL_ADDRESS;
                                     TransmissionEvent::SendTopologyNotification(multicast_mac)
                                 } else {
                                     debug!("Device data unchanged — no transmission needed");
@@ -1395,7 +1467,7 @@ impl TopologyDatabase {
 mod tests {
     use crate::TopologyDatabase;
     use crate::cmdu_codec::MediaType;
-    use crate::topology_manager::{Ieee1905DeviceData, Ieee1905InterfaceData, UpdateType};
+    use crate::topology_manager::{Ieee1905DeviceData, Ieee1905InterfaceData, Role, UpdateType};
     use pnet::datalink::MacAddr;
 
     #[tokio::test]
@@ -1444,5 +1516,49 @@ mod tests {
                 .await
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn test_local_role_downgrade() {
+        let db = TopologyDatabase::new(MacAddr::new(0, 0, 0, 0, 0, 0), "en1".to_string());
+
+        db.set_local_role(Some(Role::Registrar));
+        assert_eq!(db.get_actual_local_role(), Some(Role::Registrar));
+
+        db.add_remote_controller(MacAddr::new(0, 0, 0, 0, 0, 1));
+        assert_eq!(db.get_actual_local_role(), Some(Role::Enrollee));
+
+        db.remove_remote_controller(MacAddr::new(0, 0, 0, 0, 0, 1));
+        assert_eq!(db.get_actual_local_role(), Some(Role::Registrar));
+    }
+
+    #[test]
+    fn test_tiebreaker() {
+        let local_mac = MacAddr::new(0x01, 0x01, 0x01, 0x01, 0x01, 0x01);
+
+        let test_cases = [
+            // equal
+            (MacAddr::new(0x01, 0x01, 0x01, 0x01, 0x01, 0x01), false),
+            // 6th octet diff
+            (MacAddr::new(0x01, 0x01, 0x01, 0x01, 0x01, 0x00), false),
+            (MacAddr::new(0x01, 0x01, 0x01, 0x01, 0x01, 0x02), true),
+            // 5th octet diff
+            (MacAddr::new(0x01, 0x01, 0x01, 0x01, 0x00, 0x01), false),
+            (MacAddr::new(0x01, 0x01, 0x01, 0x01, 0x02, 0x01), true),
+            // 1st octet diff
+            (MacAddr::new(0x00, 0x01, 0x01, 0x01, 0x01, 0x01), false),
+            (MacAddr::new(0x02, 0x01, 0x01, 0x01, 0x01, 0x01), true),
+            // 6th & 1st octet diff
+            (MacAddr::new(0x02, 0x01, 0x01, 0x01, 0x01, 0x00), false),
+            (MacAddr::new(0x00, 0x01, 0x01, 0x01, 0x01, 0x02), true),
+        ];
+
+        for (remote_mac, result) in test_cases {
+            assert_eq!(
+                TopologyDatabase::tiebreaker(local_mac, remote_mac).is_right(),
+                result,
+                "{local_mac} & {remote_mac} != {result}",
+            );
+        }
     }
 }
