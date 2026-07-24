@@ -1486,7 +1486,6 @@ dependencies = [
  "neli",
  "netdev",
  "nom 8.0.0",
- "once_cell",
  "parking_lot",
  "pnet",
  "ratatui",

@@ -1290,14 +1290,16 @@ Flow to retrieve keys from IEEE1905 for encryption/decryption and message integr
 
 ```sh
 # Cargo.toml
-cryptoki = "0.10"
+cryptoki = "0.12"
 ```
 
 2. PKCS#11 Rust Binding:
 
 ```sh
-"/usr/lib/softhsm/libsofthsm2.so"
-let pkcs11 = Pkcs11::new("/usr/lib/softhsm/libsofthsm2.so")?;
+let pkcs11_module = std::env::var_os("PKCS11_LIB");
+let pkcs11 = Pkcs11::new(pkcs11_module
+    .as_deref()
+    .unwrap_or(OsStr::new("/usr/lib/softhsm/libsofthsm2.so")))?;
 ```
 
 3. Initialization.
@@ -1320,8 +1322,8 @@ let mut session = pkcs11.open_session(
 6. For softHSM we need to use a PIN to authenticate the access to keys.
 
 ```sh
-let pin = std::env::var("SOFTHSM_USER_PIN")?;
-session.login(UserType::User, Some(&pin))?;
+let pin = std::env::var("PKCS11_USER_PIN")?;
+session.login(UserType::User, Some(&AuthPin::new(pin.into())))?;
 ```
 
 7. Generate and/or find keys.
