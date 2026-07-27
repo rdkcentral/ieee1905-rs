@@ -1070,16 +1070,16 @@ impl TopologyDatabase {
         };
 
         let node_al_mac = node.device_data.al_mac;
-        let neighbors = match query.neighbor_mac {
-            Some(e) => {
-                let Some(neighbor) = Self::find_node_by_port(nodes.values(), e) else {
-                    debug!(%source, "link_metric_query — neighbor {e} not found");
-                    return None;
-                };
-                vec![neighbor.into()]
-            }
-            None => nodes.iter().map(|e| e.1.into()).collect(),
-        };
+        let neighbors: Vec<Ieee1905Node>;
+        if let Some(neighbor_mac) = query.neighbor_mac {
+            let Some(neighbor) = Self::find_node_by_port(nodes.values(), neighbor_mac) else {
+                debug!(%source, "link_metric_query — neighbor {neighbor_mac} not found");
+                return None;
+            };
+            neighbors = vec![Ieee1905Node::from(neighbor)];
+        } else {
+            neighbors = nodes.values().map(Ieee1905Node::from).collect();
+        }
 
         Some((node_al_mac, neighbors))
     }
