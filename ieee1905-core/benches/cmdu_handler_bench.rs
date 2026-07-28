@@ -1,4 +1,6 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use ieee1905::cmdu::{CMDU, CMDUType};
 use ieee1905::cmdu_handler::CMDUHandler;
 use ieee1905::cmdu_message_id_generator::get_message_id_generator;
