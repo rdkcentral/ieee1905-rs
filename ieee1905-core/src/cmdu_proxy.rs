@@ -885,85 +885,112 @@ pub async fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetS
     }
 
     trace!(?sdu, "Parsing CMDU from SDU payload");
+    let Ok((_, mut cmdu)) = CMDU::parse(&sdu.payload) else {
+        return error!("Failed to parse CMDU from SDU payload!");
+    };
+
+    let Some(source_mac) = get_mac_address_by_interface(&interface) else {
+        return warn!("Interface {interface} not found or has no MAC address");
+    };
+
     let source_al_mac = sdu.source_al_mac_address;
     let destination_al_mac = sdu.destination_al_mac_address;
+    let message_id = cmdu.message_id;
+    let message_type = CMDUType::from_u16(cmdu.message_type);
+    debug!(msg_id = message_id, msg_type = ?message_type, "parsed CMDU");
+
+    let topology_db = TopologyDatabase::get_instance(source_al_mac, &interface);
     let fragmentation;
+    let destination_mac;
+    let destination_node;
 
-    match CMDU::parse(&sdu.payload) {
-        Ok((_, mut cmdu)) => {
-            let topology_db = TopologyDatabase::get_instance(source_al_mac, &interface);
-            let destination_mac = if sdu.destination_al_mac_address == IEEE1905_CONTROL_ADDRESS {
-                trace!(
-                    "Parsing CMDU from SDU payload destination mac address is IEEE1905_CONTROL_ADDRESS"
-                );
-                fragmentation = CMDUFragmentation::default();
-                IEEE1905_CONTROL_ADDRESS
-            } else {
-                trace!("Acquiry topology database for source al mac address {source_al_mac}");
-                trace!("Searching for destination {destination_al_mac} in topology database");
+    if sdu.destination_al_mac_address == IEEE1905_CONTROL_ADDRESS {
+        debug!("CMDU from SDU destination mac address is IEEE1905_CONTROL_ADDRESS");
+        fragmentation = CMDUFragmentation::default();
+        destination_mac = IEEE1905_CONTROL_ADDRESS;
+        destination_node = None;
+    } else {
+        debug!("Searching for destination {destination_al_mac} in topology database");
 
-                let Some(node) = topology_db.get_device(sdu.destination_al_mac_address).await
-                else {
-                    return warn!("No destination_mac found for AL-MAC {destination_al_mac}");
-                };
+        let Some(node) = topology_db.get_device(sdu.destination_al_mac_address).await else {
+            return warn!("No destination_mac found for AL-MAC {destination_al_mac}");
+        };
 
-                fragmentation = node.device_data.supported_fragmentation;
-                node.device_data.destination_frame_mac
+        fragmentation = node.device_data.supported_fragmentation;
+        destination_mac = node.device_data.destination_frame_mac;
+        destination_node = Some(node);
+    };
+
+    match message_type {
+        CMDUType::TopologyResponse => {
+            let Ok(mut tlvs) = cmdu.get_tlvs() else {
+                return error!("Failed to parse TopologyResponse TLVs");
             };
-
-            let source_mac = match get_mac_address_by_interface(&interface) {
-                Some(mac) => mac,
-                None => {
-                    return warn!("Interface {} not found or has no MAC address", interface);
-                }
-            };
-
-            match CMDUType::from_u16(cmdu.message_type) {
-                CMDUType::TopologyResponse => {
-                    let Ok(mut tlvs) = cmdu.get_tlvs() else {
-                        return error!("Failed to parse TopologyResponse TLVs");
-                    };
-                    if let Err(e) = inject_topology_response_tlvs(&mut tlvs, &topology_db).await {
-                        return error!(%e, "Failed to inject topo response TLVs");
-                    }
-                    debug!("injecting TopologyResponse TLVs");
-                    cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
-                    trace!(?cmdu, "injected TopologyResponse TLVs");
-                }
-                CMDUType::ApAutoConfigSearch
-                    if topology_db.get_local_role().await == Some(Role::Enrollee) =>
-                {
-                    let Ok(mut tlvs) = cmdu.get_tlvs() else {
-                        return error!("Failed to parse ApAutoConfigSearch TLVs");
-                    };
-                    inject_ap_autoconfig_search_tlvs(&mut tlvs);
-                    debug!("injecting ApAutoConfigSearch TLVs");
-                    cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
-                    trace!(?cmdu, "injected ApAutoConfigSearch TLVs");
-                }
-                CMDUType::ApAutoConfigResponse
-                    if topology_db.get_local_role().await == Some(Role::Registrar) =>
-                {
-                    let Ok(mut tlvs) = cmdu.get_tlvs() else {
-                        return error!("Failed to parse ApAutoConfigResponse TLVs");
-                    };
-                    inject_ap_autoconfig_response_tlvs(&mut tlvs);
-                    debug!("injecting ApAutoConfigResponse TLVs");
-                    cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
-                    trace!(?cmdu, "injected ApAutoConfigResponse TLVs");
-                }
-                _ => {}
+            if let Err(e) = inject_topology_response_tlvs(&mut tlvs, &topology_db).await {
+                return error!(%e, "Failed to inject topo response TLVs");
             }
-
-            if let Err(e) =
-                enqueue_fragmented_cmdu(&sender, destination_mac, source_mac, cmdu, fragmentation)
-                    .await
-            {
-                error!("Failed to send CMDU: {e}");
-            }
+            debug!("injecting TopologyResponse TLVs");
+            cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
+            trace!(?cmdu, "injected TopologyResponse TLVs");
         }
-        Err(_) => {
-            error!("Failed to parse CMDU from SDU payload!");
+        CMDUType::ApAutoConfigSearch
+            if topology_db.get_local_role().await == Some(Role::Enrollee) =>
+        {
+            let Ok(mut tlvs) = cmdu.get_tlvs() else {
+                return error!("Failed to parse ApAutoConfigSearch TLVs");
+            };
+            inject_ap_autoconfig_search_tlvs(&mut tlvs);
+            debug!("injecting ApAutoConfigSearch TLVs");
+            cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
+            trace!(?cmdu, "injected ApAutoConfigSearch TLVs");
+        }
+        CMDUType::ApAutoConfigResponse
+            if topology_db.get_local_role().await == Some(Role::Registrar) =>
+        {
+            let Ok(mut tlvs) = cmdu.get_tlvs() else {
+                return error!("Failed to parse ApAutoConfigResponse TLVs");
+            };
+            inject_ap_autoconfig_response_tlvs(&mut tlvs);
+            debug!("injecting ApAutoConfigResponse TLVs");
+            cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
+            trace!(?cmdu, "injected ApAutoConfigResponse TLVs");
+        }
+        _ => {}
+    }
+
+    if let Err(e) =
+        enqueue_fragmented_cmdu(&sender, destination_mac, source_mac, cmdu, fragmentation).await
+    {
+        return error!("Failed to send CMDU: {e}");
+    }
+
+    if topology_db.is_passive_mode()
+        && let Some(node) = destination_node
+    {
+        match message_type {
+            CMDUType::TopologyQuery => {
+                topology_db
+                    .update_ieee1905_topology(
+                        node.device_data,
+                        UpdateType::QuerySent,
+                        Some(message_id),
+                        None,
+                        None,
+                    )
+                    .await;
+            }
+            CMDUType::TopologyResponse => {
+                topology_db
+                    .update_ieee1905_topology(
+                        node.device_data,
+                        UpdateType::ResponseSent,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await;
+            }
+            _ => {}
         }
     }
 }
