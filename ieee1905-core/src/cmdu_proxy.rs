@@ -936,7 +936,7 @@ pub async fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetS
                 _ => None,
             };
 
-            if expected_local_role == topology_db.get_local_role().await {
+if expected_local_role.is_some() && expected_local_role == topology_db.get_local_role().await {
                 match cmdu.get_tlvs() {
                     Ok(mut tlvs) => {
                         if let Err(e) = inject_ap_autoconfig_role_tlv(&mut tlvs, cmdu.message_type)
