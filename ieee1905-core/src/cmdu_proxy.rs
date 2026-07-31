@@ -930,6 +930,28 @@ pub async fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetS
                 trace!(?cmdu, "injected topology response TLVs");
             }
 
+            let expected_local_role = match CMDUType::from_u16(cmdu.message_type) {
+                CMDUType::ApAutoConfigSearch => Some(Role::Enrollee),
+                CMDUType::ApAutoConfigResponse => Some(Role::Registrar),
+                _ => None,
+            };
+
+            if expected_local_role == topology_db.get_local_role().await {
+                match cmdu.get_tlvs() {
+                    Ok(mut tlvs) => {
+                        if let Err(e) = inject_ap_autoconfig_role_tlv(&mut tlvs, cmdu.message_type)
+                        {
+                            error!(%e, "Failed to inject AP-autoconfiguration role TLV");
+                        } else {
+                            cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
+                        }
+                    }
+                    Err(e) => {
+                        error!(%e, "Failed to parse AP-autoconfiguration TLVs");
+                    }
+                }
+            }
+
             if let Err(e) =
                 enqueue_fragmented_cmdu(&sender, destination_mac, source_mac, cmdu, fragmentation)
                     .await
@@ -941,6 +963,43 @@ pub async fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetS
             error!("Failed to parse CMDU from SDU payload!");
         }
     }
+}
+
+fn inject_ap_autoconfig_role_tlv(vec: &mut Vec<TLV>, message_type: u16) -> anyhow::Result<()> {
+    let (role_tlv, insert_after_al_mac) = match CMDUType::from_u16(message_type) {
+        CMDUType::ApAutoConfigSearch => (TLV::from(SearchedRole { role: 0x00 }), true),
+        CMDUType::ApAutoConfigResponse => (TLV::from(SupportedRole { role: 0x00 }), false),
+        _ => return Ok(()),
+    };
+
+    if vec.iter().any(|tlv| tlv.tlv_type == role_tlv.tlv_type) {
+        return Ok(());
+    }
+
+    let Some(end_of_message_tlv) = vec.pop() else {
+        anyhow::bail!("EndOfMessage TLV was not found");
+    };
+
+    if end_of_message_tlv.tlv_type != EndOfMessage::TYPE.to_u8()
+        || end_of_message_tlv.tlv_length != 0
+    {
+        vec.push(end_of_message_tlv);
+        anyhow::bail!("TLV list doesn't end with EndOfMessage");
+    }
+
+    // Search - AL MAC, SearchedRole, AutoconfigFreqBand
+    // Response - SupportedRole, SupportedFreqBand
+    let insert_index = if insert_after_al_mac {
+        vec.iter()
+            .position(|tlv| tlv.tlv_type == AlMacAddress::TYPE.to_u8())
+            .map_or(vec.len(), |index| index + 1)
+    } else {
+        0
+    };
+
+    vec.insert(insert_index, role_tlv);
+    vec.push(end_of_message_tlv);
+    Ok(())
 }
 
 async fn enqueue_fragmented_cmdu(

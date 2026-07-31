@@ -93,7 +93,8 @@ pub enum UpdateType {
     QueryReceived { force: bool },
     ResponseSent,
     ResponseReceived,
-    ApAutoConfigSearch,
+    ApAutoConfigSearch { registrar: Option<bool> },
+    ApAutoConfigResponse { registrar: Option<bool> },
 }
 
 pub enum TransmissionEvent {
@@ -357,6 +358,7 @@ pub struct Ieee1905DeviceData {
     pub local_interface_mac: MacAddr,
     pub local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
     pub registry_role: Option<Role>,
+    pub registrar: bool,
     pub supported_fragmentation: CMDUFragmentation,
     pub supported_freq_band: Option<SupportedFreqBand>,
     pub ieee1905_profile_version: Ieee1905ProfileVersion,
@@ -985,10 +987,21 @@ impl TopologyDatabase {
                             //If needed we can indicate here a notification event to update topology data base in al neighbors but for now it is not needed
                             //initial DB snapshot covers current uses cases for RDK-B but we can update this part if needed in the future
                         }
-                        UpdateType::ApAutoConfigSearch => node
-                            .prepare_link_metrics_query_transmission_event_if_needed()
-                            .into_iter()
-                            .collect(),
+                        UpdateType::ApAutoConfigSearch { registrar } => {
+                            if let Some(registrar) = registrar {
+                                node.device_data.registrar = registrar;
+                            }
+
+                            node.prepare_link_metrics_query_transmission_event_if_needed()
+                                .into_iter()
+                                .collect()
+                        }
+                        UpdateType::ApAutoConfigResponse { registrar } => {
+                            if let Some(registrar) = registrar {
+                                node.device_data.registrar = registrar;
+                            }
+                            vec![]
+                        }
                     };
                 }
                 None => {
@@ -1029,7 +1042,7 @@ impl TopologyDatabase {
                             debug!(al_mac = ?al_mac, "Inserted node from query");
                             vec![TransmissionEvent::SendTopologyResponse(al_mac)]
                         }
-                        UpdateType::ApAutoConfigSearch => {
+                        UpdateType::ApAutoConfigSearch { .. } => {
                             let node = nodes.entry(al_mac).insert_entry(new_node).into_mut();
                             node_was_created = true;
                             debug!(al_mac = ?al_mac, "Inserted node from ApAutoConfigSearch");
