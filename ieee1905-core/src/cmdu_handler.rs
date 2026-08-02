@@ -763,15 +763,15 @@ impl CMDUHandler {
             al_mac: al_mac.al_mac_address,
             destination_frame_mac: source_mac,
             local_interface_mac,
+            registrar: SearchedRole::find(tlvs).map(|_| false),
             ..Default::default()
         };
-        let registrar = SearchedRole::find(tlvs).map(|_| false);
 
         let topo_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
         let transmission_events = topo_db
             .update_ieee1905_topology(
                 device_data,
-                UpdateType::ApAutoConfigSearch { registrar },
+                UpdateType::ApAutoConfigSearch,
                 None,
                 Some(message_id),
                 None,
@@ -823,28 +823,19 @@ impl CMDUHandler {
             "Handling ApAutoConfigResponse CMDU",
         );
 
-        let topo_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
-        let registrar = SupportedRole::find(tlvs).map(|_| true);
-        if registrar.is_some()
-            && let Some(node) = topo_db.find_device_by_port(source_mac).await
-        {
-            topo_db
-                .update_ieee1905_topology(
-                    node.device_data,
-                    UpdateType::ApAutoConfigResponse { registrar },
-                    None,
-                    None,
-                    None,
-                )
-                .await;
-        }
-
+        let Some(supported_role) = SupportedRole::find(tlvs) else {
+            return error!("ApAutoConfigResponse CMDU missing SupportedRole TLV");
+        };
         let Some(supported_freq_band) = SupportedFreqBand::find(tlvs) else {
             return error!("ApAutoConfigResponse CMDU missing SupportedFreqBand TLV");
         };
 
-        topo_db
-            .handle_ap_auto_config_response(source_mac, supported_freq_band)
+        TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
+            .handle_ap_auto_config_response(
+                source_mac,
+                supported_role,
+                supported_freq_band,
+            )
             .await;
 
         info!(source = %source_mac, "ApAutoConfigResponse Processed");

@@ -25,6 +25,7 @@ use crate::artifact_exchange_service::client::{
 };
 use crate::cmdu_codec::{
     ControlUrl, Ipv4, Ipv6, LinkMetricRx, LinkMetricRxPair, LinkMetricTx, LinkMetricTxPair,
+    SupportedRole,
 };
 use crate::interface_manager::get_interfaces;
 use crate::linux::if_link::RtnlLinkStats64;
@@ -93,8 +94,7 @@ pub enum UpdateType {
     QueryReceived { force: bool },
     ResponseSent,
     ResponseReceived,
-    ApAutoConfigSearch { registrar: Option<bool> },
-    ApAutoConfigResponse { registrar: Option<bool> },
+    ApAutoConfigSearch,
 }
 
 pub enum TransmissionEvent {
@@ -358,7 +358,7 @@ pub struct Ieee1905DeviceData {
     pub local_interface_mac: MacAddr,
     pub local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
     pub registry_role: Option<Role>,
-    pub registrar: bool,
+    pub registrar: Option<bool>,
     pub supported_fragmentation: CMDUFragmentation,
     pub supported_freq_band: Option<SupportedFreqBand>,
     pub ieee1905_profile_version: Ieee1905ProfileVersion,
@@ -987,20 +987,17 @@ impl TopologyDatabase {
                             //If needed we can indicate here a notification event to update topology data base in al neighbors but for now it is not needed
                             //initial DB snapshot covers current uses cases for RDK-B but we can update this part if needed in the future
                         }
-                        UpdateType::ApAutoConfigSearch { registrar } => {
-                            if let Some(registrar) = registrar {
-                                node.device_data.registrar = registrar;
+                        UpdateType::ApAutoConfigSearch => {
+                            if let Some(registrar) = device_data.registrar
+                                && node.device_data.registrar != Some(registrar)
+                            {
+                                info!("node {al_mac:?} registrar flag changed to  {registrar}");
+                                node.device_data.registrar = Some(registrar);
                             }
 
                             node.prepare_link_metrics_query_transmission_event_if_needed()
                                 .into_iter()
                                 .collect()
-                        }
-                        UpdateType::ApAutoConfigResponse { registrar } => {
-                            if let Some(registrar) = registrar {
-                                node.device_data.registrar = registrar;
-                            }
-                            vec![]
                         }
                     };
                 }
@@ -1042,7 +1039,7 @@ impl TopologyDatabase {
                             debug!(al_mac = ?al_mac, "Inserted node from query");
                             vec![TransmissionEvent::SendTopologyResponse(al_mac)]
                         }
-                        UpdateType::ApAutoConfigSearch { .. } => {
+                        UpdateType::ApAutoConfigSearch => {
                             let node = nodes.entry(al_mac).insert_entry(new_node).into_mut();
                             node_was_created = true;
                             debug!(al_mac = ?al_mac, "Inserted node from ApAutoConfigSearch");
@@ -1144,12 +1141,20 @@ impl TopologyDatabase {
     pub async fn handle_ap_auto_config_response(
         &self,
         source: MacAddr,
+        supported_role: SupportedRole,
         supported_freq_band: SupportedFreqBand,
     ) {
         let mut nodes = self.nodes.write().await;
         let Some(node) = Self::find_node_by_port_mut(nodes.values_mut(), source) else {
             return debug!(%source, "handle_ap_auto_config_response — node not found");
         };
+
+        let registrar = supported_role.role == SupportedRole::TYPE_REGISTRAR;
+        if node.device_data.registrar != Some(registrar) {
+            let al_mac = node.metadata.al_mac;
+            info!("node {al_mac:?} registrar flag changed to {registrar}");
+            node.device_data.registrar = Some(registrar);
+        }
 
         node.device_data.supported_freq_band = Some(supported_freq_band);
     }

@@ -918,38 +918,41 @@ pub async fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetS
                 }
             };
 
-            if cmdu.message_type == CMDUType::TopologyResponse.to_u16() {
-                let Ok(mut tlvs) = cmdu.get_tlvs() else {
-                    return error!("Failed to parse topo response TLVs");
-                };
-                if let Err(e) = inject_topology_response_tlvs(&mut tlvs, &topology_db).await {
-                    return error!(%e, "Failed to inject topo response TLVs");
-                }
-                debug!("injecting topology response TLVs");
-                cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
-                trace!(?cmdu, "injected topology response TLVs");
-            }
-
-            let expected_local_role = match CMDUType::from_u16(cmdu.message_type) {
-                CMDUType::ApAutoConfigSearch => Some(Role::Enrollee),
-                CMDUType::ApAutoConfigResponse => Some(Role::Registrar),
-                _ => None,
-            };
-
-if expected_local_role.is_some() && expected_local_role == topology_db.get_local_role().await {
-                match cmdu.get_tlvs() {
-                    Ok(mut tlvs) => {
-                        if let Err(e) = inject_ap_autoconfig_role_tlv(&mut tlvs, cmdu.message_type)
-                        {
-                            error!(%e, "Failed to inject AP-autoconfiguration role TLV");
-                        } else {
-                            cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
-                        }
+            match CMDUType::from_u16(cmdu.message_type) {
+                CMDUType::TopologyResponse => {
+                    let Ok(mut tlvs) = cmdu.get_tlvs() else {
+                        return error!("Failed to parse TopologyResponse TLVs");
+                    };
+                    if let Err(e) = inject_topology_response_tlvs(&mut tlvs, &topology_db).await {
+                        return error!(%e, "Failed to inject topo response TLVs");
                     }
-                    Err(e) => {
-                        error!(%e, "Failed to parse AP-autoconfiguration TLVs");
-                    }
+                    debug!("injecting TopologyResponse TLVs");
+                    cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
+                    trace!(?cmdu, "injected TopologyResponse TLVs");
                 }
+                CMDUType::ApAutoConfigSearch
+                    if topology_db.get_local_role().await == Some(Role::Enrollee) =>
+                {
+                    let Ok(mut tlvs) = cmdu.get_tlvs() else {
+                        return error!("Failed to parse ApAutoConfigSearch TLVs");
+                    };
+                    inject_ap_autoconfig_search_tlvs(&mut tlvs);
+                    debug!("injecting ApAutoConfigSearch TLVs");
+                    cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
+                    trace!(?cmdu, "injected ApAutoConfigSearch TLVs");
+                }
+                CMDUType::ApAutoConfigResponse
+                    if topology_db.get_local_role().await == Some(Role::Registrar) =>
+                {
+                    let Ok(mut tlvs) = cmdu.get_tlvs() else {
+                        return error!("Failed to parse ApAutoConfigResponse TLVs");
+                    };
+                    inject_ap_autoconfig_response_tlvs(&mut tlvs);
+                    debug!("injecting ApAutoConfigResponse TLVs");
+                    cmdu.payload = tlvs.iter().flat_map(TLV::serialize).collect();
+                    trace!(?cmdu, "injected ApAutoConfigResponse TLVs");
+                }
+                _ => {}
             }
 
             if let Err(e) =
@@ -965,41 +968,40 @@ if expected_local_role.is_some() && expected_local_role == topology_db.get_local
     }
 }
 
-fn inject_ap_autoconfig_role_tlv(vec: &mut Vec<TLV>, message_type: u16) -> anyhow::Result<()> {
-    let (role_tlv, insert_after_al_mac) = match CMDUType::from_u16(message_type) {
-        CMDUType::ApAutoConfigSearch => (TLV::from(SearchedRole { role: 0x00 }), true),
-        CMDUType::ApAutoConfigResponse => (TLV::from(SupportedRole { role: 0x00 }), false),
-        _ => return Ok(()),
-    };
-
-    if vec.iter().any(|tlv| tlv.tlv_type == role_tlv.tlv_type) {
-        return Ok(());
+fn inject_ap_autoconfig_search_tlvs(vec: &mut Vec<TLV>) {
+    let tlv_type = SearchedRole::TYPE.to_u8();
+    if vec.iter().any(|tlv| tlv.tlv_type == tlv_type) {
+        return;
     }
 
-    let Some(end_of_message_tlv) = vec.pop() else {
-        anyhow::bail!("EndOfMessage TLV was not found");
-    };
+    let position = vec
+        .iter()
+        .position(|tlv| tlv.tlv_type == AlMacAddress::TYPE.to_u8())
+        .map_or(0, |index| index + 1);
 
-    if end_of_message_tlv.tlv_type != EndOfMessage::TYPE.to_u8()
-        || end_of_message_tlv.tlv_length != 0
-    {
-        vec.push(end_of_message_tlv);
-        anyhow::bail!("TLV list doesn't end with EndOfMessage");
+    let tlv = TLV::from(SearchedRole {
+        role: SearchedRole::TYPE_REGISTRAR,
+    });
+
+    vec.insert(position, tlv);
+}
+
+fn inject_ap_autoconfig_response_tlvs(vec: &mut Vec<TLV>) {
+    let tlv_type = SupportedRole::TYPE.to_u8();
+    if vec.iter().any(|tlv| tlv.tlv_type == tlv_type) {
+        return;
     }
 
-    // Search - AL MAC, SearchedRole, AutoconfigFreqBand
-    // Response - SupportedRole, SupportedFreqBand
-    let insert_index = if insert_after_al_mac {
-        vec.iter()
-            .position(|tlv| tlv.tlv_type == AlMacAddress::TYPE.to_u8())
-            .map_or(vec.len(), |index| index + 1)
-    } else {
-        0
-    };
+    let position = vec
+        .iter()
+        .position(|tlv| tlv.tlv_type == SupportedFreqBand::TYPE.to_u8())
+        .unwrap_or(0);
 
-    vec.insert(insert_index, role_tlv);
-    vec.push(end_of_message_tlv);
-    Ok(())
+    let tlv = TLV::from(SupportedRole {
+        role: SupportedRole::TYPE_REGISTRAR,
+    });
+
+    vec.insert(position, tlv);
 }
 
 async fn enqueue_fragmented_cmdu(

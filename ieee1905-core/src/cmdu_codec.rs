@@ -1103,23 +1103,21 @@ pub struct SearchedRole {
     pub role: u8,
 }
 
+impl SearchedRole {
+    pub const TYPE_REGISTRAR: u8 = 0x00;
+}
+
 impl TLVTrait for SearchedRole {
     const TYPE: IEEE1905TLVType = IEEE1905TLVType::SearchedRole;
 
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, role_bytes) = take(1usize)(input)?;
-        let role = role_bytes[0];
+        let (input, role) = be_u8(input)?;
 
-        if role != 0x00 {
+        if role != Self::TYPE_REGISTRAR {
             return Err(nom::Err::Failure(Error::new(input, ErrorKind::Verify)));
         }
 
-        Ok((
-            input,
-            Self {
-                role: role_bytes[0],
-            },
-        ))
+        Ok((input, Self { role }))
     }
 
     fn serialize(&self) -> Vec<u8> {
@@ -1133,14 +1131,17 @@ pub struct SupportedRole {
     pub role: u8,
 }
 
+impl SupportedRole {
+    pub const TYPE_REGISTRAR: u8 = 0x00;
+}
+
 impl TLVTrait for SupportedRole {
     const TYPE: IEEE1905TLVType = IEEE1905TLVType::SupportedRole;
 
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, role_bytes) = take(1usize)(input)?;
-        let role = role_bytes[0];
+        let (input, role) = be_u8(input)?;
 
-        if role != 0x00 {
+        if role != Self::TYPE_REGISTRAR {
             return Err(nom::Err::Failure(Error::new(input, ErrorKind::Verify)));
         }
 
@@ -1962,7 +1963,7 @@ impl MediaTypeSpecialInfo {
             MediaTypeSpecialInfo::Other(_) => None,
         }
     }
-    
+
     pub fn parse(media_type: MediaType, input: &[u8]) -> IResult<&[u8], Self> {
         if (0x0100..0x0108).contains(&media_type.0) {
             // Wifi6 and Wifi7 don't have extras
