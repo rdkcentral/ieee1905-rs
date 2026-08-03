@@ -763,6 +763,7 @@ impl CMDUHandler {
             al_mac: al_mac.al_mac_address,
             destination_frame_mac: source_mac,
             local_interface_mac,
+            registrar: SearchedRole::find(tlvs).map(|_| false),
             ..Default::default()
         };
 
@@ -822,12 +823,19 @@ impl CMDUHandler {
             "Handling ApAutoConfigResponse CMDU",
         );
 
+        let Some(supported_role) = SupportedRole::find(tlvs) else {
+            return error!("ApAutoConfigResponse CMDU missing SupportedRole TLV");
+        };
         let Some(supported_freq_band) = SupportedFreqBand::find(tlvs) else {
             return error!("ApAutoConfigResponse CMDU missing SupportedFreqBand TLV");
         };
 
         TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
-            .handle_ap_auto_config_response(source_mac, supported_freq_band)
+            .handle_ap_auto_config_response(
+                source_mac,
+                supported_role,
+                supported_freq_band,
+            )
             .await;
 
         info!(source = %source_mac, "ApAutoConfigResponse Processed");
