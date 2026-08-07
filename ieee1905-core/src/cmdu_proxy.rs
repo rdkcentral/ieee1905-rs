@@ -22,6 +22,7 @@ use crate::cmdu::TLV;
 use crate::cmdu_codec::*;
 use crate::ethernet_subject_transmission::EthernetSender;
 use crate::interface_manager::get_mac_address_by_interface;
+use crate::registration_codec::ServiceType;
 use crate::tlv_cmdu_codec::TLVTrait;
 use crate::topology_manager::{Ieee1905Node, Role, TopologyDatabase, UpdateType};
 use crate::{MessageIdGenerator, next_task_id};
@@ -315,18 +316,8 @@ async fn inject_topology_response_tlvs(
         anyhow::bail!("TLV list doesn't end with EndOfMessage");
     }
 
-    let filtered_types = [
-        DeviceInformation::TYPE.to_u8(),
-        DeviceBridgingCapability::TYPE.to_u8(),
-        Ieee1905NeighborDevice::TYPE.to_u8(),
-        NonIeee1905NeighborDevices::TYPE.to_u8(),
-        L2NeighborDevice::TYPE.to_u8(),
-        Ipv6::TYPE.to_u8(),
-    ];
-    vec.retain(|e| !filtered_types.contains(&e.tlv_type));
-
     // injecting DeviceInformation
-    vec.push({
+    inject_overriding_tlvs(vec, {
         let local_interfaces = db.local_interface_list.read().await;
         let local_interfaces = local_interfaces.iter().flatten().map(|e| LocalInterface {
             mac_address: e.mac,
@@ -334,14 +325,14 @@ async fn inject_topology_response_tlvs(
             special_info: e.media_type_extra.clone(),
         });
 
-        TLV::from(DeviceInformation::new(
+        Some(DeviceInformation::new(
             db.al_mac_address,
             local_interfaces.collect(),
         ))
     });
 
     // injecting DeviceBridgingCapability
-    {
+    inject_overriding_tlvs(vec, {
         let mut by_bridge = HashMap::<u32, Vec<MacAddr>>::new();
 
         let local_interfaces = db.local_interface_list.read().await;
@@ -361,16 +352,14 @@ async fn inject_topology_response_tlvs(
             }
         }
 
-        if !tuples.is_empty() {
-            vec.push(TLV::from(DeviceBridgingCapability {
-                bridging_tuples_count: tuples.len() as u8,
-                bridging_tuples_list: tuples,
-            }));
-        }
-    }
+        (!tuples.is_empty()).then_some(DeviceBridgingCapability {
+            bridging_tuples_count: tuples.len() as u8,
+            bridging_tuples_list: tuples,
+        })
+    });
 
     // injecting Ieee1905NeighborDevice
-    {
+    inject_overriding_tlvs(vec, {
         let local_mac_address = db.get_forwarding_interface_mac().await;
         let nodes = db.nodes.read().await;
 
@@ -387,72 +376,113 @@ async fn inject_topology_response_tlvs(
             })
         }));
 
-        if !neighborhood_list.is_empty() {
-            vec.push(TLV::from(Ieee1905NeighborDevice {
-                local_mac_address,
-                neighborhood_list,
-            }));
-        }
-    }
+        (!neighborhood_list.is_empty()).then_some(Ieee1905NeighborDevice {
+            local_mac_address,
+            neighborhood_list,
+        })
+    });
 
     // injecting NonIeee1905NeighborDevices
     {
-        let local_interfaces = db.local_interface_list.read().await;
-        vec.extend(local_interfaces.iter().flatten().filter_map(|e| {
+        let lock = db.local_interface_list.read().await;
+        let iter = lock.iter().flatten().filter_map(|e| {
             let neighbors = e.non_ieee1905_neighbors.as_deref()?;
-            if neighbors.is_empty() {
-                return None;
-            }
-            Some(TLV::from(NonIeee1905NeighborDevices {
+            (!neighbors.is_empty()).then(|| NonIeee1905NeighborDevices {
                 local_mac_address: e.mac,
                 neighborhood_list: neighbors.to_owned(),
-            }))
-        }));
+            })
+        });
+        inject_overriding_tlvs(vec, iter);
     }
 
     // injecting L2NeighborDevice
-    {
+    inject_overriding_tlvs(vec, {
         let local_interfaces = db.local_interface_list.read().await;
-        let local_interface_list = local_interfaces.as_deref().unwrap_or_default();
-        let local_interface_list = local_interface_list
+        let local_interface_list = local_interfaces
             .iter()
+            .flatten()
             .filter_map(|e| {
-                let ieee1905_neighbors =
-                    e.ieee1905_neighbors
-                        .iter()
-                        .flatten()
-                        .map(|neighbor| L2Neighbor {
-                            mac_address: neighbor.neighbor_al_mac,
-                            behind_mac_addresses: Vec::new(),
-                        });
+                let ieee1905_neighbors = e.ieee1905_neighbors.iter().flatten();
+                let ieee1905_neighbors = ieee1905_neighbors.map(|neighbor| L2Neighbor {
+                    mac_address: neighbor.neighbor_al_mac,
+                    behind_mac_addresses: Vec::new(),
+                });
 
-                let non_ieee1905_neighbors =
-                    e.non_ieee1905_neighbors
-                        .iter()
-                        .flatten()
-                        .map(|neighbor| L2Neighbor {
-                            mac_address: *neighbor,
-                            behind_mac_addresses: Vec::new(),
-                        });
+                let non_ieee1905_neighbors = e.non_ieee1905_neighbors.iter().flatten();
+                let non_ieee1905_neighbors = non_ieee1905_neighbors.map(|neighbor| L2Neighbor {
+                    mac_address: *neighbor,
+                    behind_mac_addresses: Vec::new(),
+                });
 
                 let neighbor_interface = L2NeighborLocalInterface {
                     mac_address: e.mac,
                     neighbors: ieee1905_neighbors.chain(non_ieee1905_neighbors).collect(),
                 };
 
-                if neighbor_interface.neighbors.is_empty() {
-                    None
-                } else {
-                    Some(neighbor_interface)
-                }
+                (!neighbor_interface.neighbors.is_empty()).then_some(neighbor_interface)
             })
             .collect::<Vec<_>>();
 
-        if !local_interface_list.is_empty() {
-            vec.push(TLV::from(L2NeighborDevice {
-                local_interfaces: local_interface_list,
-            }));
-        }
+        (!local_interface_list.is_empty()).then_some(L2NeighborDevice {
+            local_interfaces: local_interface_list,
+        })
+    });
+
+    // injecting SupportedService
+    if !db.is_passive_mode()
+        && let Some(al_sap) = AlServiceAccessPoint::get().await
+        && let Some(service_type) = al_sap.service_type()
+    {
+        let tlv = SupportedService {
+            services: vec![match service_type {
+                ServiceType::EasyMeshAgent => SupportedServiceType::Agent,
+                ServiceType::EasyMeshController => SupportedServiceType::Controller,
+            }],
+        };
+        inject_overriding_tlvs(vec, [tlv]);
+    }
+
+    if !db.is_passive_mode() {
+        let radios = db.ap_operational_bss.read().await;
+
+        // injecting ApOperationalBss
+        let ap_radios = radios.iter().map(|radio| ApOperationalBssRadio {
+            radio_unique_id: radio.radio_unique_id,
+            bss: radio
+                .bss_list
+                .iter()
+                .map(|bss| ApOperationalBssInterface {
+                    ap_mac: bss.bssid,
+                    ssid: bss.ssid.clone(),
+                })
+                .collect(),
+        });
+
+        let tlv = ApOperationalBss {
+            radios: ap_radios.collect(),
+        };
+        inject_overriding_tlvs(vec, [tlv]);
+
+        // injecting BssConfigurationReport
+        let bss_radios = radios.iter().map(|radio| BssConfigurationReportRadio {
+            radio_unique_id: radio.radio_unique_id,
+            bss: radio
+                .bss_list
+                .iter()
+                .map(|bss| BssConfigurationReportInterface {
+                    bssid: bss.bssid,
+                    flags: BssConfigurationReportInterface::FLAG_BACK_HAUL_BSS
+                        | BssConfigurationReportInterface::FLAG_FRONT_HAUL_BSS,
+                    reserved: 0,
+                    ssid: bss.ssid.clone(),
+                })
+                .collect(),
+        });
+
+        let tlv = BssConfigurationReport {
+            radios: bss_radios.collect(),
+        };
+        inject_overriding_tlvs(vec, [tlv]);
     }
 
     // injecting VendorInfo
@@ -995,6 +1025,23 @@ pub async fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetS
     }
 }
 
+fn inject_overriding_tlvs<T: TLVTrait>(vec: &mut Vec<TLV>, iter: impl IntoIterator<Item = T>) {
+    let mut first_position = None;
+    let mut current_position = 0;
+
+    vec.retain(|e| {
+        let retain = e.tlv_type != T::TYPE.to_u8();
+        if !retain && first_position.is_none() {
+            first_position = Some(current_position);
+        }
+        current_position += 1;
+        retain
+    });
+
+    let index = first_position.unwrap_or(vec.len());
+    vec.splice(index..index, iter.into_iter().map(TLV::from));
+}
+
 fn inject_ap_autoconfig_search_tlvs(vec: &mut Vec<TLV>) {
     let tlv_type = SearchedRole::TYPE.to_u8();
     if vec.iter().any(|tlv| tlv.tlv_type == tlv_type) {
@@ -1102,7 +1149,7 @@ mod tests {
         let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
         let response = inject_topology_response_tlvs(&mut vec, &db).await;
         assert!(response.is_ok());
-        assert_eq!(vec.len(), 3);
+        assert_eq!(vec.len(), 5);
     }
 
     #[tokio::test]
