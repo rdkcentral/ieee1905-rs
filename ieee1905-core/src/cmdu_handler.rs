@@ -441,29 +441,25 @@ impl CMDUHandler {
             return true;
         }
 
-        let mut remote_al_mac = AlMacAddress::find(tlvs).map(|e| e.al_mac_address);
-        let mut interfaces = Vec::new();
-        let device_bridging_capability = DeviceBridgingCapability::find(tlvs);
+        let Some(device_information) = DeviceInformation::find(tlvs) else {
+            warn!("Missing DeviceInformation TLV. Discarding Topology Response.");
+            return true;
+        };
 
-        if let Some(info) = DeviceInformation::find(tlvs) {
-            remote_al_mac = Some(info.al_mac_address);
-            interfaces.extend(info.local_interface_list.into_iter().map(|iface| {
-                Ieee1905InterfaceData {
-                    mac: iface.mac_address,
-                    media_type: iface.media_type,
-                    media_type_extra: iface.special_info,
-                    bridging_flag: false,
-                    bridging_tuple: None,
-                    vlan: None,
-                    metric: None,
-                    phy_rate: None,
-                    link_availability: None,
-                    signal_strength_dbm: None,
-                    non_ieee1905_neighbors: None,
-                    ieee1905_neighbors: None,
-                }
-            }));
-        }
+        let device_bridging_capability = DeviceBridgingCapability::find(tlvs);
+        let remote_al_mac = AlMacAddress::find(tlvs)
+            .map_or(device_information.al_mac_address, |e| e.al_mac_address);
+
+        let mut interfaces = device_information
+            .local_interface_list
+            .into_iter()
+            .map(|e| Ieee1905InterfaceData {
+                mac: e.mac_address,
+                media_type: e.media_type,
+                media_type_extra: e.special_info,
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
 
         let mut ieee_neighbors_map = Ieee1905NeighborDevice::find_all(tlvs)
             .map(|e| (e.local_mac_address, e.neighborhood_list))

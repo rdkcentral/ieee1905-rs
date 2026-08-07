@@ -24,7 +24,8 @@ use crate::artifact_exchange_service::client::{
     ArtifactExchangeClient, ArtifactExchangeClientFactory,
 };
 use crate::cmdu_codec::{
-    ControlUrl, Ipv4, Ipv6, LinkMetricRx, LinkMetricRxPair, LinkMetricTx, LinkMetricTxPair,
+    ControlUrl, IEEE1905_CONTROL_ADDRESS, Ipv4, Ipv6, LinkMetricRx, LinkMetricRxPair, LinkMetricTx,
+    LinkMetricTxPair,
     SupportedRole,
 };
 use crate::interface_manager::get_interfaces;
@@ -62,6 +63,7 @@ use ratatui::{
 };
 use std::net::Ipv6Addr;
 use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
 use tokio::{
@@ -559,6 +561,7 @@ pub struct TopologyDatabase {
     pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905LocalInterface>>>>,
     pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905NodeInternal>>>,
     pub local_role: Arc<RwLock<Option<Role>>>,
+    passive_mode: AtomicBool,
     artifact_exchange_client_factory: Mutex<Option<ArtifactExchangeClientFactory>>,
     artifact_exchange_server_ip_address: Mutex<Option<Ipv6Addr>>,
 }
@@ -582,6 +585,7 @@ impl TopologyDatabase {
             local_interface_list: Arc::new(RwLock::new(None)),
             nodes: Arc::new(RwLock::new(IndexMap::new())),
             local_role: Arc::new(RwLock::new(None)),
+            passive_mode: AtomicBool::new(false),
             artifact_exchange_client_factory: Default::default(),
             artifact_exchange_server_ip_address: Default::default(),
         });
@@ -604,6 +608,14 @@ impl TopologyDatabase {
     pub async fn set_local_role(&self, role: Option<Role>) {
         let mut write_guard = self.local_role.write().await;
         *write_guard = role;
+    }
+
+    pub fn is_passive_mode(&self) -> bool {
+        self.passive_mode.load(Ordering::Relaxed)
+    }
+
+    pub fn set_passive_mode(&self, enabled: bool) {
+        self.passive_mode.store(enabled, Ordering::Relaxed);
     }
 
     pub async fn get_forwarding_interface_mac(&self) -> MacAddr {
@@ -857,14 +869,12 @@ impl TopologyDatabase {
                                 None,
                             );
 
-                            if local_state == StateLocal::Idle {
+                            if local_state == StateLocal::Idle && !self.is_passive_mode() {
                                 vec![TransmissionEvent::SendTopologyQuery(al_mac)]
                             } else {
-                                let mut events = Vec::new();
-                                events.extend(
-                                    node.prepare_higher_layer_query_transmission_event_if_needed(),
-                                );
-                                events
+                                node.prepare_higher_layer_query_transmission_event_if_needed()
+                                    .into_iter()
+                                    .collect()
                             }
                         }
                         UpdateType::NotificationReceived => {
@@ -879,7 +889,13 @@ impl TopologyDatabase {
                                     Some(StateLocal::Idle),
                                     None,
                                 );
-                                vec![TransmissionEvent::SendTopologyQuery(al_mac)]
+                                if self.is_passive_mode() {
+                                    debug!("passive mode: notification processed");
+                                    vec![]
+                                } else {
+                                    debug!("Event: Send Topology Query");
+                                    vec![TransmissionEvent::SendTopologyQuery(al_mac)]
+                                }
                             } else {
                                 vec![]
                             }
@@ -887,7 +903,10 @@ impl TopologyDatabase {
                         UpdateType::QueryReceived { force } => {
                             let remote_state = node.metadata.node_state_remote;
 
-                            if force || remote_state != StateRemote::ConvergedRemote {
+                            if self.is_passive_mode()
+                                || force
+                                || remote_state != StateRemote::ConvergedRemote
+                            {
                                 node.metadata.update(
                                     Some(operation),
                                     local_msg_id,
@@ -896,8 +915,13 @@ impl TopologyDatabase {
                                     None,
                                     Some(StateRemote::ConvergingRemote(Instant::now())),
                                 );
-                                debug!("Event: Send Topology Response");
-                                vec![TransmissionEvent::SendTopologyResponse(al_mac)]
+                                if self.is_passive_mode() {
+                                    debug!("passive mode: query processed");
+                                    vec![]
+                                } else {
+                                    debug!("Event: Send Topology Response");
+                                    vec![TransmissionEvent::SendTopologyResponse(al_mac)]
+                                }
                             } else {
                                 vec![]
                             }
@@ -931,10 +955,15 @@ impl TopologyDatabase {
 
                                     node.device_data.update_from(device_data);
 
-                                    let multicast_mac =
-                                        MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13);
-                                    debug!("Event: Send Topology Notification");
-                                    vec![TransmissionEvent::SendTopologyNotification(multicast_mac)]
+                                    if self.is_passive_mode() {
+                                        debug!("passive mode: response processed");
+                                        vec![]
+                                    } else {
+                                        debug!("Event: Send Topology Notification");
+                                        vec![TransmissionEvent::SendTopologyNotification(
+                                            IEEE1905_CONTROL_ADDRESS,
+                                        )]
+                                    }
                                 } else {
                                     debug!("Device data unchanged");
                                     vec![]
@@ -946,7 +975,9 @@ impl TopologyDatabase {
                         }
 
                         UpdateType::QuerySent => {
-                            if node.metadata.node_state_local != StateLocal::ConvergedLocal {
+                            if self.is_passive_mode()
+                                || node.metadata.node_state_local != StateLocal::ConvergedLocal
+                            {
                                 node.metadata.update(
                                     Some(operation),
                                     local_msg_id,
@@ -958,9 +989,13 @@ impl TopologyDatabase {
                             }
                             vec![]
                         }
+
                         UpdateType::ResponseSent => {
-                            if let StateRemote::ConvergingRemote(_) =
-                                node.metadata.node_state_remote
+                            if self.is_passive_mode()
+                                || matches!(
+                                    node.metadata.node_state_remote,
+                                    StateRemote::ConvergingRemote(_)
+                                )
                             {
                                 node.metadata.update(
                                     Some(operation),
@@ -1029,7 +1064,11 @@ impl TopologyDatabase {
                             nodes.insert(al_mac, new_node);
                             node_was_created = true;
                             debug!(al_mac = ?al_mac, "Inserted node from Discovery");
-                            vec![TransmissionEvent::SendTopologyQuery(al_mac)]
+                            if self.is_passive_mode() {
+                                vec![]
+                            } else {
+                                vec![TransmissionEvent::SendTopologyQuery(al_mac)]
+                            }
                         }
                         UpdateType::QueryReceived { .. } => {
                             new_node.metadata.node_state_remote =
@@ -1037,7 +1076,11 @@ impl TopologyDatabase {
                             nodes.insert(al_mac, new_node);
                             node_was_created = true;
                             debug!(al_mac = ?al_mac, "Inserted node from query");
-                            vec![TransmissionEvent::SendTopologyResponse(al_mac)]
+                            if self.is_passive_mode() {
+                                vec![]
+                            } else {
+                                vec![TransmissionEvent::SendTopologyResponse(al_mac)]
+                            }
                         }
                         UpdateType::ApAutoConfigSearch => {
                             let node = nodes.entry(al_mac).insert_entry(new_node).into_mut();

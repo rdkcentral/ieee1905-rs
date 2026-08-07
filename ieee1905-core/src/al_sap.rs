@@ -318,6 +318,11 @@ impl AlServiceAccessPoint {
 
     async fn send_initial_topology_notification(&self, al_mac: MacAddr) {
         let topology_db = TopologyDatabase::get_instance(al_mac, &self.interface_name);
+
+        if topology_db.is_passive_mode() {
+            return debug!("passive mode: skipping topology notification after registration");
+        }
+
         let forwarding_mac = topology_db.get_forwarding_interface_mac().await;
         let message_id_generator = get_message_id_generator().await;
 
@@ -440,12 +445,10 @@ pub async fn intercept_roles_and_compare_with_local(tlvs: &[TLV]) {
     let mut expected_role: Option<Role> = None;
     for tlv in tlvs {
         if tlv.tlv_type == IEEE1905TLVType::SearchedRole.to_u8() {
-            //Registrar -- controller
-            expected_role = Some(Role::Registrar);
+            expected_role = Some(Role::Enrollee);
             break;
         } else if tlv.tlv_type == IEEE1905TLVType::SupportedRole.to_u8() {
-            //registry -- agent
-            expected_role = Some(Role::Enrollee);
+            expected_role = Some(Role::Registrar);
             break;
         }
     }
