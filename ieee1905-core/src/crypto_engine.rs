@@ -16,6 +16,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
+use aes_siv::{siv::Aes128Siv, KeyInit};
 use anyhow::{anyhow, bail};
 use std::ffi::OsStr;
 use std::sync::Arc;
@@ -24,11 +25,14 @@ use tokio::sync::{Mutex, OnceCell};
 use cryptoki::{
     context::{CInitializeArgs, CInitializeFlags, Pkcs11},
     error::{Error as Pkcs11Error, RvError},
-    mechanism::{Mechanism, aead::GcmParams},
-    object::{Attribute, KeyType, ObjectClass, ObjectHandle},
+    mechanism::Mechanism,
+    object::{Attribute, AttributeType, KeyType, ObjectClass, ObjectHandle},
     session::{Session, UserType},
-    types::{AuthPin, Ulong},
+    types::AuthPin,
 };
+
+use crate::cmdu_codec::{EncryptedPayload, MessageIntegrityCode, MicVersion};
+use crate::tlv_cmdu_codec::{TLV, TLVTrait};
 
 /// Environment variable holding the PKCS#11 module path.
 const MODULE_ENV: &str = "PKCS11_LIB";
@@ -36,31 +40,21 @@ const MODULE_ENV: &str = "PKCS11_LIB";
 /// Environment variable holding the SoftHSM2 user PIN.
 const USER_PIN_ENV: &str = "PKCS11_USER_PIN";
 
-/// Length in bytes of the AES-GCM IV that is prepended to every ciphertext.
-const AES_GCM_IV_LEN: usize = 12;
+// GTK object label and ID
+const GTK_LABEL: &str = "1905GTK";
 
-/// Length in bits of the AES-GCM authentication tag.
-const AES_GCM_TAG_BITS: u64 = 128;
+const GTK_KEY_ID: u8 = 1;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum KeyKind {
-    /// Group Temporal Key — multicast traffic.
-    Gtk,
-    /// Pairwise Master Key.
-    Pmk,
-    /// Pairwise Transient Key — unicast traffic.
-    Ptk,
-}
+// HMAC-SHA256 output size
+const MIC_SIZE: usize = 32;
 
 pub struct CryptoContext {
     session: Arc<Mutex<Session>>,
     gtk_key: ObjectHandle,
-    pmk_key: ObjectHandle,
-    ptk_key: ObjectHandle,
 }
 
 impl CryptoContext {
-    ///////////////////////////////////////////////////////////////////////////
+    // Initialize PKCS#11 and load the active GTK
     pub async fn get() -> anyhow::Result<&'static Self> {
         static CELL: OnceCell<CryptoContext> = OnceCell::const_new();
 
@@ -95,124 +89,133 @@ impl CryptoContext {
                 .login(UserType::User, Some(&AuthPin::new(pkcs11_pin.into())))
                 .map_err(|e| anyhow!("failed to log in to token: {e}"))?;
 
-            let gtk_key = Self::find_key(&session, "1905GTK", 0x01)
+            let gtk_key = Self::find_key(&session, GTK_LABEL, GTK_KEY_ID)
                 .ok_or_else(|| anyhow!("GTK key not found"))?;
-            let pmk_key = Self::find_key(&session, "1905PMK", 0x02)
-                .ok_or_else(|| anyhow!("PMK key not found"))?;
-            let ptk_key = Self::find_key(&session, "1905PTK", 0x03)
-                .ok_or_else(|| anyhow!("PTK key not found"))?;
 
             Ok(Self {
                 session: Arc::new(Mutex::new(session)),
                 gtk_key,
-                pmk_key,
-                ptk_key,
             })
         })
         .await
     }
 
-    ///////////////////////////////////////////////////////////////////////////
+    // Encrypt TLVs with AES-SIV
     pub async fn encrypt(
         &self,
-        key: KeyKind,
-        plaintext: impl Into<Vec<u8>>,
-        aad: impl Into<Vec<u8>>,
-    ) -> anyhow::Result<Vec<u8>> {
-        let plaintext = plaintext.into();
-        let aad = aad.into();
-        let handle = self.key_handle(key);
+        tlvs: &[TLV],
+    ) -> anyhow::Result<EncryptedPayload> {
+        let plaintext = tlvs.iter().flat_map(TLV::serialize).collect::<Vec<_>>();
         let session = self.session.clone().lock_owned().await;
+        let gtk_key = self.gtk_key;
 
-        let task = tokio::task::spawn_blocking(move || {
-            let mut iv = session
-                .generate_random_vec(AES_GCM_IV_LEN as u32)
-                .map_err(|e| anyhow!("failed to generate IV: {e}"))?;
+        let payload = tokio::task::spawn_blocking(move || {
+            let key = aes_siv_key(&session, gtk_key)?;
+            let mut cipher = Aes128Siv::new_from_slice(&key)
+                .map_err(|_| anyhow!("invalid AES-SIV key length"))?;
+            cipher
+                .encrypt(std::iter::empty::<&[u8]>(), &plaintext)
+                .map_err(|_| anyhow!("AES-SIV encryption failed"))
+        })
+        .await??;
 
-            let params = GcmParams::new(&mut iv, &aad, Ulong::new(AES_GCM_TAG_BITS as _))
-                .map_err(|e| anyhow!("failed to generate GCM parameters: {e}"))?;
-
-            let ciphertext = session
-                .encrypt(&Mechanism::AesGcm(params), handle, &plaintext)
-                .map_err(|e| anyhow!("encrypt operation failed: {e}"))?;
-
-            Ok([iv, ciphertext].concat())
-        });
-        task.await?
+        Ok(EncryptedPayload {
+            encryption_transmission_counter: [0; 6],
+            source_1905_al_mac_address: Default::default(),
+            destination_1905_al_mac_address: Default::default(),
+            payload,
+        })
     }
 
-    ///////////////////////////////////////////////////////////////////////////
+    // Decrypt and parse TLVs
     pub async fn decrypt(
         &self,
-        key: KeyKind,
-        data: impl Into<Vec<u8>>,
-        aad: impl Into<Vec<u8>>,
-    ) -> anyhow::Result<Vec<u8>> {
-        let data = data.into();
-        let aad = aad.into();
-        let handle = self.key_handle(key);
+        encrypted: &EncryptedPayload,
+    ) -> anyhow::Result<Vec<TLV>> {
+        let ciphertext = encrypted.payload.clone();
         let session = self.session.clone().lock_owned().await;
+        let gtk_key = self.gtk_key;
 
-        let task = tokio::task::spawn_blocking(move || {
-            let Some((iv, body)) = data.split_first_chunk::<AES_GCM_IV_LEN>() else {
-                bail!("ciphertext too short");
-            };
+        let plaintext = tokio::task::spawn_blocking(move || {
+            let key = aes_siv_key(&session, gtk_key)?;
+            let mut cipher = Aes128Siv::new_from_slice(&key)
+                .map_err(|_| anyhow!("invalid AES-SIV key length"))?;
+            cipher
+                .decrypt(std::iter::empty::<&[u8]>(), &ciphertext)
+                .map_err(|_| anyhow!("AES-SIV decryption failed"))
+        })
+        .await??;
 
-            let mut iv = *iv;
-            let params = GcmParams::new(&mut iv, &aad, Ulong::new(AES_GCM_TAG_BITS as _))
-                .map_err(|e| anyhow!("failed to generate GCM parameters: {e}"))?;
+        let mut input = plaintext.as_slice();
+        let mut tlvs = Vec::new();
+        while !input.is_empty() {
+            let (remaining, tlv) = TLV::parse(input)
+                .map_err(|error| anyhow!("failed to parse decrypted TLV: {error:?}"))?;
+            tlvs.push(tlv);
+            input = remaining;
+        }
+        Ok(tlvs)
+    }
 
-            session
-                .decrypt(&Mechanism::AesGcm(params), handle, body)
-                .map_err(|e| anyhow!("decrypt operation failed: {e}"))
+    // Sign TLVs with HMAC-SHA256 and return a MIC TLV.
+    pub async fn sign(&self, tlvs: &[TLV]) -> anyhow::Result<MessageIntegrityCode> {
+        let mic = MessageIntegrityCode::find(tlvs).unwrap_or(MessageIntegrityCode {
+            gtk_key_id: GTK_KEY_ID,
+            mic_version: MicVersion::Version1,
+            integrity_transmission_counter: [0; 6],
+            source_1905_al_mac_address: Default::default(),
+            code: Vec::new(),
         });
-        task.await?
+        let data = build_mic_input(tlvs, &mic);
+        let session = self.session.clone().lock_owned().await;
+        let gtk_key = self.gtk_key;
+
+        let code = tokio::task::spawn_blocking(move || {
+            // Calculate the HMAC with the active GTK.
+            let code = session
+                .sign(&Mechanism::Sha256Hmac, gtk_key, &data)
+                .map_err(|e| anyhow!("MIC calculation failed: {e}"))?;
+            if code.len() != MIC_SIZE {
+                bail!("MIC has invalid length: {}", code.len());
+            }
+            Ok(code)
+        })
+        .await??;
+
+        Ok(MessageIntegrityCode { code, ..mic })
     }
 
     ///////////////////////////////////////////////////////////////////////////
-    pub async fn sign(&self, key: KeyKind, data: impl Into<Vec<u8>>) -> anyhow::Result<Vec<u8>> {
-        let data = data.into();
-        let handle = self.key_handle(key);
-        let session = self.session.clone().lock_owned().await;
-
-        let task = tokio::task::spawn_blocking(move || {
-            session
-                .sign(&Mechanism::AesCMac, handle, &data)
-                .map_err(|e| anyhow!("sign operation failed: {e}"))
-        });
-        task.await?
-    }
-
-    ///////////////////////////////////////////////////////////////////////////
+    // Verify the MIC TLV in the input TLVs
     pub async fn verify(
         &self,
-        key: KeyKind,
-        data: impl Into<Vec<u8>>,
-        tag: impl Into<Vec<u8>>,
+        tlvs: &[TLV],
     ) -> anyhow::Result<bool> {
-        let data = data.into();
-        let tag = tag.into();
-        let handle = self.key_handle(key);
-        let session = self.session.clone().lock_owned().await;
+        let Some(mic) = MessageIntegrityCode::find(tlvs) else {
+            return Ok(false);
+        };
 
-        let task = tokio::task::spawn_blocking(move || {
-            match session.verify(&Mechanism::AesCMac, handle, &data, &tag) {
+        if mic.gtk_key_id != GTK_KEY_ID || mic.mic_version != MicVersion::Version1 {
+            return Ok(false);
+        }
+
+        if mic.code.len() != MIC_SIZE {
+            return Ok(false);
+        }
+
+        let data = build_mic_input(tlvs, &mic);
+        let session = self.session.clone().lock_owned().await;
+        let gtk_key = self.gtk_key;
+
+        tokio::task::spawn_blocking(move || {
+            match session.verify(&Mechanism::Sha256Hmac, gtk_key, &data, &mic.code) {
                 Ok(()) => Ok(true),
                 Err(Pkcs11Error::Pkcs11(RvError::SignatureInvalid, _)) => Ok(false),
                 Err(Pkcs11Error::Pkcs11(RvError::SignatureLenRange, _)) => Ok(false),
-                Err(e) => Err(anyhow!("verify operation failed: {e}")),
+                Err(e) => Err(anyhow!("MIC verification failed: {e}")),
             }
-        });
-        task.await?
-    }
-
-    ///////////////////////////////////////////////////////////////////////////
-    fn key_handle(&self, kind: KeyKind) -> ObjectHandle {
-        match kind {
-            KeyKind::Gtk => self.gtk_key,
-            KeyKind::Pmk => self.pmk_key,
-            KeyKind::Ptk => self.ptk_key,
-        }
+        })
+        .await?
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -229,6 +232,33 @@ impl CryptoContext {
     }
 }
 
+fn build_mic_input(tlvs: &[TLV], mic: &MessageIntegrityCode) -> Vec<u8> {
+    let cmdu_header = [0; 6]; // TODO: The first 6 octets of the 1905 CMDU
+    let mic_tlv_value = mic.serialize();
+
+    let mut mic_input = Vec::new();
+    mic_input.extend_from_slice(&cmdu_header);
+    mic_input.extend_from_slice(&mic_tlv_value[..13]); // The first 13 octets of the MIC TLV Value
+    for tlv in tlvs {
+        if tlv.tlv_type != MessageIntegrityCode::TYPE.to_u8() {
+            mic_input.extend(tlv.serialize());
+        }
+    }
+    mic_input
+}
+
+// Read raw key bytes for the software AES-SIV implementation
+fn aes_siv_key(session: &Session, key: ObjectHandle) -> anyhow::Result<Vec<u8>> {
+    session
+        .get_attributes(key, &[AttributeType::Value])?
+        .into_iter()
+        .find_map(|attribute| match attribute {
+            Attribute::Value(value) => Some(value),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("AES-SIV key value is not available"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,18 +267,19 @@ mod tests {
     async fn test_crypto_context_positive() -> anyhow::Result<()> {
         let engine = CryptoContext::get().await?;
 
-        let msg: &[u8] = b"IEEE 1905.1 CryptoContext test";
-        let aad: &[u8] = b"1905-header";
+        let tlvs = vec![TLV {
+            tlv_type: 1,
+            tlv_length: 3,
+            tlv_value: Some(b"190".to_vec()),
+        }];
 
-        for key in [KeyKind::Gtk, KeyKind::Pmk, KeyKind::Ptk] {
-            let sealed = engine.encrypt(key, msg, aad).await?;
-            let opened = engine.decrypt(key, sealed.as_slice(), aad).await?;
-            assert_eq!(opened, msg, "{key:?}: decrypt did not match plaintext");
+        let mic = engine.sign(&tlvs).await?;
+        let mut signed_tlvs = tlvs.clone();
+        signed_tlvs.push(mic.into());
+        assert!(engine.verify(&signed_tlvs).await?);
 
-            let tag = engine.sign(key, msg).await?;
-            let verified = engine.verify(key, msg, tag.as_slice()).await?;
-            assert!(verified, "{key:?}: valid MAC was rejected");
-        }
+        let encrypted = engine.encrypt(&tlvs).await?;
+        assert_eq!(engine.decrypt(&encrypted).await?, tlvs);
         Ok(())
     }
 
@@ -256,20 +287,22 @@ mod tests {
     async fn test_crypto_context_negative() -> anyhow::Result<()> {
         let engine = CryptoContext::get().await?;
 
-        let msg_good: &[u8] = b"IEEE 1905.1 CryptoContext test [good]";
-        let msg_bad: &[u8] = b"IEEE 1905.1 CryptoContext test [bad]";
-        let aad_good: &[u8] = b"1905-header-good";
-        let aad_bad: &[u8] = b"1905-header-bad";
+        let tlvs = vec![TLV {
+            tlv_type: 1,
+            tlv_length: 3,
+            tlv_value: Some(b"190".to_vec()),
+        }];
 
-        for key in [KeyKind::Gtk, KeyKind::Pmk, KeyKind::Ptk] {
-            let sealed = engine.encrypt(key, msg_good, aad_good).await?;
-            let opened = engine.decrypt(key, sealed.as_slice(), aad_bad).await;
-            assert!(opened.is_err(), "{key:?}: decrypted with wrong aad");
+        let mic = engine.sign(&tlvs).await?;
+        let mut signed_tlvs = tlvs.clone();
+        signed_tlvs.push(mic.into());
+        signed_tlvs[0].tlv_value = Some(b"905".to_vec());
+        assert!(!engine.verify(&signed_tlvs).await?);
 
-            let tag = engine.sign(key, msg_good).await?;
-            let verified = engine.verify(key, msg_bad, tag.as_slice()).await?;
-            assert!(!verified, "{key:?}: verified wrong message");
-        }
+        let encrypted = engine.encrypt(&tlvs).await?;
+        let mut modified = encrypted;
+        modified.payload[0] ^= 1;
+        assert!(engine.decrypt(&modified).await.is_err());
         Ok(())
     }
 }
