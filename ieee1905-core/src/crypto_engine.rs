@@ -389,6 +389,13 @@ fn xor(dst: &mut [u8], src: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aes_siv::{siv::Aes256Siv, KeyInit};
+
+    const TEST_TK_KEY: [u8; 32] = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+        0x1e, 0x1f,
+    ];
 
     #[tokio::test]
     async fn test_crypto_context_positive() -> anyhow::Result<()> {
@@ -406,6 +413,15 @@ mod tests {
         assert!(engine.verify(&signed_tlvs).await?);
 
         let encrypted = engine.encrypt(&tlvs).await?;
+        let plaintext = tlvs.iter().flat_map(TLV::serialize).collect::<Vec<_>>();
+        assert_eq!(
+            encrypted.payload,
+            reference_aes_siv_encrypt(&encrypted, &plaintext)?
+        );
+        assert_eq!(
+            reference_aes_siv_decrypt(&encrypted, &encrypted.payload)?,
+            plaintext
+        );
         assert_eq!(engine.decrypt(&encrypted).await?, tlvs);
         Ok(())
     }
@@ -431,5 +447,37 @@ mod tests {
         modified.payload[0] ^= 1;
         assert!(engine.decrypt(&modified).await.is_err());
         Ok(())
+    }
+
+    fn reference_aes_siv_encrypt(
+        encrypted: &EncryptedPayload,
+        plaintext: &[u8],
+    ) -> anyhow::Result<Vec<u8>> {
+        reference_aes_siv_cipher()?
+            .encrypt(
+                encryption_associated_data(encrypted).iter().map(Vec::as_slice),
+                plaintext,
+            )
+            .map_err(|_| anyhow!("AES-SIV reference encryption failed"))
+    }
+
+    fn reference_aes_siv_decrypt(
+        encrypted: &EncryptedPayload,
+        ciphertext: &[u8],
+    ) -> anyhow::Result<Vec<u8>> {
+        reference_aes_siv_cipher()?
+            .decrypt(
+                encryption_associated_data(encrypted).iter().map(Vec::as_slice),
+                ciphertext,
+            )
+            .map_err(|_| anyhow!("AES-SIV reference decryption failed"))
+    }
+
+    fn reference_aes_siv_cipher() -> anyhow::Result<Aes256Siv> {
+        let mut key = TEST_TK_KEY.to_vec();
+        key.extend(TEST_TK_KEY);
+
+        Aes256Siv::new_from_slice(&key)
+            .map_err(|_| anyhow!("invalid AES-SIV reference key length"))
     }
 }
