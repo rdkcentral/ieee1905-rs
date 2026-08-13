@@ -16,7 +16,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
-use aes_siv::{siv::Aes128Siv, KeyInit};
 use anyhow::{anyhow, bail};
 use std::ffi::OsStr;
 use std::sync::Arc;
@@ -25,10 +24,10 @@ use tokio::sync::{Mutex, OnceCell};
 use cryptoki::{
     context::{CInitializeArgs, CInitializeFlags, Pkcs11},
     error::{Error as Pkcs11Error, RvError},
-    mechanism::Mechanism,
-    object::{Attribute, AttributeType, KeyType, ObjectClass, ObjectHandle},
+    mechanism::{Mechanism, MechanismType, vendor_defined::VendorDefinedMechanism},
+    object::{Attribute, KeyType, ObjectClass, ObjectHandle},
     session::{Session, UserType},
-    types::AuthPin,
+    types::{AuthPin, Ulong},
 };
 
 use crate::cmdu_codec::{EncryptedPayload, MessageIntegrityCode, MicVersion};
@@ -42,15 +41,19 @@ const USER_PIN_ENV: &str = "PKCS11_USER_PIN";
 
 // GTK object label and ID
 const GTK_LABEL: &str = "1905GTK";
+const TK_LABEL: &str = "1905TK";
 
 const GTK_KEY_ID: u8 = 1;
+const TK_KEY_ID: u8 = 3;
 
 // HMAC-SHA256 output size
 const MIC_SIZE: usize = 32;
+const SIV_SIZE: usize = 16;
 
 pub struct CryptoContext {
     session: Arc<Mutex<Session>>,
     gtk_key: ObjectHandle,
+    tk_key: ObjectHandle,
 }
 
 impl CryptoContext {
@@ -89,60 +92,51 @@ impl CryptoContext {
                 .login(UserType::User, Some(&AuthPin::new(pkcs11_pin.into())))
                 .map_err(|e| anyhow!("failed to log in to token: {e}"))?;
 
-            let gtk_key = Self::find_key(&session, GTK_LABEL, GTK_KEY_ID)
+            let gtk_key = Self::find_key(&session, GTK_LABEL, GTK_KEY_ID, KeyType::GENERIC_SECRET)
                 .ok_or_else(|| anyhow!("GTK key not found"))?;
+            let tk_key = Self::find_key(&session, TK_LABEL, TK_KEY_ID, KeyType::AES)
+                .ok_or_else(|| anyhow!("TK key not found"))?;
 
             Ok(Self {
                 session: Arc::new(Mutex::new(session)),
                 gtk_key,
+                tk_key,
             })
         })
         .await
     }
 
     // Encrypt TLVs with AES-SIV
-    pub async fn encrypt(
-        &self,
-        tlvs: &[TLV],
-    ) -> anyhow::Result<EncryptedPayload> {
+    pub async fn encrypt(&self, tlvs: &[TLV]) -> anyhow::Result<EncryptedPayload> {
         let plaintext = tlvs.iter().flat_map(TLV::serialize).collect::<Vec<_>>();
         let session = self.session.clone().lock_owned().await;
-        let gtk_key = self.gtk_key;
+        let tk_key = self.tk_key;
 
-        let payload = tokio::task::spawn_blocking(move || {
-            let key = aes_siv_key(&session, gtk_key)?;
-            let mut cipher = Aes128Siv::new_from_slice(&key)
-                .map_err(|_| anyhow!("invalid AES-SIV key length"))?;
-            cipher
-                .encrypt(std::iter::empty::<&[u8]>(), &plaintext)
-                .map_err(|_| anyhow!("AES-SIV encryption failed"))
-        })
-        .await??;
-
-        Ok(EncryptedPayload {
+        let mut encrypted = EncryptedPayload {
             encryption_transmission_counter: [0; 6],
             source_1905_al_mac_address: Default::default(),
             destination_1905_al_mac_address: Default::default(),
-            payload,
+            payload: Vec::new(),
+        };
+        let associated_data = encryption_associated_data(&encrypted);
+
+        encrypted.payload = tokio::task::spawn_blocking(move || {
+            aes_siv_encrypt(&session, tk_key, &associated_data, &plaintext)
         })
+        .await??;
+
+        Ok(encrypted)
     }
 
     // Decrypt and parse TLVs
-    pub async fn decrypt(
-        &self,
-        encrypted: &EncryptedPayload,
-    ) -> anyhow::Result<Vec<TLV>> {
+    pub async fn decrypt(&self, encrypted: &EncryptedPayload) -> anyhow::Result<Vec<TLV>> {
         let ciphertext = encrypted.payload.clone();
+        let associated_data = encryption_associated_data(encrypted);
         let session = self.session.clone().lock_owned().await;
-        let gtk_key = self.gtk_key;
+        let tk_key = self.tk_key;
 
         let plaintext = tokio::task::spawn_blocking(move || {
-            let key = aes_siv_key(&session, gtk_key)?;
-            let mut cipher = Aes128Siv::new_from_slice(&key)
-                .map_err(|_| anyhow!("invalid AES-SIV key length"))?;
-            cipher
-                .decrypt(std::iter::empty::<&[u8]>(), &ciphertext)
-                .map_err(|_| anyhow!("AES-SIV decryption failed"))
+            aes_siv_decrypt(&session, tk_key, &associated_data, &ciphertext)
         })
         .await??;
 
@@ -187,10 +181,7 @@ impl CryptoContext {
 
     ///////////////////////////////////////////////////////////////////////////
     // Verify the MIC TLV in the input TLVs
-    pub async fn verify(
-        &self,
-        tlvs: &[TLV],
-    ) -> anyhow::Result<bool> {
+    pub async fn verify(&self, tlvs: &[TLV]) -> anyhow::Result<bool> {
         let Some(mic) = MessageIntegrityCode::find(tlvs) else {
             return Ok(false);
         };
@@ -219,12 +210,12 @@ impl CryptoContext {
     }
 
     ///////////////////////////////////////////////////////////////////////////
-    fn find_key(session: &Session, label: &str, id: u8) -> Option<ObjectHandle> {
+    fn find_key(session: &Session, label: &str, id: u8, key_type: KeyType) -> Option<ObjectHandle> {
         let attributes = vec![
             Attribute::Label(label.as_bytes().to_vec()),
             Attribute::Id(vec![id]),
             Attribute::Class(ObjectClass::SECRET_KEY),
-            Attribute::KeyType(KeyType::AES),
+            Attribute::KeyType(key_type),
         ];
 
         let handles = session.find_objects(&attributes).ok()?;
@@ -247,16 +238,152 @@ fn build_mic_input(tlvs: &[TLV], mic: &MessageIntegrityCode) -> Vec<u8> {
     mic_input
 }
 
-// Read raw key bytes for the software AES-SIV implementation
-fn aes_siv_key(session: &Session, key: ObjectHandle) -> anyhow::Result<Vec<u8>> {
-    session
-        .get_attributes(key, &[AttributeType::Value])?
-        .into_iter()
-        .find_map(|attribute| match attribute {
-            Attribute::Value(value) => Some(value),
-            _ => None,
-        })
-        .ok_or_else(|| anyhow!("AES-SIV key value is not available"))
+fn encryption_associated_data(encrypted: &EncryptedPayload) -> Vec<Vec<u8>> {
+    vec![
+        vec![0; 6], // TODO: The first 6 octets of the 1905 CMDU
+        encrypted.encryption_transmission_counter.to_vec(),
+        encrypted.source_1905_al_mac_address.octets().to_vec(),
+        encrypted.destination_1905_al_mac_address.octets().to_vec(),
+    ]
+}
+
+// AES-SIV implemented with PKCS#11 CKM_AES_CMAC + CKM_AES_CTR
+//
+// SoftHSM2 does not provide native AES-SIV
+// - AES-CMAC: builds and checks the AES-SIV tag
+// - AES-CTR: encrypts and decrypts the TLV bytes
+
+// Encrypt bytes with AES-SIV and return SIV || ciphertext
+fn aes_siv_encrypt(
+    session: &Session,
+    key: ObjectHandle,
+    associated_data: &[Vec<u8>],
+    plaintext: &[u8],
+) -> anyhow::Result<Vec<u8>> {
+    let siv = calculate_siv(session, key, associated_data, plaintext)?;
+    let ciphertext = aes_ctr(session, key, &siv, plaintext, true)?;
+
+    Ok([siv.to_vec(), ciphertext].concat())
+}
+
+// Decrypt SIV || ciphertext and verify the AES-SIV tag
+fn aes_siv_decrypt(
+    session: &Session,
+    key: ObjectHandle,
+    associated_data: &[Vec<u8>],
+    ciphertext: &[u8],
+) -> anyhow::Result<Vec<u8>> {
+    if ciphertext.len() < SIV_SIZE {
+        bail!("AES-SIV payload too short");
+    }
+
+    let (siv, ciphertext) = ciphertext.split_at(SIV_SIZE);
+    let siv = siv
+        .try_into()
+        .map_err(|_| anyhow!("invalid AES-SIV tag length"))?;
+    let plaintext = aes_ctr(session, key, siv, ciphertext, false)?;
+    let expected_siv = calculate_siv(session, key, associated_data, &plaintext)?;
+
+    if *siv != expected_siv {
+        bail!("AES-SIV authentication failed");
+    }
+
+    Ok(plaintext)
+}
+
+// Build the AES-SIV tag from AD and plaintext
+// RFC 5297 2.4: "D = dbl(D) xor AES-CMAC(K, Si)"
+fn calculate_siv(
+    session: &Session,
+    key: ObjectHandle,
+    associated_data: &[Vec<u8>],
+    plaintext: &[u8],
+) -> anyhow::Result<[u8; SIV_SIZE]> {
+    let mut state = aes_cmac(session, key, &[0; SIV_SIZE])?;
+
+    for data in associated_data {
+        state = dbl(state);
+        let code = aes_cmac(session, key, data)?;
+        xor(&mut state, &code);
+    }
+
+    if plaintext.len() >= SIV_SIZE {
+        let mut input = plaintext.to_vec();
+        let offset = input.len() - SIV_SIZE;
+        // RFC 5297 2.4: xor D onto the end of the final input.
+        xor(&mut input[offset..], &state);
+        aes_cmac(session, key, &input)
+    } else {
+        state = dbl(state);
+        // RFC 5297 2.4: xor dbl(D) with the padded final input.
+        xor(&mut state, plaintext);
+        state[plaintext.len()] ^= 0x80;
+        aes_cmac(session, key, &state)
+    }
+}
+
+fn aes_cmac(session: &Session, key: ObjectHandle, data: &[u8]) -> anyhow::Result<[u8; SIV_SIZE]> {
+    let code = session
+        .sign(&Mechanism::AesCMac, key, data)
+        .map_err(|e| anyhow!("AES-CMAC failed: {e}"))?;
+    code.try_into()
+        .map_err(|code: Vec<u8>| anyhow!("AES-CMAC has invalid length: {}", code.len()))
+}
+
+fn aes_ctr(
+    session: &Session,
+    key: ObjectHandle,
+    siv: &[u8; SIV_SIZE],
+    input: &[u8],
+    encrypt: bool,
+) -> anyhow::Result<Vec<u8>> {
+    #[repr(C)]
+    struct AesCtrParams {
+        counter_bits: Ulong,
+        counter_block: [u8; SIV_SIZE],
+    }
+
+    let mut counter_block = *siv;
+    counter_block[8] &= 0x7f;
+    counter_block[12] &= 0x7f;
+
+    let params = AesCtrParams {
+        counter_bits: Ulong::new(128),
+        counter_block,
+    };
+
+    let mechanism = Mechanism::VendorDefined(VendorDefinedMechanism::new(
+        MechanismType::AES_CTR,
+        Some(&params),
+    ));
+
+    if encrypt {
+        session
+            .encrypt(&mechanism, key, input)
+            .map_err(|e| anyhow!("AES-CTR encryption failed: {e}"))
+    } else {
+        session
+            .decrypt(&mechanism, key, input)
+            .map_err(|e| anyhow!("AES-CTR decryption failed: {e}"))
+    }
+}
+
+// RFC 5297 2.3: double a 128-bit input with left-shift and conditional xor.
+fn dbl(block: [u8; SIV_SIZE]) -> [u8; SIV_SIZE] {
+    let overflow = block[0] & 0x80 != 0;
+    let mut value = u128::from_be_bytes(block) << 1;
+
+    if overflow {
+        value ^= 0x87;
+    }
+
+    value.to_be_bytes()
+}
+
+fn xor(dst: &mut [u8], src: &[u8]) {
+    for (dst, src) in dst.iter_mut().zip(src) {
+        *dst ^= src;
+    }
 }
 
 #[cfg(test)]
