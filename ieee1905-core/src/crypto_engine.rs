@@ -107,13 +107,17 @@ impl CryptoContext {
     }
 
     // Encrypt TLVs with AES-SIV
-    pub async fn encrypt(&self, tlvs: &[TLV]) -> anyhow::Result<EncryptedPayload> {
+    pub async fn encrypt(
+        &self,
+        tlvs: &[TLV],
+        encryption_transmission_counter: [u8; 6],
+    ) -> anyhow::Result<EncryptedPayload> {
         let plaintext = tlvs.iter().flat_map(TLV::serialize).collect::<Vec<_>>();
         let session = self.session.clone().lock_owned().await;
         let tk_key = self.tk_key;
 
         let mut encrypted = EncryptedPayload {
-            encryption_transmission_counter: [0; 6],
+            encryption_transmission_counter,
             source_1905_al_mac_address: Default::default(),
             destination_1905_al_mac_address: Default::default(),
             payload: Vec::new(),
@@ -152,14 +156,18 @@ impl CryptoContext {
     }
 
     // Sign TLVs with HMAC-SHA256 and return a MIC TLV.
-    pub async fn sign(&self, tlvs: &[TLV]) -> anyhow::Result<MessageIntegrityCode> {
-        let mic = MessageIntegrityCode::find(tlvs).unwrap_or(MessageIntegrityCode {
+    pub async fn sign(
+        &self,
+        tlvs: &[TLV],
+        integrity_transmission_counter: [u8; 6],
+    ) -> anyhow::Result<MessageIntegrityCode> {
+        let mic = MessageIntegrityCode {
             gtk_key_id: GTK_KEY_ID,
             mic_version: MicVersion::Version1,
-            integrity_transmission_counter: [0; 6],
+            integrity_transmission_counter,
             source_1905_al_mac_address: Default::default(),
             code: Vec::new(),
-        });
+        };
         let data = build_mic_input(tlvs, &mic);
         let session = self.session.clone().lock_owned().await;
         let gtk_key = self.gtk_key;
@@ -396,6 +404,8 @@ mod tests {
         0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
         0x1e, 0x1f,
     ];
+    const TEST_INTEGRITY_COUNTER: [u8; 6] = [0, 0, 0, 0, 0, 1];
+    const TEST_ENCRYPTION_COUNTER: [u8; 6] = [0, 0, 0, 0, 0, 1];
 
     #[tokio::test]
     async fn test_crypto_context_positive() -> anyhow::Result<()> {
@@ -407,12 +417,12 @@ mod tests {
             tlv_value: Some(b"190".to_vec()),
         }];
 
-        let mic = engine.sign(&tlvs).await?;
+        let mic = engine.sign(&tlvs, TEST_INTEGRITY_COUNTER).await?;
         let mut signed_tlvs = tlvs.clone();
         signed_tlvs.push(mic.into());
         assert!(engine.verify(&signed_tlvs).await?);
 
-        let encrypted = engine.encrypt(&tlvs).await?;
+        let encrypted = engine.encrypt(&tlvs, TEST_ENCRYPTION_COUNTER).await?;
         let plaintext = tlvs.iter().flat_map(TLV::serialize).collect::<Vec<_>>();
         assert_eq!(
             encrypted.payload,
@@ -436,13 +446,13 @@ mod tests {
             tlv_value: Some(b"190".to_vec()),
         }];
 
-        let mic = engine.sign(&tlvs).await?;
+        let mic = engine.sign(&tlvs, TEST_INTEGRITY_COUNTER).await?;
         let mut signed_tlvs = tlvs.clone();
         signed_tlvs.push(mic.into());
         signed_tlvs[0].tlv_value = Some(b"905".to_vec());
         assert!(!engine.verify(&signed_tlvs).await?);
 
-        let encrypted = engine.encrypt(&tlvs).await?;
+        let encrypted = engine.encrypt(&tlvs, TEST_ENCRYPTION_COUNTER).await?;
         let mut modified = encrypted;
         modified.payload[0] ^= 1;
         assert!(engine.decrypt(&modified).await.is_err());
