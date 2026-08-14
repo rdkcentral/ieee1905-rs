@@ -30,7 +30,7 @@ use cryptoki::{
     types::{AuthPin, Ulong},
 };
 
-use crate::cmdu_codec::{EncryptedPayload, MessageIntegrityCode, MicVersion};
+use crate::cmdu_codec::{CMDU, EncryptedPayload, MessageIntegrityCode, MicVersion};
 use crate::tlv_cmdu_codec::{TLV, TLVTrait};
 
 /// Environment variable holding the PKCS#11 module path.
@@ -41,10 +41,12 @@ const USER_PIN_ENV: &str = "PKCS11_USER_PIN";
 
 // GTK object label and ID
 const GTK_LABEL: &str = "1905GTK";
-const TK_LABEL: &str = "1905TK";
+const TK_CMAC_LABEL: &str = "1905TK-CMAC";
+const TK_CTR_LABEL: &str = "1905TK-CTR";
 
 const GTK_KEY_ID: u8 = 1;
-const TK_KEY_ID: u8 = 3;
+const TK_CMAC_KEY_ID: u8 = 2;
+const TK_CTR_KEY_ID: u8 = 3;
 
 // HMAC-SHA256 output size
 const MIC_SIZE: usize = 32;
@@ -53,7 +55,8 @@ const SIV_SIZE: usize = 16;
 pub struct CryptoContext {
     session: Arc<Mutex<Session>>,
     gtk_key: ObjectHandle,
-    tk_key: ObjectHandle,
+    tk_cmac_key: ObjectHandle,
+    tk_ctr_key: ObjectHandle,
 }
 
 impl CryptoContext {
@@ -94,13 +97,17 @@ impl CryptoContext {
 
             let gtk_key = Self::find_key(&session, GTK_LABEL, GTK_KEY_ID, KeyType::GENERIC_SECRET)
                 .ok_or_else(|| anyhow!("GTK key not found"))?;
-            let tk_key = Self::find_key(&session, TK_LABEL, TK_KEY_ID, KeyType::AES)
-                .ok_or_else(|| anyhow!("TK key not found"))?;
+            let tk_cmac_key =
+                Self::find_key(&session, TK_CMAC_LABEL, TK_CMAC_KEY_ID, KeyType::AES)
+                    .ok_or_else(|| anyhow!("TK CMAC key not found"))?;
+            let tk_ctr_key = Self::find_key(&session, TK_CTR_LABEL, TK_CTR_KEY_ID, KeyType::AES)
+                .ok_or_else(|| anyhow!("TK CTR key not found"))?;
 
             Ok(Self {
                 session: Arc::new(Mutex::new(session)),
                 gtk_key,
-                tk_key,
+                tk_cmac_key,
+                tk_ctr_key,
             })
         })
         .await
@@ -109,12 +116,17 @@ impl CryptoContext {
     // Encrypt TLVs with AES-SIV
     pub async fn encrypt(
         &self,
-        tlvs: &[TLV],
+        cmdu: &CMDU,
         encryption_transmission_counter: [u8; 6],
     ) -> anyhow::Result<EncryptedPayload> {
-        let plaintext = tlvs.iter().flat_map(TLV::serialize).collect::<Vec<_>>();
+        let plaintext = cmdu
+            .get_tlvs()?
+            .iter()
+            .flat_map(TLV::serialize)
+            .collect::<Vec<_>>();
         let session = self.session.clone().lock_owned().await;
-        let tk_key = self.tk_key;
+        let tk_cmac_key = self.tk_cmac_key;
+        let tk_ctr_key = self.tk_ctr_key;
 
         let mut encrypted = EncryptedPayload {
             encryption_transmission_counter,
@@ -122,10 +134,16 @@ impl CryptoContext {
             destination_1905_al_mac_address: Default::default(),
             payload: Vec::new(),
         };
-        let associated_data = encryption_associated_data(&encrypted);
+        let associated_data = encryption_associated_data(cmdu, &encrypted);
 
         encrypted.payload = tokio::task::spawn_blocking(move || {
-            aes_siv_encrypt(&session, tk_key, &associated_data, &plaintext)
+            aes_siv_encrypt(
+                &session,
+                tk_cmac_key,
+                tk_ctr_key,
+                &associated_data,
+                &plaintext,
+            )
         })
         .await??;
 
@@ -133,14 +151,21 @@ impl CryptoContext {
     }
 
     // Decrypt and parse TLVs
-    pub async fn decrypt(&self, encrypted: &EncryptedPayload) -> anyhow::Result<Vec<TLV>> {
+    pub async fn decrypt(&self, cmdu: &CMDU, encrypted: &EncryptedPayload) -> anyhow::Result<Vec<TLV>> {
         let ciphertext = encrypted.payload.clone();
-        let associated_data = encryption_associated_data(encrypted);
+        let associated_data = encryption_associated_data(cmdu, encrypted);
         let session = self.session.clone().lock_owned().await;
-        let tk_key = self.tk_key;
+        let tk_cmac_key = self.tk_cmac_key;
+        let tk_ctr_key = self.tk_ctr_key;
 
         let plaintext = tokio::task::spawn_blocking(move || {
-            aes_siv_decrypt(&session, tk_key, &associated_data, &ciphertext)
+            aes_siv_decrypt(
+                &session,
+                tk_cmac_key,
+                tk_ctr_key,
+                &associated_data,
+                &ciphertext,
+            )
         })
         .await??;
 
@@ -158,7 +183,7 @@ impl CryptoContext {
     // Sign TLVs with HMAC-SHA256 and return a MIC TLV.
     pub async fn sign(
         &self,
-        tlvs: &[TLV],
+        cmdu: &CMDU,
         integrity_transmission_counter: [u8; 6],
     ) -> anyhow::Result<MessageIntegrityCode> {
         let mic = MessageIntegrityCode {
@@ -168,7 +193,7 @@ impl CryptoContext {
             source_1905_al_mac_address: Default::default(),
             code: Vec::new(),
         };
-        let data = build_mic_input(tlvs, &mic);
+        let data = build_mic_input(cmdu, &mic)?;
         let session = self.session.clone().lock_owned().await;
         let gtk_key = self.gtk_key;
 
@@ -189,8 +214,8 @@ impl CryptoContext {
 
     ///////////////////////////////////////////////////////////////////////////
     // Verify the MIC TLV in the input TLVs
-    pub async fn verify(&self, tlvs: &[TLV]) -> anyhow::Result<bool> {
-        let Some(mic) = MessageIntegrityCode::find(tlvs) else {
+    pub async fn verify(&self, cmdu: &CMDU) -> anyhow::Result<bool> {
+        let Some(mic) = MessageIntegrityCode::find(&cmdu.get_tlvs()?) else {
             return Ok(false);
         };
 
@@ -202,7 +227,7 @@ impl CryptoContext {
             return Ok(false);
         }
 
-        let data = build_mic_input(tlvs, &mic);
+        let data = build_mic_input(cmdu, &mic)?;
         let session = self.session.clone().lock_owned().await;
         let gtk_key = self.gtk_key;
 
@@ -231,24 +256,23 @@ impl CryptoContext {
     }
 }
 
-fn build_mic_input(tlvs: &[TLV], mic: &MessageIntegrityCode) -> Vec<u8> {
-    let cmdu_header = [0; 6]; // TODO: The first 6 octets of the 1905 CMDU
-    let mic_tlv_value = mic.serialize();
+fn build_mic_input(cmdu: &CMDU, mic: &MessageIntegrityCode) -> anyhow::Result<Vec<u8>> {
+    let tlvs = cmdu.get_tlvs()?;
 
     let mut mic_input = Vec::new();
-    mic_input.extend_from_slice(&cmdu_header);
-    mic_input.extend_from_slice(&mic_tlv_value[..13]); // The first 13 octets of the MIC TLV Value
+    mic_input.extend_from_slice(&cmdu.serialize()[..6]);
+    mic_input.extend_from_slice(&mic.serialize()[..13]); // The first 13 octets of the MIC TLV Value
     for tlv in tlvs {
         if tlv.tlv_type != MessageIntegrityCode::TYPE.to_u8() {
             mic_input.extend(tlv.serialize());
         }
     }
-    mic_input
+    Ok(mic_input)
 }
 
-fn encryption_associated_data(encrypted: &EncryptedPayload) -> Vec<Vec<u8>> {
+fn encryption_associated_data(cmdu: &CMDU, encrypted: &EncryptedPayload) -> Vec<Vec<u8>> {
     vec![
-        vec![0; 6], // TODO: The first 6 octets of the 1905 CMDU
+        cmdu.serialize()[..6].to_vec(),
         encrypted.encryption_transmission_counter.to_vec(),
         encrypted.source_1905_al_mac_address.octets().to_vec(),
         encrypted.destination_1905_al_mac_address.octets().to_vec(),
@@ -264,12 +288,13 @@ fn encryption_associated_data(encrypted: &EncryptedPayload) -> Vec<Vec<u8>> {
 // Encrypt bytes with AES-SIV and return SIV || ciphertext
 fn aes_siv_encrypt(
     session: &Session,
-    key: ObjectHandle,
+    cmac_key: ObjectHandle,
+    ctr_key: ObjectHandle,
     associated_data: &[Vec<u8>],
     plaintext: &[u8],
 ) -> anyhow::Result<Vec<u8>> {
-    let siv = calculate_siv(session, key, associated_data, plaintext)?;
-    let ciphertext = aes_ctr(session, key, &siv, plaintext, true)?;
+    let siv = calculate_siv(session, cmac_key, associated_data, plaintext)?;
+    let ciphertext = aes_ctr(session, ctr_key, &siv, plaintext, true)?;
 
     Ok([siv.to_vec(), ciphertext].concat())
 }
@@ -277,7 +302,8 @@ fn aes_siv_encrypt(
 // Decrypt SIV || ciphertext and verify the AES-SIV tag
 fn aes_siv_decrypt(
     session: &Session,
-    key: ObjectHandle,
+    cmac_key: ObjectHandle,
+    ctr_key: ObjectHandle,
     associated_data: &[Vec<u8>],
     ciphertext: &[u8],
 ) -> anyhow::Result<Vec<u8>> {
@@ -289,8 +315,8 @@ fn aes_siv_decrypt(
     let siv = siv
         .try_into()
         .map_err(|_| anyhow!("invalid AES-SIV tag length"))?;
-    let plaintext = aes_ctr(session, key, siv, ciphertext, false)?;
-    let expected_siv = calculate_siv(session, key, associated_data, &plaintext)?;
+    let plaintext = aes_ctr(session, ctr_key, siv, ciphertext, false)?;
+    let expected_siv = calculate_siv(session, cmac_key, associated_data, &plaintext)?;
 
     if *siv != expected_siv {
         bail!("AES-SIV authentication failed");
@@ -315,12 +341,15 @@ fn calculate_siv(
         xor(&mut state, &code);
     }
 
-    if plaintext.len() >= SIV_SIZE {
-        let mut input = plaintext.to_vec();
-        let offset = input.len() - SIV_SIZE;
+    if let Some(mut tail) = plaintext.last_chunk::<SIV_SIZE>().copied() {
         // RFC 5297 2.4: xor D onto the end of the final input.
-        xor(&mut input[offset..], &state);
-        aes_cmac(session, key, &input)
+        xor(&mut tail, &state);
+        session.sign_init(&Mechanism::AesCMac, key)?;
+        session.sign_update(&plaintext[..plaintext.len() - SIV_SIZE])?;
+        session.sign_update(&tail)?;
+        let code = session.sign_final()?;
+        code.try_into()
+            .map_err(|code: Vec<u8>| anyhow!("AES-CMAC has invalid length: {}", code.len()))
     } else {
         state = dbl(state);
         // RFC 5297 2.4: xor dbl(D) with the padded final input.
@@ -397,7 +426,7 @@ fn xor(dst: &mut [u8], src: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aes_siv::{siv::Aes256Siv, KeyInit};
+    use aes_siv::{siv::Aes128Siv, KeyInit};
 
     const TEST_TK_KEY: [u8; 32] = [
         0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
@@ -416,23 +445,24 @@ mod tests {
             tlv_length: 3,
             tlv_value: Some(b"190".to_vec()),
         }];
+        let cmdu = test_cmdu(&tlvs);
 
-        let mic = engine.sign(&tlvs, TEST_INTEGRITY_COUNTER).await?;
+        let mic = engine.sign(&cmdu, TEST_INTEGRITY_COUNTER).await?;
         let mut signed_tlvs = tlvs.clone();
         signed_tlvs.push(mic.into());
-        assert!(engine.verify(&signed_tlvs).await?);
+        assert!(engine.verify(&test_cmdu(&signed_tlvs)).await?);
 
-        let encrypted = engine.encrypt(&tlvs, TEST_ENCRYPTION_COUNTER).await?;
+        let encrypted = engine.encrypt(&cmdu, TEST_ENCRYPTION_COUNTER).await?;
         let plaintext = tlvs.iter().flat_map(TLV::serialize).collect::<Vec<_>>();
         assert_eq!(
             encrypted.payload,
-            reference_aes_siv_encrypt(&encrypted, &plaintext)?
+            reference_aes_siv_encrypt(&cmdu, &encrypted, &plaintext)?
         );
         assert_eq!(
-            reference_aes_siv_decrypt(&encrypted, &encrypted.payload)?,
+            reference_aes_siv_decrypt(&cmdu, &encrypted, &encrypted.payload)?,
             plaintext
         );
-        assert_eq!(engine.decrypt(&encrypted).await?, tlvs);
+        assert_eq!(engine.decrypt(&cmdu, &encrypted).await?, tlvs);
         Ok(())
     }
 
@@ -445,49 +475,65 @@ mod tests {
             tlv_length: 3,
             tlv_value: Some(b"190".to_vec()),
         }];
+        let cmdu = test_cmdu(&tlvs);
 
-        let mic = engine.sign(&tlvs, TEST_INTEGRITY_COUNTER).await?;
+        let mic = engine.sign(&cmdu, TEST_INTEGRITY_COUNTER).await?;
         let mut signed_tlvs = tlvs.clone();
         signed_tlvs.push(mic.into());
         signed_tlvs[0].tlv_value = Some(b"905".to_vec());
-        assert!(!engine.verify(&signed_tlvs).await?);
+        assert!(!engine.verify(&test_cmdu(&signed_tlvs)).await?);
 
-        let encrypted = engine.encrypt(&tlvs, TEST_ENCRYPTION_COUNTER).await?;
+        let encrypted = engine.encrypt(&cmdu, TEST_ENCRYPTION_COUNTER).await?;
         let mut modified = encrypted;
         modified.payload[0] ^= 1;
-        assert!(engine.decrypt(&modified).await.is_err());
+        assert!(engine.decrypt(&cmdu, &modified).await.is_err());
         Ok(())
     }
 
     fn reference_aes_siv_encrypt(
+        cmdu: &CMDU,
         encrypted: &EncryptedPayload,
         plaintext: &[u8],
     ) -> anyhow::Result<Vec<u8>> {
         reference_aes_siv_cipher()?
             .encrypt(
-                encryption_associated_data(encrypted).iter().map(Vec::as_slice),
+                encryption_associated_data(cmdu, encrypted)
+                    .iter()
+                    .map(Vec::as_slice),
                 plaintext,
             )
             .map_err(|_| anyhow!("AES-SIV reference encryption failed"))
     }
 
     fn reference_aes_siv_decrypt(
+        cmdu: &CMDU,
         encrypted: &EncryptedPayload,
         ciphertext: &[u8],
     ) -> anyhow::Result<Vec<u8>> {
         reference_aes_siv_cipher()?
             .decrypt(
-                encryption_associated_data(encrypted).iter().map(Vec::as_slice),
+                encryption_associated_data(cmdu, encrypted)
+                    .iter()
+                    .map(Vec::as_slice),
                 ciphertext,
             )
             .map_err(|_| anyhow!("AES-SIV reference decryption failed"))
     }
 
-    fn reference_aes_siv_cipher() -> anyhow::Result<Aes256Siv> {
-        let mut key = TEST_TK_KEY.to_vec();
-        key.extend(TEST_TK_KEY);
-
-        Aes256Siv::new_from_slice(&key)
+    fn reference_aes_siv_cipher() -> anyhow::Result<Aes128Siv> {
+        Aes128Siv::new_from_slice(&TEST_TK_KEY)
             .map_err(|_| anyhow!("invalid AES-SIV reference key length"))
+    }
+
+    fn test_cmdu(tlvs: &[TLV]) -> CMDU {
+        CMDU {
+            message_version: 0,
+            reserved: 0,
+            message_type: 0x8001,
+            message_id: 1,
+            fragment: 0,
+            flags: CMDU::FLAG_LAST_FRAGMENT,
+            payload: tlvs.iter().flat_map(TLV::serialize).collect(),
+        }
     }
 }
