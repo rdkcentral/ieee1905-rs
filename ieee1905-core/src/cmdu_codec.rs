@@ -1618,9 +1618,23 @@ impl EncryptionAlgorithm {
 pub struct MessageIntegrityCode {
     pub gtk_key_id: u8,
     pub mic_version: MicVersion,
-    pub integrity_transmission_counter: [u8; 6],
+    pub integrity_transmission_counter: EncryptionCounter,
     pub source_1905_al_mac_address: MacAddr,
     pub code: Vec<u8>,
+}
+
+impl MessageIntegrityCode {
+    pub fn serialize_header(&self) -> Vec<u8> {
+        let flag0 = (self.gtk_key_id & 0b11) << 6;
+        let flag1 = (self.mic_version.to_u8() & 0b11) << 4;
+        let flags = flag0 | flag1;
+
+        let mut vec = Vec::with_capacity(13);
+        vec.extend(flags.to_be_bytes());
+        vec.extend(self.integrity_transmission_counter.serialize());
+        vec.extend(self.source_1905_al_mac_address.octets());
+        vec
+    }
 }
 
 impl TLVTrait for MessageIntegrityCode {
@@ -1628,7 +1642,7 @@ impl TLVTrait for MessageIntegrityCode {
 
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, flags) = be_u8(input)?;
-        let (input, &integrity_transmission_counter) = take_n_bytes(input)?;
+        let (input, integrity_transmission_counter) = EncryptionCounter::parse(input)?;
         let (input, source_1905_al_mac_address) = take_mac_addr(input)?;
         let (input, code_len) = be_u16(input)?;
         let (input, code) = take(code_len as usize).parse(input)?;
@@ -1645,14 +1659,7 @@ impl TLVTrait for MessageIntegrityCode {
     }
 
     fn serialize(&self) -> Vec<u8> {
-        let flag0 = (self.gtk_key_id & 0b11) << 6;
-        let flag1 = (self.mic_version.to_u8() & 0b11) << 4;
-        let flags = flag0 | flag1;
-
-        let mut vec = Vec::with_capacity(13);
-        vec.extend(flags.to_be_bytes());
-        vec.extend(self.integrity_transmission_counter);
-        vec.extend(self.source_1905_al_mac_address.octets());
+        let mut vec = self.serialize_header();
         vec.extend((self.code.len() as u16).to_be_bytes());
         vec.extend(self.code.as_slice());
         vec
@@ -1685,7 +1692,7 @@ impl MicVersion {
 ///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq)]
 pub struct EncryptedPayload {
-    pub encryption_transmission_counter: [u8; 6],
+    pub encryption_transmission_counter: EncryptionCounter,
     pub source_1905_al_mac_address: MacAddr,
     pub destination_1905_al_mac_address: MacAddr,
     pub payload: Vec<u8>,
@@ -1695,7 +1702,7 @@ impl TLVTrait for EncryptedPayload {
     const TYPE: IEEE1905TLVType = IEEE1905TLVType::EncryptedPayload;
 
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, &encryption_transmission_counter) = take_n_bytes(input)?;
+        let (input, encryption_transmission_counter) = EncryptionCounter::parse(input)?;
         let (input, source_1905_al_mac_address) = take_mac_addr(input)?;
         let (input, destination_1905_al_mac_address) = take_mac_addr(input)?;
         let (input, payload_len) = be_u16(input)?;
@@ -1713,12 +1720,35 @@ impl TLVTrait for EncryptedPayload {
 
     fn serialize(&self) -> Vec<u8> {
         let mut vec = Vec::with_capacity(13);
-        vec.extend(self.encryption_transmission_counter);
+        vec.extend(self.encryption_transmission_counter.serialize());
         vec.extend(self.source_1905_al_mac_address.octets());
         vec.extend(self.destination_1905_al_mac_address.octets());
         vec.extend((self.payload.len() as u16).to_be_bytes());
         vec.extend(self.payload.as_slice());
         vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EncryptionCounter(u64);
+
+impl EncryptionCounter {
+    pub const MAX: Self = Self((1 << 48) - 1);
+
+    pub fn increment(self) -> Option<Self> {
+        (self < Self::MAX).then(|| Self(self.0 + 1))
+    }
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, b) = take_n_bytes::<6>(input)?;
+        let value = u64::from_be_bytes([0, 0, b[0], b[1], b[2], b[3], b[4], b[5]]);
+        Ok((input, Self(value)))
+    }
+
+    pub fn serialize(&self) -> [u8; 6] {
+        let b = self.0.to_be_bytes();
+        [b[2], b[3], b[4], b[5], b[6], b[7]]
     }
 }
 
@@ -2655,20 +2685,23 @@ impl CMDU {
 
     // Convert the CMDU to bytes
     pub fn serialize(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
+        let mut bytes = self.serialize_header();
 
-        // Serialize the CMDU fields
-        bytes.push(self.message_version); // 1 byte: message_version
-        bytes.push(self.reserved); // 1 byte: reserved
-        bytes.extend_from_slice(&self.message_type.to_be_bytes()); // 2 bytes: message_type (u16)
-        bytes.extend_from_slice(&self.message_id.to_be_bytes()); // 2 bytes: message_id (u16)
         bytes.push(self.fragment); // 1 byte: fragment
         bytes.push(self.flags); // 1 byte: flags
 
         // Serialize payload u8 vec
-        bytes.extend_from_slice(self.payload.as_slice());
-
+        bytes.extend(self.payload.as_slice());
         bytes
+    }
+
+    pub fn serialize_header(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.message_version.to_be_bytes()); // 1 byte: message_version
+        vec.extend(self.reserved.to_be_bytes()); // 1 byte: reserved
+        vec.extend(&self.message_type.to_be_bytes()); // 2 bytes: message_type (u16)
+        vec.extend(&self.message_id.to_be_bytes()); // 2 bytes: message_id (u16)
+        vec
     }
 
     pub fn fragment(self, kind: CMDUFragmentation, max_size: usize) -> anyhow::Result<Vec<CMDU>> {
@@ -4530,7 +4563,7 @@ pub mod tests {
         let original = MessageIntegrityCode {
             gtk_key_id: 2,
             mic_version: MicVersion::Version1,
-            integrity_transmission_counter: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06],
+            integrity_transmission_counter: EncryptionCounter::MAX,
             source_1905_al_mac_address: MacAddr::from([0x11, 0x12, 0x13, 0x14, 0x15, 0x16]),
             code: [42; 64].to_vec(),
         };
@@ -4544,7 +4577,7 @@ pub mod tests {
     #[test]
     fn test_encrypted_payload_serialization() {
         let original = EncryptedPayload {
-            encryption_transmission_counter: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06],
+            encryption_transmission_counter: EncryptionCounter::MAX,
             source_1905_al_mac_address: MacAddr::from([0x11, 0x12, 0x13, 0x14, 0x15, 0x16]),
             destination_1905_al_mac_address: MacAddr::from([0x21, 0x22, 0x23, 0x24, 0x25, 0x26]),
             payload: [42; 64].to_vec(),
@@ -4554,6 +4587,23 @@ pub mod tests {
         let parsed = EncryptedPayload::parse(&serialized).unwrap().1;
 
         assert_eq!(original, parsed);
+    }
+
+    #[test]
+    fn test_encryption_counter() {
+        let cases = [
+            (EncryptionCounter(0), [0, 0, 0, 0, 0, 0]),
+            (EncryptionCounter(1), [0, 0, 0, 0, 0, 1]),
+            (EncryptionCounter::MAX, [0xff; 6]),
+        ];
+
+        for (expected, original) in cases {
+            assert_eq!(original, expected.serialize());
+            assert_eq!(expected, EncryptionCounter::parse(&original).unwrap().1);
+        }
+
+        assert_eq!(EncryptionCounter(0).increment(), Some(EncryptionCounter(1)));
+        assert_eq!(EncryptionCounter::MAX.increment(), None);
     }
 
     #[test]

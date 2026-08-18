@@ -21,6 +21,10 @@ use std::ffi::OsStr;
 use std::sync::Arc;
 use tokio::sync::{Mutex, OnceCell};
 
+use crate::cmdu_codec::{
+    CMDU, EncryptedPayload, EncryptionCounter, MessageIntegrityCode, MicVersion,
+};
+use crate::tlv_cmdu_codec::{TLV, TLVTrait};
 use cryptoki::{
     context::{CInitializeArgs, CInitializeFlags, Pkcs11},
     error::{Error as Pkcs11Error, RvError},
@@ -29,9 +33,7 @@ use cryptoki::{
     session::{Session, UserType},
     types::{AuthPin, Ulong},
 };
-
-use crate::cmdu_codec::{CMDU, EncryptedPayload, MessageIntegrityCode, MicVersion};
-use crate::tlv_cmdu_codec::{TLV, TLVTrait};
+use pnet::datalink::MacAddr;
 
 /// Environment variable holding the PKCS#11 module path.
 const MODULE_ENV: &str = "PKCS11_LIB";
@@ -60,6 +62,7 @@ pub struct CryptoContext {
 }
 
 impl CryptoContext {
+    ///////////////////////////////////////////////////////////////////////////
     // Initialize PKCS#11 and load the active GTK
     pub async fn get() -> anyhow::Result<&'static Self> {
         static CELL: OnceCell<CryptoContext> = OnceCell::const_new();
@@ -97,9 +100,8 @@ impl CryptoContext {
 
             let gtk_key = Self::find_key(&session, GTK_LABEL, GTK_KEY_ID, KeyType::GENERIC_SECRET)
                 .ok_or_else(|| anyhow!("GTK key not found"))?;
-            let tk_cmac_key =
-                Self::find_key(&session, TK_CMAC_LABEL, TK_CMAC_KEY_ID, KeyType::AES)
-                    .ok_or_else(|| anyhow!("TK CMAC key not found"))?;
+            let tk_cmac_key = Self::find_key(&session, TK_CMAC_LABEL, TK_CMAC_KEY_ID, KeyType::AES)
+                .ok_or_else(|| anyhow!("TK CMAC key not found"))?;
             let tk_ctr_key = Self::find_key(&session, TK_CTR_LABEL, TK_CTR_KEY_ID, KeyType::AES)
                 .ok_or_else(|| anyhow!("TK CTR key not found"))?;
 
@@ -113,91 +115,103 @@ impl CryptoContext {
         .await
     }
 
+    ///////////////////////////////////////////////////////////////////////////
     // Encrypt TLVs with AES-SIV
     pub async fn encrypt(
         &self,
         cmdu: &CMDU,
-        encryption_transmission_counter: [u8; 6],
+        encryption_transmission_counter: EncryptionCounter,
+        source_1905_al_mac_address: MacAddr,
+        destination_1905_al_mac_address: MacAddr,
     ) -> anyhow::Result<EncryptedPayload> {
-        let plaintext = cmdu
-            .get_tlvs()?
-            .iter()
-            .flat_map(TLV::serialize)
-            .collect::<Vec<_>>();
         let session = self.session.clone().lock_owned().await;
         let tk_cmac_key = self.tk_cmac_key;
         let tk_ctr_key = self.tk_ctr_key;
 
         let mut encrypted = EncryptedPayload {
             encryption_transmission_counter,
-            source_1905_al_mac_address: Default::default(),
-            destination_1905_al_mac_address: Default::default(),
+            source_1905_al_mac_address,
+            destination_1905_al_mac_address,
             payload: Vec::new(),
         };
-        let associated_data = encryption_associated_data(cmdu, &encrypted);
 
-        encrypted.payload = tokio::task::spawn_blocking(move || {
-            aes_siv_encrypt(
+        let tlvs = cmdu.get_tlvs()?;
+        let associated_data = build_encryption_associated_data(&cmdu, &encrypted);
+
+        tokio::task::spawn_blocking(move || {
+            let plaintext = tlvs.iter().flat_map(TLV::serialize).collect::<Vec<_>>();
+            encrypted.payload = aes_siv_encrypt(
                 &session,
                 tk_cmac_key,
                 tk_ctr_key,
                 &associated_data,
                 &plaintext,
-            )
+            )?;
+            Ok(encrypted)
         })
-        .await??;
-
-        Ok(encrypted)
+        .await?
     }
 
+    ///////////////////////////////////////////////////////////////////////////
     // Decrypt and parse TLVs
-    pub async fn decrypt(&self, cmdu: &CMDU, encrypted: &EncryptedPayload) -> anyhow::Result<Vec<TLV>> {
-        let ciphertext = encrypted.payload.clone();
-        let associated_data = encryption_associated_data(cmdu, encrypted);
+    pub async fn decrypt(
+        &self,
+        cmdu: &CMDU,
+        encrypted: &EncryptedPayload,
+    ) -> anyhow::Result<Vec<TLV>> {
         let session = self.session.clone().lock_owned().await;
         let tk_cmac_key = self.tk_cmac_key;
         let tk_ctr_key = self.tk_ctr_key;
 
-        let plaintext = tokio::task::spawn_blocking(move || {
-            aes_siv_decrypt(
+        let ciphertext = encrypted.payload.clone();
+        let associated_data = build_encryption_associated_data(cmdu, encrypted);
+
+        tokio::task::spawn_blocking(move || {
+            let plaintext = aes_siv_decrypt(
                 &session,
                 tk_cmac_key,
                 tk_ctr_key,
                 &associated_data,
                 &ciphertext,
-            )
-        })
-        .await??;
+            )?;
 
-        let mut input = plaintext.as_slice();
-        let mut tlvs = Vec::new();
-        while !input.is_empty() {
-            let (remaining, tlv) = TLV::parse(input)
-                .map_err(|error| anyhow!("failed to parse decrypted TLV: {error:?}"))?;
-            tlvs.push(tlv);
-            input = remaining;
-        }
-        Ok(tlvs)
+            let mut input = plaintext.as_slice();
+            let mut tlvs = Vec::new();
+
+            while !input.is_empty() {
+                let (remaining, tlv) = TLV::parse(input)
+                    .map_err(|e| anyhow!("failed to parse decrypted TLV: {e:?}"))?;
+                tlvs.push(tlv);
+                input = remaining;
+            }
+            Ok(tlvs)
+        })
+        .await?
     }
 
+    ///////////////////////////////////////////////////////////////////////////
     // Sign TLVs with HMAC-SHA256 and return a MIC TLV.
     pub async fn sign(
         &self,
         cmdu: &CMDU,
-        integrity_transmission_counter: [u8; 6],
+        integrity_transmission_counter: EncryptionCounter,
+        source_1905_al_mac_address: MacAddr,
     ) -> anyhow::Result<MessageIntegrityCode> {
-        let mic = MessageIntegrityCode {
-            gtk_key_id: GTK_KEY_ID,
-            mic_version: MicVersion::Version1,
-            integrity_transmission_counter,
-            source_1905_al_mac_address: Default::default(),
-            code: Vec::new(),
-        };
-        let data = build_mic_input(cmdu, &mic)?;
         let session = self.session.clone().lock_owned().await;
         let gtk_key = self.gtk_key;
 
-        let code = tokio::task::spawn_blocking(move || {
+        let mut mic = MessageIntegrityCode {
+            gtk_key_id: GTK_KEY_ID,
+            mic_version: MicVersion::Version1,
+            integrity_transmission_counter,
+            source_1905_al_mac_address,
+            code: Vec::new(),
+        };
+
+        let tlvs = cmdu.get_tlvs()?;
+        let data = build_mic_input(cmdu, &tlvs, &mic)?;
+
+        mic.code = tokio::task::spawn_blocking(move || {
             // Calculate the HMAC with the active GTK.
             let code = session
                 .sign(&Mechanism::Sha256Hmac, gtk_key, &data)
@@ -209,25 +223,28 @@ impl CryptoContext {
         })
         .await??;
 
-        Ok(MessageIntegrityCode { code, ..mic })
+        Ok(mic)
     }
 
     ///////////////////////////////////////////////////////////////////////////
     // Verify the MIC TLV in the input TLVs
     pub async fn verify(&self, cmdu: &CMDU) -> anyhow::Result<bool> {
-        let Some(mic) = MessageIntegrityCode::find(&cmdu.get_tlvs()?) else {
-            return Ok(false);
+        let tlvs = cmdu.get_tlvs()?;
+        let Some(mic) = MessageIntegrityCode::find(&tlvs) else {
+            return Ok(true); // no mic, nothing to check
         };
 
-        if mic.gtk_key_id != GTK_KEY_ID || mic.mic_version != MicVersion::Version1 {
+        if mic.gtk_key_id != GTK_KEY_ID {
             return Ok(false);
         }
-
+        if mic.mic_version != MicVersion::Version1 {
+            return Ok(false);
+        }
         if mic.code.len() != MIC_SIZE {
             return Ok(false);
         }
 
-        let data = build_mic_input(cmdu, &mic)?;
+        let data = build_mic_input(cmdu, &tlvs, &mic)?;
         let session = self.session.clone().lock_owned().await;
         let gtk_key = self.gtk_key;
 
@@ -256,12 +273,15 @@ impl CryptoContext {
     }
 }
 
-fn build_mic_input(cmdu: &CMDU, mic: &MessageIntegrityCode) -> anyhow::Result<Vec<u8>> {
-    let tlvs = cmdu.get_tlvs()?;
-
+fn build_mic_input(
+    cmdu: &CMDU,
+    tlvs: &[TLV],
+    mic: &MessageIntegrityCode,
+) -> anyhow::Result<Vec<u8>> {
     let mut mic_input = Vec::new();
-    mic_input.extend_from_slice(&cmdu.serialize()[..6]);
-    mic_input.extend_from_slice(&mic.serialize()[..13]); // The first 13 octets of the MIC TLV Value
+    mic_input.extend(cmdu.serialize_header());
+    mic_input.extend(mic.serialize_header());
+
     for tlv in tlvs {
         if tlv.tlv_type != MessageIntegrityCode::TYPE.to_u8() {
             mic_input.extend(tlv.serialize());
@@ -270,12 +290,12 @@ fn build_mic_input(cmdu: &CMDU, mic: &MessageIntegrityCode) -> anyhow::Result<Ve
     Ok(mic_input)
 }
 
-fn encryption_associated_data(cmdu: &CMDU, encrypted: &EncryptedPayload) -> Vec<Vec<u8>> {
+fn build_encryption_associated_data(cmdu: &CMDU, payload: &EncryptedPayload) -> Vec<Vec<u8>> {
     vec![
-        cmdu.serialize()[..6].to_vec(),
-        encrypted.encryption_transmission_counter.to_vec(),
-        encrypted.source_1905_al_mac_address.octets().to_vec(),
-        encrypted.destination_1905_al_mac_address.octets().to_vec(),
+        cmdu.serialize_header(),
+        payload.encryption_transmission_counter.serialize().to_vec(),
+        payload.source_1905_al_mac_address.octets().to_vec(),
+        payload.destination_1905_al_mac_address.octets().to_vec(),
     ]
 }
 
@@ -426,15 +446,17 @@ fn xor(dst: &mut [u8], src: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aes_siv::{siv::Aes128Siv, KeyInit};
+    use aes_siv::{KeyInit, siv::Aes128Siv};
 
     const TEST_TK_KEY: [u8; 32] = [
         0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
         0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
         0x1e, 0x1f,
     ];
-    const TEST_INTEGRITY_COUNTER: [u8; 6] = [0, 0, 0, 0, 0, 1];
-    const TEST_ENCRYPTION_COUNTER: [u8; 6] = [0, 0, 0, 0, 0, 1];
+    const SOURCE_AL_MAC: MacAddr = MacAddr(0, 0, 0, 0, 0, 1);
+    const TARGET_AL_MAC: MacAddr = MacAddr(0, 0, 0, 0, 0, 2);
+    const TEST_INTEGRITY_COUNTER: EncryptionCounter = EncryptionCounter::MAX;
+    const TEST_ENCRYPTION_COUNTER: EncryptionCounter = EncryptionCounter::MAX;
 
     #[tokio::test]
     async fn test_crypto_context_positive() -> anyhow::Result<()> {
@@ -447,12 +469,16 @@ mod tests {
         }];
         let cmdu = test_cmdu(&tlvs);
 
-        let mic = engine.sign(&cmdu, TEST_INTEGRITY_COUNTER).await?;
+        let mic = engine
+            .sign(&cmdu, TEST_INTEGRITY_COUNTER, SOURCE_AL_MAC)
+            .await?;
         let mut signed_tlvs = tlvs.clone();
         signed_tlvs.push(mic.into());
         assert!(engine.verify(&test_cmdu(&signed_tlvs)).await?);
 
-        let encrypted = engine.encrypt(&cmdu, TEST_ENCRYPTION_COUNTER).await?;
+        let encrypted = engine
+            .encrypt(&cmdu, TEST_ENCRYPTION_COUNTER, SOURCE_AL_MAC, TARGET_AL_MAC)
+            .await?;
         let plaintext = tlvs.iter().flat_map(TLV::serialize).collect::<Vec<_>>();
         assert_eq!(
             encrypted.payload,
@@ -477,13 +503,17 @@ mod tests {
         }];
         let cmdu = test_cmdu(&tlvs);
 
-        let mic = engine.sign(&cmdu, TEST_INTEGRITY_COUNTER).await?;
+        let mic = engine
+            .sign(&cmdu, TEST_INTEGRITY_COUNTER, SOURCE_AL_MAC)
+            .await?;
         let mut signed_tlvs = tlvs.clone();
         signed_tlvs.push(mic.into());
         signed_tlvs[0].tlv_value = Some(b"905".to_vec());
         assert!(!engine.verify(&test_cmdu(&signed_tlvs)).await?);
 
-        let encrypted = engine.encrypt(&cmdu, TEST_ENCRYPTION_COUNTER).await?;
+        let encrypted = engine
+            .encrypt(&cmdu, TEST_ENCRYPTION_COUNTER, SOURCE_AL_MAC, TARGET_AL_MAC)
+            .await?;
         let mut modified = encrypted;
         modified.payload[0] ^= 1;
         assert!(engine.decrypt(&cmdu, &modified).await.is_err());
@@ -497,7 +527,7 @@ mod tests {
     ) -> anyhow::Result<Vec<u8>> {
         reference_aes_siv_cipher()?
             .encrypt(
-                encryption_associated_data(cmdu, encrypted)
+                build_encryption_associated_data(cmdu, encrypted)
                     .iter()
                     .map(Vec::as_slice),
                 plaintext,
@@ -512,7 +542,7 @@ mod tests {
     ) -> anyhow::Result<Vec<u8>> {
         reference_aes_siv_cipher()?
             .decrypt(
-                encryption_associated_data(cmdu, encrypted)
+                build_encryption_associated_data(cmdu, encrypted)
                     .iter()
                     .map(Vec::as_slice),
                 ciphertext,
