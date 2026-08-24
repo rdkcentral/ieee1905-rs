@@ -363,11 +363,30 @@ impl CMDUHandler {
                 return false;
             };
             node.device_data.destination_frame_mac = source_mac;
+            node.device_data.local_interface_mac = local_interface_mac;
             node.device_data
         };
 
         let remote_al_mac = device_data.al_mac;
         let has_vendor_info = VendorSpecificInfo::find(tlvs).is_some_and(|e| e.oui == COMCAST_OUI);
+
+        // Only the registered EasyMesh application can build a correct Multi-AP
+        // Topology Response (peer profile, current BSS state), and answering here
+        // would consume the CMDU: only unhandled messages reach the AL SAP.
+        // Stack-generated queries carry the vendor tag and are still answered here.
+        if should_delegate_topology_query(
+            has_vendor_info,
+            topology_db.is_passive_mode(),
+            AlServiceAccessPoint::is_connected_and_enabled().await,
+        ) {
+            debug!(
+                al_mac = %remote_al_mac,
+                source = %source_mac,
+                "EasyMesh application is registered, forwarding Topology Query to the AL SAP",
+            );
+            topology_db.touch_node(device_data).await;
+            return false;
+        }
 
         let transmission_events = topology_db
             .update_ieee1905_topology(
@@ -1031,6 +1050,18 @@ impl CMDUHandler {
     }
 }
 
+/// A Topology Query without the stack's vendor tag belongs to the EasyMesh
+/// application registered on the AL SAP. The stack keeps answering its own
+/// (vendor-tagged) queries, and every query when no application is registered
+/// or passive mode is active.
+fn should_delegate_topology_query(
+    has_vendor_info: bool,
+    passive_mode: bool,
+    al_sap_active: bool,
+) -> bool {
+    !has_vendor_info && !passive_mode && al_sap_active
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1040,6 +1071,23 @@ mod tests {
     use crate::interface_manager::get_interface_info;
     use crate::interface_manager::get_local_al_mac;
     use tokio::sync::Mutex;
+
+    #[test]
+    fn test_should_delegate_topology_query() {
+        // application registered, non-vendor query -> delegate to the AL SAP
+        assert!(should_delegate_topology_query(false, false, true));
+        // the stack's own (vendor-tagged) query -> answered by the stack
+        assert!(!should_delegate_topology_query(true, false, true));
+        // no application registered -> answered by the stack
+        assert!(!should_delegate_topology_query(false, false, false));
+        // passive mode -> unchanged
+        assert!(!should_delegate_topology_query(false, true, true));
+        // remaining combinations: never delegate
+        assert!(!should_delegate_topology_query(false, true, false));
+        assert!(!should_delegate_topology_query(true, false, false));
+        assert!(!should_delegate_topology_query(true, true, false));
+        assert!(!should_delegate_topology_query(true, true, true));
+    }
 
     // Verify CMDU fragmentation and push_fragment function
     #[tokio::test]
