@@ -649,6 +649,25 @@ impl TopologyDatabase {
         TOPOLOGY_DATABASE.get()
     }
 
+    /// **Refreshes an existing node's liveness without touching the convergence
+    /// state machine** - used when a Topology Query is delegated to the AL SAP
+    /// application so the node is not evicted by the inactivity worker.
+    pub(crate) async fn touch_node(&self, device_data: Ieee1905DeviceData) {
+        let mut nodes = self.nodes.write().await;
+        if let Some(node) = nodes.get_mut(&device_data.al_mac) {
+            node.device_data.destination_frame_mac = device_data.destination_frame_mac;
+            node.device_data.local_interface_mac = device_data.local_interface_mac;
+            node.metadata.update(None, None, None, None, None, None);
+        } else {
+            debug!(
+                al_mac = %device_data.al_mac,
+                destination = %device_data.destination_frame_mac,
+                local_interface = %device_data.local_interface_mac,
+                "touch_node skipped: node not found in topology database",
+            );
+        }
+    }
+
     /// **Retrieves a device node from the database**
     pub async fn get_device(&self, al_mac: MacAddr) -> Option<Ieee1905Node> {
         let nodes = self.nodes.read().await;
