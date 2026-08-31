@@ -10,7 +10,9 @@ use rbus_provider::element::table::{RBusProviderTableSync, RBusProviderTableSync
 /// Device.IEEE1905.Network.AL.{i}.BridgingTuple.{i}.
 /// - InterfaceList
 ///
-pub struct RBus_Network_Al_BridgingTuple;
+pub struct RBus_Network_Al_BridgingTuple {
+    pub instance: u32,
+}
 
 impl RBus_Network_Al_BridgingTuple {
     pub fn collect(node: &Ieee1905NodeInternal) -> IndexMap<u32, Vec<usize>> {
@@ -54,11 +56,11 @@ impl RBusProviderGetter for RBus_Network_Al_BridgingTuple {
 
         match args.path_name.as_bytes() {
             b"InterfaceList" => {
+                let instance = self.instance;
                 let iter = tuple.1.iter();
-                let interfaces =
-                    Vec::from_iter(iter.map(|e| {
-                        format!("Device.IEEE1905.Network.0.AL.{node_index}.Interface.{e}")
-                    }));
+                let interfaces = Vec::from_iter(iter.map(|e| {
+                    format!("Device.IEEE1905.Network.{instance}.AL.{node_index}.Interface.{e}")
+                }));
                 args.property.set(&interfaces.join(","));
                 Ok(())
             }
