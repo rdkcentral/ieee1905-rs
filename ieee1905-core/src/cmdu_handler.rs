@@ -147,42 +147,38 @@ impl CMDUHandler {
             Err(e) => return error!(message_id, %e, "Failed to parse TLVs"),
         };
 
-        let handled;
-        match cmdu_type {
+        let handled = match cmdu_type {
             CMDUType::TopologyDiscovery => {
                 self.handle_topology_discovery(&tlvs, message_id, source_mac, local_interface_mac)
                     .await;
-                handled = true;
+                true
             }
             CMDUType::TopologyNotification => {
-                handled = self
-                    .handle_topology_notification(
-                        &tlvs,
-                        message_id,
-                        source_mac,
-                        local_interface_mac,
-                    )
-                    .await
+                self.handle_topology_notification(
+                    &tlvs,
+                    message_id,
+                    source_mac,
+                    local_interface_mac,
+                )
+                .await
             }
             CMDUType::TopologyQuery => {
-                handled = self
-                    .handle_topology_query(&tlvs, message_id, source_mac, local_interface_mac)
+                self.handle_topology_query(&tlvs, message_id, source_mac, local_interface_mac)
                     .await
             }
             CMDUType::TopologyResponse => {
-                handled = self
-                    .handle_topology_response(&tlvs, message_id, source_mac, local_interface_mac)
+                self.handle_topology_response(&tlvs, message_id, source_mac, local_interface_mac)
                     .await
             }
             CMDUType::LinkMetricQuery => {
                 self.handle_link_metric_query(&tlvs, message_id, source_mac)
                     .await;
-                handled = true;
+                true
             }
             CMDUType::LinkMetricResponse => {
                 self.handle_link_metric_response(&tlvs, message_id, source_mac)
                     .await;
-                handled = true;
+                true
             }
             CMDUType::ApAutoConfigSearch => {
                 self.handle_ap_auto_config_search(
@@ -192,28 +188,27 @@ impl CMDUHandler {
                     local_interface_mac,
                 )
                 .await;
-                handled = false;
+                false
             }
             CMDUType::ApAutoConfigResponse => {
                 self.handle_ap_auto_config_response(&tlvs, message_id, source_mac)
                     .await;
-                handled = false;
+                false
             }
             CMDUType::ApAutoConfigWCS => {
                 self.handle_ap_auto_config_wcs(&tlvs, message_id, source_mac)
                     .await;
-                handled = false;
+                false
             }
             CMDUType::HigherLayerQuery => {
                 self.handle_higher_layer_query(message_id, source_mac).await;
-                handled = true;
+                true
             }
             CMDUType::HigherLayerResponse => {
-                handled = self
-                    .handle_higher_layer_response(&tlvs, message_id, source_mac)
-                    .await;
+                self.handle_higher_layer_response(&tlvs, message_id, source_mac)
+                    .await
             }
-            _ => handled = false,
+            _ => false,
         };
 
         if !handled {
