@@ -930,26 +930,23 @@ pub async fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetS
     debug!(msg_id = message_id, msg_type = ?message_type, "parsed CMDU");
 
     let topology_db = TopologyDatabase::get_instance(source_al_mac, &interface);
-    let fragmentation;
-    let destination_mac;
-    let destination_node;
+    let (fragmentation, destination_mac, destination_node) =
+        if sdu.destination_al_mac_address == IEEE1905_CONTROL_ADDRESS {
+            debug!("CMDU from SDU destination mac address is IEEE1905_CONTROL_ADDRESS");
+            (CMDUFragmentation::default(), IEEE1905_CONTROL_ADDRESS, None)
+        } else {
+            debug!("Searching for destination {destination_al_mac} in topology database");
 
-    if sdu.destination_al_mac_address == IEEE1905_CONTROL_ADDRESS {
-        debug!("CMDU from SDU destination mac address is IEEE1905_CONTROL_ADDRESS");
-        fragmentation = CMDUFragmentation::default();
-        destination_mac = IEEE1905_CONTROL_ADDRESS;
-        destination_node = None;
-    } else {
-        debug!("Searching for destination {destination_al_mac} in topology database");
+            let Some(node) = topology_db.get_device(sdu.destination_al_mac_address).await else {
+                return warn!("No destination_mac found for AL-MAC {destination_al_mac}");
+            };
 
-        let Some(node) = topology_db.get_device(sdu.destination_al_mac_address).await else {
-            return warn!("No destination_mac found for AL-MAC {destination_al_mac}");
+            (
+                node.device_data.supported_fragmentation,
+                node.device_data.destination_frame_mac,
+                Some(node),
+            )
         };
-
-        fragmentation = node.device_data.supported_fragmentation;
-        destination_mac = node.device_data.destination_frame_mac;
-        destination_node = Some(node);
-    };
 
     match message_type {
         CMDUType::TopologyResponse => {
