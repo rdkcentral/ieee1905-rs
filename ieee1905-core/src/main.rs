@@ -84,9 +84,10 @@ struct CliArgs {
     /// Enables artifact exchange server
     #[arg(short, long)]
     artifact_exchange: Option<ArtifactExchange>,
-    /// Build the topology passively without driving topo queries and responses
-    #[arg(short, long)]
-    passive_mode: bool,
+    /// Drive topology queries and responses instead of only
+    /// relying on the EasyMesh layer (passive is the default)
+    #[arg(long)]
+    active_mode: bool,
 }
 
 #[derive(ValueEnum, Debug, Clone)]
@@ -131,11 +132,12 @@ async fn main() -> anyhow::Result<()> {
 
     // Upon every loop restart topology database role can change
     topology_db.set_local_role(None).await;
-    topology_db.set_passive_mode(cli.passive_mode);
+    topology_db.set_active_mode(cli.active_mode);
 
-    if cli.passive_mode {
-        tracing::info!("Passive topology discovery is enabled");
-    }
+    tracing::info!(
+        "Topology discovery is {} mode",
+        if cli.active_mode { "active" } else { "passive" },
+    );
 
     // Find Forwarding MAC Address (Ethernet Interface)
     let forwarding_mac = topology_db.get_forwarding_interface_mac().await;
@@ -200,6 +202,7 @@ async fn main() -> anyhow::Result<()> {
             sap_data_path,
             sender_clone,
             forwarding_interface_clone,
+            topology_db.clone(),
         ),
     );
 

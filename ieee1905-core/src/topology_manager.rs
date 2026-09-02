@@ -24,8 +24,7 @@ use crate::artifact_exchange_service::client::{
     ArtifactExchangeClient, ArtifactExchangeClientFactory,
 };
 use crate::cmdu_codec::{
-    ControlUrl, IEEE1905_CONTROL_ADDRESS, Ipv4, Ipv6, LinkMetricRx, LinkMetricRxPair, LinkMetricTx,
-    LinkMetricTxPair,
+    ControlUrl, Ipv4, Ipv6, LinkMetricRx, LinkMetricRxPair, LinkMetricTx, LinkMetricTxPair,
     SupportedRole,
 };
 use crate::interface_manager::{WirelessRadioBss, get_interfaces};
@@ -93,7 +92,7 @@ pub enum UpdateType {
     DiscoveryReceived,
     NotificationReceived,
     QuerySent,
-    QueryReceived { force: bool },
+    QueryReceived { comcast_vendor: bool },
     ResponseSent,
     ResponseReceived,
     ApAutoConfigSearch,
@@ -102,7 +101,7 @@ pub enum UpdateType {
 pub enum TransmissionEvent {
     SendTopologyQuery(MacAddr),
     SendTopologyResponse(MacAddr),
-    SendTopologyNotification(MacAddr),
+    SendTopologyNotification,
     StartLinkMetricQueryWorker((MacAddr, CancellationToken)),
     StartHigherLayerQueryWorker((MacAddr, CancellationToken)),
 }
@@ -274,6 +273,7 @@ pub struct Ieee1905NodeInfo {
     pub lldp_neighbor: Option<PortId>,
     pub node_state_local: StateLocal,
     pub node_state_remote: StateRemote,
+    pub has_comcast_vendor_oui: bool,
 }
 
 impl Ieee1905NodeInfo {
@@ -296,6 +296,7 @@ impl Ieee1905NodeInfo {
             lldp_neighbor,
             node_state_local,
             node_state_remote,
+            has_comcast_vendor_oui: false,
         }
     }
 
@@ -562,7 +563,7 @@ pub struct TopologyDatabase {
     pub ap_operational_bss: Arc<RwLock<Vec<WirelessRadioBss>>>,
     pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905NodeInternal>>>,
     pub local_role: Arc<RwLock<Option<Role>>>,
-    passive_mode: AtomicBool,
+    active_mode: AtomicBool,
     artifact_exchange_client_factory: Mutex<Option<ArtifactExchangeClientFactory>>,
     artifact_exchange_server_ip_address: Mutex<Option<Ipv6Addr>>,
 }
@@ -587,7 +588,7 @@ impl TopologyDatabase {
             ap_operational_bss: Default::default(),
             nodes: Arc::new(RwLock::new(IndexMap::new())),
             local_role: Arc::new(RwLock::new(None)),
-            passive_mode: AtomicBool::new(false),
+            active_mode: AtomicBool::new(false),
             artifact_exchange_client_factory: Default::default(),
             artifact_exchange_server_ip_address: Default::default(),
         });
@@ -612,12 +613,28 @@ impl TopologyDatabase {
         *write_guard = role;
     }
 
-    pub fn is_passive_mode(&self) -> bool {
-        self.passive_mode.load(Ordering::Relaxed)
+    pub fn is_active_mode(&self) -> bool {
+        self.active_mode.load(Ordering::Relaxed)
     }
 
-    pub fn set_passive_mode(&self, enabled: bool) {
-        self.passive_mode.store(enabled, Ordering::Relaxed);
+    pub fn is_passive_mode(&self) -> bool {
+        !self.is_active_mode()
+    }
+
+    pub fn set_active_mode(&self, enabled: bool) {
+        self.active_mode.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Decides whether we should drive topology queries/responses for a node.
+    pub async fn is_node_in_active_mode(&self, node: &Ieee1905NodeInfo) -> bool {
+        if self.is_passive_mode() {
+            return false;
+        }
+        node.has_comcast_vendor_oui || self.local_role.read().await.is_none()
+    }
+
+    pub async fn is_node_in_passive_mode(&self, node: &Ieee1905NodeInfo) -> bool {
+        !self.is_node_in_active_mode(node).await
     }
 
     pub async fn get_forwarding_interface_mac(&self) -> MacAddr {
@@ -647,25 +664,6 @@ impl TopologyDatabase {
     /// **Returns a globally shared `TopologyDatabase` instance if constructed (sync)**
     pub fn peek_instance_sync() -> Option<&'static Arc<TopologyDatabase>> {
         TOPOLOGY_DATABASE.get()
-    }
-
-    /// **Refreshes an existing node's liveness without touching the convergence
-    /// state machine** - used when a Topology Query is delegated to the AL SAP
-    /// application so the node is not evicted by the inactivity worker.
-    pub(crate) async fn touch_node(&self, device_data: Ieee1905DeviceData) {
-        let mut nodes = self.nodes.write().await;
-        if let Some(node) = nodes.get_mut(&device_data.al_mac) {
-            node.device_data.destination_frame_mac = device_data.destination_frame_mac;
-            node.device_data.local_interface_mac = device_data.local_interface_mac;
-            node.metadata.update(None, None, None, None, None, None);
-        } else {
-            debug!(
-                al_mac = %device_data.al_mac,
-                destination = %device_data.destination_frame_mac,
-                local_interface = %device_data.local_interface_mac,
-                "touch_node skipped: node not found in topology database",
-            );
-        }
     }
 
     /// **Retrieves a device node from the database**
@@ -892,7 +890,9 @@ impl TopologyDatabase {
                                 None,
                             );
 
-                            if local_state == StateLocal::Idle && !self.is_passive_mode() {
+                            if local_state == StateLocal::Idle
+                                && self.is_node_in_active_mode(&node.metadata).await
+                            {
                                 vec![TransmissionEvent::SendTopologyQuery(al_mac)]
                             } else {
                                 node.prepare_higher_layer_query_transmission_event_if_needed()
@@ -912,23 +912,33 @@ impl TopologyDatabase {
                                     Some(StateLocal::Idle),
                                     None,
                                 );
-                                if self.is_passive_mode() {
-                                    debug!("passive mode: notification processed");
-                                    vec![]
-                                } else {
+                                if self.is_node_in_active_mode(&node.metadata).await {
                                     debug!("Event: Send Topology Query");
                                     vec![TransmissionEvent::SendTopologyQuery(al_mac)]
+                                } else {
+                                    debug!("passive node: notification processed");
+                                    vec![]
                                 }
                             } else {
                                 vec![]
                             }
                         }
-                        UpdateType::QueryReceived { force } => {
-                            let remote_state = node.metadata.node_state_remote;
+                        UpdateType::QueryReceived { comcast_vendor } => {
+                            node.metadata.has_comcast_vendor_oui |= comcast_vendor;
 
-                            if self.is_passive_mode()
-                                || force
-                                || remote_state != StateRemote::ConvergedRemote
+                            if self.is_node_in_passive_mode(&node.metadata).await {
+                                node.metadata.update(
+                                    Some(operation),
+                                    local_msg_id,
+                                    remote_msg_id,
+                                    None,
+                                    None,
+                                    Some(StateRemote::ConvergingRemote(Instant::now())),
+                                );
+                                debug!("passive node: query processed");
+                                vec![]
+                            } else if comcast_vendor
+                                || node.metadata.node_state_remote != StateRemote::ConvergedRemote
                             {
                                 node.metadata.update(
                                     Some(operation),
@@ -938,13 +948,8 @@ impl TopologyDatabase {
                                     None,
                                     Some(StateRemote::ConvergingRemote(Instant::now())),
                                 );
-                                if self.is_passive_mode() {
-                                    debug!("passive mode: query processed");
-                                    vec![]
-                                } else {
-                                    debug!("Event: Send Topology Response");
-                                    vec![TransmissionEvent::SendTopologyResponse(al_mac)]
-                                }
+                                debug!("Event: Send Topology Response");
+                                vec![TransmissionEvent::SendTopologyResponse(al_mac)]
                             } else {
                                 vec![]
                             }
@@ -978,14 +983,12 @@ impl TopologyDatabase {
 
                                     node.device_data.update_from(device_data);
 
-                                    if self.is_passive_mode() {
-                                        debug!("passive mode: response processed");
-                                        vec![]
-                                    } else {
+                                    if self.is_node_in_active_mode(&node.metadata).await {
                                         debug!("Event: Send Topology Notification");
-                                        vec![TransmissionEvent::SendTopologyNotification(
-                                            IEEE1905_CONTROL_ADDRESS,
-                                        )]
+                                        vec![TransmissionEvent::SendTopologyNotification]
+                                    } else {
+                                        debug!("passive node: response processed");
+                                        vec![]
                                     }
                                 } else {
                                     debug!("Device data unchanged");
@@ -998,7 +1001,7 @@ impl TopologyDatabase {
                         }
 
                         UpdateType::QuerySent => {
-                            if self.is_passive_mode()
+                            if self.is_node_in_passive_mode(&node.metadata).await
                                 || node.metadata.node_state_local != StateLocal::ConvergedLocal
                             {
                                 node.metadata.update(
@@ -1014,10 +1017,10 @@ impl TopologyDatabase {
                         }
 
                         UpdateType::ResponseSent => {
-                            if self.is_passive_mode()
+                            if self.is_node_in_passive_mode(&node.metadata).await
                                 || matches!(
                                     node.metadata.node_state_remote,
-                                    StateRemote::ConvergingRemote(_)
+                                    StateRemote::ConvergingRemote(_),
                                 )
                             {
                                 node.metadata.update(
@@ -1062,7 +1065,7 @@ impl TopologyDatabase {
                 None => {
                     tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Node not found — inserting");
 
-                    let mut new_node = Ieee1905NodeInternal {
+                    let new_node = Ieee1905NodeInternal {
                         metadata: Ieee1905NodeInfo {
                             al_mac: device_data.al_mac,
                             last_update: operation,
@@ -1074,6 +1077,7 @@ impl TopologyDatabase {
                             lldp_neighbor,
                             node_state_local: StateLocal::Idle,
                             node_state_remote: StateRemote::Idle,
+                            has_comcast_vendor_oui: false,
                         },
                         device_data,
                         link_metrics_query_cancellation_token: None,
@@ -1084,25 +1088,30 @@ impl TopologyDatabase {
                     let node_was_created;
                     transmission_events = match operation {
                         UpdateType::DiscoveryReceived => {
-                            nodes.insert(al_mac, new_node);
+                            let node = nodes.entry(al_mac).insert_entry(new_node).into_mut();
                             node_was_created = true;
-                            debug!(al_mac = ?al_mac, "Inserted node from Discovery");
-                            if self.is_passive_mode() {
-                                vec![]
-                            } else {
+
+                            if self.is_node_in_active_mode(&node.metadata).await {
+                                debug!("Inserted node from Discovery (active)");
                                 vec![TransmissionEvent::SendTopologyQuery(al_mac)]
+                            } else {
+                                debug!("Inserted node from Discovery (passive)");
+                                vec![]
                             }
                         }
-                        UpdateType::QueryReceived { .. } => {
-                            new_node.metadata.node_state_remote =
-                                StateRemote::ConvergingRemote(Instant::now());
-                            nodes.insert(al_mac, new_node);
+                        UpdateType::QueryReceived { comcast_vendor } => {
+                            let node = nodes.entry(al_mac).insert_entry(new_node).into_mut();
                             node_was_created = true;
-                            debug!(al_mac = ?al_mac, "Inserted node from query");
-                            if self.is_passive_mode() {
-                                vec![]
-                            } else {
+                            node.metadata.has_comcast_vendor_oui = comcast_vendor;
+                            node.metadata.node_state_remote =
+                                StateRemote::ConvergingRemote(Instant::now());
+
+                            if self.is_node_in_active_mode(&node.metadata).await {
+                                debug!("Inserted node from Query (active)");
                                 vec![TransmissionEvent::SendTopologyResponse(al_mac)]
+                            } else {
+                                debug!("Inserted node from Query (active)");
+                                vec![]
                             }
                         }
                         UpdateType::ApAutoConfigSearch => {
@@ -1489,8 +1498,51 @@ impl TopologyDatabase {
 mod tests {
     use crate::TopologyDatabase;
     use crate::cmdu_codec::MediaType;
-    use crate::topology_manager::{Ieee1905DeviceData, Ieee1905InterfaceData, UpdateType};
+    use crate::topology_manager::{
+        Ieee1905DeviceData, Ieee1905InterfaceData, Ieee1905NodeInfo, Role, StateLocal, StateRemote,
+        UpdateType,
+    };
     use pnet::datalink::MacAddr;
+
+    #[tokio::test]
+    async fn test_node_active_mode() {
+        let db = TopologyDatabase::new(MacAddr::new(0, 0, 0, 0, 0, 0), "en1".to_string());
+
+        let mut node = Ieee1905NodeInfo::new(
+            MacAddr::broadcast(),
+            UpdateType::DiscoveryReceived,
+            None,
+            StateLocal::Idle,
+            StateRemote::Idle,
+        );
+
+        // (expected, active_mode, comcast_oui, local_role)
+        let test_cases = [
+            // global passive mode
+            (false, false, false, Some(Role::Registrar)),
+            (false, false, false, None),
+            (false, false, true, Some(Role::Registrar)),
+            (false, false, true, None),
+            // global active mode
+            (false, true, false, Some(Role::Registrar)),
+            (true, true, false, None),
+            (true, true, true, Some(Role::Registrar)),
+            (true, true, true, None),
+        ];
+
+        for (expected, active_mode, comcast_oui, local_role) in test_cases {
+            node.has_comcast_vendor_oui = comcast_oui;
+
+            db.set_active_mode(active_mode);
+            db.set_local_role(local_role).await;
+
+            assert_eq!(
+                expected,
+                db.is_node_in_active_mode(&node).await,
+                "{active_mode} {comcast_oui} {local_role:?}",
+            );
+        }
+    }
 
     #[tokio::test]
     async fn test_remote_controller_won() {

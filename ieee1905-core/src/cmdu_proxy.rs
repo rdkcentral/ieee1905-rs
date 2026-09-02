@@ -141,15 +141,17 @@ pub async fn cmdu_topology_query_transmission(
         Some(TLV::from(AlMacAddress {
             al_mac_address: local_al_mac_address,
         })),
-        Some(TLV::from(VendorSpecificInfo {
-            oui: COMCAST_OUI,
-            vendor_data: COMCAST_QUERY_TAG,
-        })),
         if let Some(Role::Registrar) = local_role {
             Some(TLV::from(MultiApProfile::Profile3))
         } else {
             None
         },
+        topology_db.is_active_mode().then(|| {
+            TLV::from(VendorSpecificInfo {
+                oui: COMCAST_OUI,
+                vendor_data: COMCAST_QUERY_TAG,
+            })
+        }),
         Some(TLV::from(EndOfMessage)),
     ];
 
@@ -429,7 +431,7 @@ async fn inject_topology_response_tlvs(
     });
 
     // injecting SupportedService
-    if !db.is_passive_mode()
+    if db.is_active_mode()
         && let Some(al_sap) = AlServiceAccessPoint::get().await
         && let Some(service_type) = al_sap.service_type()
     {
@@ -442,7 +444,7 @@ async fn inject_topology_response_tlvs(
         inject_overriding_tlvs(vec, [tlv]);
     }
 
-    if !db.is_passive_mode() {
+    if db.is_active_mode() {
         let radios = db.ap_operational_bss.read().await;
 
         // injecting ApOperationalBss
@@ -485,24 +487,10 @@ async fn inject_topology_response_tlvs(
         inject_overriding_tlvs(vec, [tlv]);
     }
 
-    // injecting VendorInfo
-    if db.get_artifact_exchange_server_ip_address().is_some() {
+    if db.is_active_mode() {
         vec.push(TLV::from(VendorSpecificInfo {
             oui: COMCAST_OUI,
-            vendor_data: VendorSpecificInfoData {
-                version: 0,
-                info_type: VendorSpecificInfoType::ArtifactExchangeService,
-                role: VendorSpecificInfoRole::Server,
-            },
-        }));
-    } else {
-        vec.push(TLV::from(VendorSpecificInfo {
-            oui: COMCAST_OUI,
-            vendor_data: VendorSpecificInfoData {
-                version: 0,
-                info_type: VendorSpecificInfoType::ArtifactExchangeService,
-                role: VendorSpecificInfoRole::Client,
-            },
+            vendor_data: COMCAST_QUERY_TAG,
         }));
     }
 
@@ -991,8 +979,8 @@ pub async fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetS
         return error!("Failed to send CMDU: {e}");
     }
 
-    if topology_db.is_passive_mode()
-        && let Some(node) = destination_node
+    if let Some(node) = destination_node
+        && !topology_db.is_node_in_active_mode(&node.metadata).await
     {
         match message_type {
             CMDUType::TopologyQuery => {
@@ -1144,9 +1132,26 @@ mod tests {
         ];
 
         let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
+        db.set_active_mode(true);
+
         let response = inject_topology_response_tlvs(&mut vec, &db).await;
         assert!(response.is_ok());
         assert_eq!(vec.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_inject_topology_response_tlvs_passive_mode() {
+        let mut vec = vec![TLV::from(EndOfMessage)];
+
+        let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
+        assert!(db.is_passive_mode(), "passive is the default");
+
+        let response = inject_topology_response_tlvs(&mut vec, &db).await;
+        assert!(response.is_ok());
+        assert!(
+            VendorSpecificInfo::find(&vec).is_none(),
+            "a passive response carries no vendor OUI",
+        );
     }
 
     #[tokio::test]
