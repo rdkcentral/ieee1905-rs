@@ -668,17 +668,17 @@ In order to disable LLDP receiver workers use:
 /usr/bin/ieee1905 --no-lldp-receivers
 ```
 
-#### Enable passive topology discovery
+#### Enable active topology discovery
 
-By default, the service drives topology convergence itself: a received Topology
-Discovery triggers a Topology Query, and a topology change is announced with a
-Topology Notification.
+By default, topology is built by observing the EasyMesh
+Topology Query and Topology Response exchange instead.
 
-With passive topology discovery the topology is built by observing the EasyMesh
-Topology Query and Topology Response exchange instead:
+When active mode is enabled, the service drives topology convergence itself:
+a received Topology Discovery triggers a Topology Query,
+and a topology change is announced with a Topology Notification.
 
 ```shell
-/usr/bin/ieee1905 --passive-mode
+/usr/bin/ieee1905 --active-mode
 ```
 
 #### Change unix socket

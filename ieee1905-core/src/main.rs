@@ -135,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
     topology_db.set_active_mode(cli.active_mode);
 
     tracing::info!(
-        "Topology discovery is {} mode",
+        "Topology discovery is in {} mode",
         if cli.active_mode { "active" } else { "passive" },
     );
 
@@ -202,7 +202,6 @@ async fn main() -> anyhow::Result<()> {
             sap_data_path,
             sender_clone,
             forwarding_interface_clone,
-            topology_db.clone(),
         ),
     );
 
