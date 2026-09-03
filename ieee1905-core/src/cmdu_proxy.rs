@@ -134,25 +134,17 @@ pub async fn cmdu_topology_query_transmission(
 
     // **Retrieve Destination MAC Address**
     let destination_mac = device_data.destination_frame_mac;
-    let local_role = topology_db.get_local_role().await;
 
     // Define TLVs
     let payload = [
-        Some(TLV::from(AlMacAddress {
+        TLV::from(AlMacAddress {
             al_mac_address: local_al_mac_address,
-        })),
-        if let Some(Role::Registrar) = local_role {
-            Some(TLV::from(MultiApProfile::Profile3))
-        } else {
-            None
-        },
-        topology_db.is_active_mode().then(|| {
-            TLV::from(VendorSpecificInfo {
-                oui: COMCAST_OUI,
-                vendor_data: COMCAST_QUERY_TAG,
-            })
         }),
-        Some(TLV::from(EndOfMessage)),
+        TLV::from(VendorSpecificInfo {
+            oui: COMCAST_OUI,
+            vendor_data: COMCAST_QUERY_TAG,
+        }),
+        TLV::from(EndOfMessage),
     ];
 
     // Construct CMDU
@@ -163,7 +155,7 @@ pub async fn cmdu_topology_query_transmission(
         message_id,
         fragment: 0,
         flags: 0x80,
-        payload: payload.iter().flatten().flat_map(TLV::serialize).collect(),
+        payload: payload.iter().flat_map(TLV::serialize).collect(),
     };
 
     let serialized_cmdu = cmdu_topology_query.serialize();
@@ -250,10 +242,14 @@ pub async fn cmdu_topology_response_transmission(
         TLV::from(AlMacAddress {
             al_mac_address: local_al_mac_address,
         }),
+        TLV::from(VendorSpecificInfo {
+            oui: COMCAST_OUI,
+            vendor_data: COMCAST_QUERY_TAG,
+        }),
         TLV::from(EndOfMessage),
     ];
 
-    if let Err(e) = inject_topology_response_tlvs(&mut payload, &topology_db).await {
+    if let Err(e) = inject_topology_response_tlvs(&mut payload, &topology_db, false).await {
         return error!(%e, "failed to inject topo TLVs");
     }
 
@@ -308,6 +304,7 @@ pub async fn cmdu_topology_response_transmission(
 async fn inject_topology_response_tlvs(
     vec: &mut Vec<TLV>,
     db: &TopologyDatabase,
+    include_easy_mesh_tlvs: bool,
 ) -> anyhow::Result<()> {
     let Some(end_of_message_tlv) = vec.pop() else {
         anyhow::bail!("EndOfMessage TLV was not found");
@@ -431,7 +428,8 @@ async fn inject_topology_response_tlvs(
     });
 
     // injecting SupportedService
-    if db.is_active_mode()
+    if include_easy_mesh_tlvs
+        && db.is_active_mode()
         && let Some(al_sap) = AlServiceAccessPoint::get().await
         && let Some(service_type) = al_sap.service_type()
     {
@@ -444,7 +442,7 @@ async fn inject_topology_response_tlvs(
         inject_overriding_tlvs(vec, [tlv]);
     }
 
-    if db.is_active_mode() {
+    if include_easy_mesh_tlvs && db.is_active_mode() {
         let radios = db.ap_operational_bss.read().await;
 
         // injecting ApOperationalBss
@@ -485,13 +483,6 @@ async fn inject_topology_response_tlvs(
             radios: bss_radios.collect(),
         };
         inject_overriding_tlvs(vec, [tlv]);
-    }
-
-    if db.is_active_mode() {
-        vec.push(TLV::from(VendorSpecificInfo {
-            oui: COMCAST_OUI,
-            vendor_data: COMCAST_QUERY_TAG,
-        }));
     }
 
     vec.push(end_of_message_tlv);
@@ -941,7 +932,7 @@ pub async fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetS
             let Ok(mut tlvs) = cmdu.get_tlvs() else {
                 return error!("Failed to parse TopologyResponse TLVs");
             };
-            if let Err(e) = inject_topology_response_tlvs(&mut tlvs, &topology_db).await {
+            if let Err(e) = inject_topology_response_tlvs(&mut tlvs, &topology_db, false).await {
                 return error!(%e, "Failed to inject topo response TLVs");
             }
             debug!("injecting TopologyResponse TLVs");
@@ -979,8 +970,8 @@ pub async fn cmdu_from_sdu_transmission(interface: String, sender: Arc<EthernetS
         return error!("Failed to send CMDU: {e}");
     }
 
-    if let Some(node) = destination_node
-        && !topology_db.is_node_in_active_mode(&node.metadata).await
+    if topology_db.is_passive_mode()
+        && let Some(node) = destination_node
     {
         match message_type {
             CMDUType::TopologyQuery => {
@@ -1099,7 +1090,7 @@ mod tests {
     #[tokio::test]
     async fn test_inject_topology_response_tlvs_failure() {
         let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
-        let response = inject_topology_response_tlvs(&mut Vec::new(), &db).await;
+        let response = inject_topology_response_tlvs(&mut Vec::new(), &db, false).await;
         assert!(response.is_err());
     }
 
@@ -1134,9 +1125,9 @@ mod tests {
         let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
         db.set_active_mode(true);
 
-        let response = inject_topology_response_tlvs(&mut vec, &db).await;
+        let response = inject_topology_response_tlvs(&mut vec, &db, true).await;
         assert!(response.is_ok());
-        assert_eq!(vec.len(), 5);
+        assert_eq!(vec.len(), 4);
     }
 
     #[tokio::test]
@@ -1146,7 +1137,7 @@ mod tests {
         let db = TopologyDatabase::new(MacAddr::broadcast(), "if_name".to_string());
         assert!(db.is_passive_mode(), "passive is the default");
 
-        let response = inject_topology_response_tlvs(&mut vec, &db).await;
+        let response = inject_topology_response_tlvs(&mut vec, &db, true).await;
         assert!(response.is_ok());
         assert!(
             VendorSpecificInfo::find(&vec).is_none(),
@@ -1198,7 +1189,7 @@ mod tests {
         .await;
 
         let mut vec = vec![TLV::from(EndOfMessage)];
-        let response = inject_topology_response_tlvs(&mut vec, &db).await;
+        let response = inject_topology_response_tlvs(&mut vec, &db, false).await;
         assert!(response.is_ok());
 
         let Some(device_info) = DeviceInformation::find(&vec) else {

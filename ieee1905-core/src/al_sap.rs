@@ -92,7 +92,6 @@ impl AlServiceAccessPoint {
         data_socket_path: impl AsRef<Path>,
         sender: Arc<EthernetSender>,
         interface_name: String,
-        topo_db: Arc<TopologyDatabase>,
     ) {
         loop {
             Self::run_instance(
@@ -100,11 +99,9 @@ impl AlServiceAccessPoint {
                 data_socket_path.as_ref(),
                 sender.clone(),
                 interface_name.clone(),
-                &topo_db,
             )
             .await;
 
-            topo_db.set_local_role(None).await;
             SAP_INSTANCE.lock().await.take();
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
@@ -115,7 +112,6 @@ impl AlServiceAccessPoint {
         data_socket_path: impl AsRef<Path>,
         sender: Arc<EthernetSender>,
         interface_name: String,
-        topo_db: &TopologyDatabase,
     ) {
         let sap = AlServiceAccessPoint::start_server(
             control_socket_path,
@@ -134,7 +130,7 @@ impl AlServiceAccessPoint {
         let result = sap
             .lock()
             .await
-            .service_access_point_registration_request(topo_db)
+            .service_access_point_registration_request()
             .await;
         tracing::debug!("SAP_INSTANCE locking result: {:?}", result);
 
@@ -240,7 +236,6 @@ impl AlServiceAccessPoint {
     /// Receives a registration request from the socket (from a client)
     async fn service_access_point_registration_request(
         &mut self,
-        topo_db: &TopologyDatabase,
     ) -> Result<AlServiceRegistrationRequest> {
         if let Some(result) = self.framed_control_socket.next().await {
             match result {
@@ -262,11 +257,19 @@ impl AlServiceAccessPoint {
                     match request.service_type {
                         ServiceType::EasyMeshAgent => {
                             info!("ServiceType EasyMeshAgent - Might be Enrollee");
-                            topo_db.set_local_role(Some(Role::Enrollee)).await;
+                            let db = TopologyDatabase::get_instance(
+                                get_local_al_mac(self.interface_name.clone()).unwrap(),
+                                &self.interface_name,
+                            );
+                            db.set_local_role(Some(Role::Enrollee)).await;
                         }
                         ServiceType::EasyMeshController => {
                             info!("ServiceType EasyMeshController - Might be Registrar");
-                            topo_db.set_local_role(Some(Role::Registrar)).await;
+                            let db = TopologyDatabase::get_instance(
+                                get_local_al_mac(self.interface_name.clone()).unwrap(),
+                                &self.interface_name,
+                            );
+                            db.set_local_role(Some(Role::Registrar)).await;
                         }
                     };
 

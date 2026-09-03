@@ -363,14 +363,12 @@ impl CMDUHandler {
         };
 
         let remote_al_mac = device_data.al_mac;
-        let has_vendor_info = VendorSpecificInfo::find(tlvs).is_some_and(|e| e.oui == COMCAST_OUI);
+        let pure_1905_packet = MultiApProfile::find(tlvs).is_none();
 
         let transmission_events = topology_db
             .update_ieee1905_topology(
                 device_data,
-                UpdateType::QueryReceived {
-                    comcast_vendor: has_vendor_info,
-                },
+                UpdateType::QueryReceived { pure_1905_packet },
                 None,
                 Some(message_id),
                 None,
@@ -823,11 +821,7 @@ impl CMDUHandler {
         };
 
         TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
-            .handle_ap_auto_config_response(
-                source_mac,
-                supported_role,
-                supported_freq_band,
-            )
+            .handle_ap_auto_config_response(source_mac, supported_role, supported_freq_band)
             .await;
 
         info!(source = %source_mac, "ApAutoConfigResponse Processed");
