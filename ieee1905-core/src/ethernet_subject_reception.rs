@@ -27,7 +27,7 @@ use pnet::datalink::{self, Channel::Ethernet, Config};
 use pnet::packet::Packet;
 use pnet::packet::ethernet::EthernetPacket;
 use pnet::util::MacAddr;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
 use std::io::ErrorKind;
 use std::time::Duration;
@@ -66,8 +66,6 @@ struct EthernetMessage {
 impl EthernetReceiver {
     const RETRY_TIMEOUT_MIN: Duration = Duration::from_millis(10);
     const RETRY_TIMEOUT_MAX: Duration = Duration::from_secs(1);
-    const ETHER_TYPE_IEEE1905: u16 = 0x893A;
-    const ETHER_TYPE_LLDP: u16 = 0x88CC;
 
     /// **Create a new `EthernetReceiver`**
     pub fn new() -> Self {
@@ -157,6 +155,10 @@ impl EthernetReceiver {
             Err(e) => bail!("Failed to create datalink channel: {e}"),
         };
 
+        // Only EtherTypes with a subscribed observer can ever be dispatched,
+        // so anything else is dropped before the expensive payload copy.
+        let subscribed_ether_types: HashSet<u16> = self.observers.keys().copied().collect();
+
         let name = format!("eth_recv/{interface_name}/block");
         spawn_join_set_blocking_named(name, &mut self.join_set, move || {
             let _span = info_span!(parent: None, "ethernet_receiver_reader", task = next_task_id())
@@ -185,12 +187,9 @@ impl EthernetReceiver {
                     continue;
                 };
 
-                // Early filter: check ether_type and drop before the expensive payload copy;
                 let ether_type = eth_packet.get_ethertype().0;
-                match ether_type {
-                    // only these EtherTypes have observers:
-                    Self::ETHER_TYPE_IEEE1905 | Self::ETHER_TYPE_LLDP => {}
-                    _ => continue,
+                if !subscribed_ether_types.contains(&ether_type) {
+                    continue;
                 }
 
                 let message = EthernetMessage {
