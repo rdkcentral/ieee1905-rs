@@ -66,6 +66,8 @@ struct EthernetMessage {
 impl EthernetReceiver {
     const RETRY_TIMEOUT_MIN: Duration = Duration::from_millis(10);
     const RETRY_TIMEOUT_MAX: Duration = Duration::from_secs(1);
+    const ETHER_TYPE_IEEE1905: u16 = 0x893A;
+    const ETHER_TYPE_LLDP: u16 = 0x88CC;
 
     /// **Create a new `EthernetReceiver`**
     pub fn new() -> Self {
@@ -77,7 +79,7 @@ impl EthernetReceiver {
         let ether_type = observer.get_ethertype();
         debug!("Trying to subscribe observer for EtherType: 0x{ether_type:04X}");
 
-        // Si ya hay un canal para ese ethertype, no duplicamos suscripciones
+        // If there is already a channel for that ether_type, we do not duplicate subscriptions
         let observer_entry = match self.observers.entry(ether_type) {
             Entry::Occupied(_) => {
                 warn!(
@@ -183,9 +185,17 @@ impl EthernetReceiver {
                     continue;
                 };
 
+                // Early filter: check ether_type and drop before the expensive payload copy;
+                let ether_type = eth_packet.get_ethertype().0;
+                match ether_type {
+                    // only these EtherTypes have observers:
+                    Self::ETHER_TYPE_IEEE1905 | Self::ETHER_TYPE_LLDP => {}
+                    _ => continue,
+                }
+
                 let message = EthernetMessage {
                     interface_mac,
-                    ether_type: eth_packet.get_ethertype().0,
+                    ether_type,
                     payload: eth_packet.payload().to_vec(),
                     source_mac: eth_packet.get_source(),
                     destination_mac: eth_packet.get_destination(),
