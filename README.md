@@ -1078,6 +1078,16 @@ On the controller side, the artifact exchange HTTP service is implemented using 
 4. Artifact names are filtered by AL MAC prefix so each node only processes artifacts addressed to it.
 5. Successful and failed transfers are moved into quota-aware archive or failure storage to prevent unbounded filesystem growth.
 
+### HLE CMDU definition
+
+The Higher Layer Query CMDU is used by an IEEE1905 entity to request Higher Layer Information metadata from a peer. The query itself does not carry additional metadata TLVs; it only identifies the message as a Higher Layer Query and terminates with the End of Message TLV.
+
+![HLE Query](docs/traces/hle_query.png)
+
+The Higher Layer Response CMDU carries the metadata consumed by the requesting peer. In the artifact exchange flow, the response includes the AL MAC address, IEEE1905 profile version, device identification information, and the Control URL used by agents to reach the controller-side artifact exchange service.
+
+![HLE Response](docs/traces/hle_response.png)
+
 ### Private Link-Local IPv6 EUI-64 for Control Plane Virtual Ethernet
 
 The IEEE1905 control-plane virtual Ethernet interface can be assigned a **private link-local IPv6 address** derived from the AL MAC address using EUI-64 interface-ID rules. This address is in the `fe80::/64` scope and is **not routable outside the local home link/network**.
