@@ -84,7 +84,6 @@ EasyMesh on Linux-based platforms.
 | **CMDU validation**  | IEEE1905 will be responsible for the completeness of CMDU's sent and received|
 | **SDU/CMDU fragmentation** | IEEE1905 SAP will provide fragmentation and reassembly service for SDU's and CMDU's|
 | **CMDU encryption**  | IEEE1905 will provide encryption service and message integrity validation for CMDU's|
-| **Path Performance monitoring**  | IEEE1905 SAP will provide an active measurements service to monitor path health and performance monitoring|
 
 ## 🧩 IEEE1905 Software Stack
 
@@ -270,19 +269,7 @@ This ensures that the topology information remains current, even as devices join
 
 7. Split Brain scenario protection.
 The topology graph shall contain no more than one registrar per network based on a tie-breaking policy defined temporary using AL_MAC address last 4 bytes.
-8. Path Performance monitoring.
-Since current IEEE1905 link-metric CMDUs relies strongly on WiFi parameters to calculate the performance of links, as part of the current project but separated from the IEEE1905 standard implementation we will create a simple performance monitoring protocol inspired on the etherate project, to measure quality parameters on the current forwarding path and store it in the topology map, this information will be exposed to the HLE's to make their decision in forwarding path selection:
-
-    | **Metric**       | **How it’s Measured**                                |
-    |------------------|------------------------------------------------------|
-    | Reachability     | Send poll-stat messages and echo them                |
-    | RTT              | Send timestamp – reply receipt                       |
-    | Jitter           | Variance in measured RTTs                            |
-    | Loss             | Gaps in sequence numbers                             |
-    | Throughput       | Bytes sent/received per unit of time                 |
-    | Out-of-order     | Detected via non-monotonic sequence numbers          |
-
-9. 1905 Layer Security Capability.
+8. 1905 Layer Security Capability. [Future improvement; not currently implemented.]
 According to EasyMesh specification chapters 13.1, 17.2.67, 17.2.68, 17.2.69, we will provide encryption and message integrity service for the TLV's.
 
 ---
@@ -303,6 +290,8 @@ The protection against split brain scenraio will work as follow:
 4. If the current registrar becomes unavailable, as determined through topology convergence flow, a new registrar shall be selected as part of the network convergence process, following steps 1 through 3.  
 5. If a new registrar is detected through topology-discovery-triggered convergence, registrar selection shall again be performed as part of the network convergence process, following steps 1 through 3.  
 6. When the AL_SAP receives a registration request from the HLE to assume the agent role, the IEEE1905 will propagate it as part of the topology convergence flow.  
+
+> **Remark:** SDU filtering is currently inactive; the implementation only tracks which entity is acting as the registrar and which entities are acting as enrollees.
 
 ---
 
@@ -369,10 +358,8 @@ The topology map provides all the information collected through Topology CMDUs e
             |	|	    |── MESSAGE_ID_LAST_PACKET: 12
             |	|		|── LLDP-INFO
             |	|   	|── PATH_METRICS
-            |	|	    |	|── RTT
-            |	|	    |	|── JITTER
-            |	|		|	|── THROUGHPUT
-            |	|	    |	└── LOST PACKETS
+            |	|	    |	|── RADIO
+            |	|	    |	└── PATH_PERFORMANCE
             |	|	    └── LocalInterfaceList
             |	|	    	|── INTERFACE_MAC_ADDRESS: BB:AA:AA:A01
             |	|	    	|	|── MEDIA_TYPE: (0x0001)
@@ -559,8 +546,8 @@ Run an agent-side artifact exchange client with:
 
 Use `server` on the controller node that exposes artifacts for agents and
 receives uploaded agent artifacts. Use `client` on agent nodes that pull
-controller-to-agent artifacts such as `binaries` and `wasm`, and push
-agent-to-controller artifacts such as `logs`.
+controller-to-agent artifacts such as `binaries` and push agent-to-controller
+artifacts such as `logs`.
 
 For systemd deployments, add the same argument to `ExecStart`, for example:
 
@@ -1079,7 +1066,7 @@ Artifacts can be transferred automatically between the controller and the agent 
 
 This mechanism relies on topology convergence to synchronize the controller's IPv6 address so that agents can discover where to pull artifacts from and where to push artifacts to. The goal is to reuse topology knowledge already maintained by IEEE1905 instead of introducing a separate discovery mechanism.
 
-The artifact exchange server provides an auxiliary HTTP service for transferring operational artifacts between the controller and agents over the IEEE1905 control interface. The controller runs the server side of the service and exposes artifacts prepared under the transmit artifact tree. Agents run the client side, periodically pulling controller-to-agent artifacts such as upgrade binaries and WASM applications, and pushing agent-to-controller artifacts such as logs.
+The artifact exchange server provides an auxiliary HTTP service for transferring operational artifacts between the controller and agents over the IEEE1905 control interface. The controller runs the server side of the service and exposes artifacts prepared under the transmit artifact tree. Agents run the client side, periodically pulling controller-to-agent artifacts such as upgrade binaries and pushing agent-to-controller artifacts such as logs.
 
 The service is discovered through topology convergence and Higher Layer Information metadata, allowing agents to learn the controller artifact exchange URL without a separate discovery protocol. In practice, clients consume the server URL from the Control URL TLV carried in the Higher Layer Response, and that URL includes the controller IPv6 address directly to avoid unnecessary resolution steps. Controller and agent roles are currently exchanged through a vendor proprietary TLV; this can be replaced in the future with a standard TLV such as Supported Role.
 
@@ -1087,7 +1074,7 @@ On the controller side, the artifact exchange HTTP service is implemented using 
 
 1. The server binds to the IEEE1905 virtual/control interface using the link-local IPv6 address derived from the local AL MAC address.
 2. Artifact transfers use HTTP endpoints for listing available artifacts, downloading controller-to-agent artifacts, and uploading agent-to-controller artifacts.
-3. Supported artifact direction is explicit: `binaries` and `wasm` are sent from controller to agents, while `logs` are sent from agents to the controller.
+3. Supported artifact direction is explicit: `binaries` are sent from controller to agents, while `logs` are sent from agents to the controller.
 4. Artifact names are filtered by AL MAC prefix so each node only processes artifacts addressed to it.
 5. Successful and failed transfers are moved into quota-aware archive or failure storage to prevent unbounded filesystem growth.
 
@@ -1130,16 +1117,16 @@ Operational notes:
 - Recovery logic should recreate or reattach the virtual interface if namespace state is lost.
 - Diagnostics should include namespace-aware checks such as `ip netns`, interface and link state, and routes.
 
-### Firmware Upgrade
+### Binary Upgrade
 
-Firmware upgrades should preserve IEEE1905 service continuity and prevent topology instability during restart windows. Upgrade coordination metadata between IEEE1905 entities will be handled through the IEEE1905 Higher Layer Information Protocol using **Higher Layer Query Message** and **Higher Layer Response Message** exchanges.
+Binary upgrades should preserve IEEE1905 service continuity and prevent topology instability during restart windows. Upgrade coordination metadata between IEEE1905 entities will be handled through the IEEE1905 Higher Layer Information Protocol using **Higher Layer Query Message** and **Higher Layer Response Message** exchanges.
 
-In this model, only the **controller** requires connectivity to the backend firmware repository or service. The controller distributes, via IEEE1905, the upgrade metadata required by extenders, for example image URI, version, integrity or checksum, and policy, so extenders can fetch and apply the correct binaries.
+In this model, only the **controller** requires connectivity to the backend binary repository or service. The controller distributes, via IEEE1905, the upgrade metadata required by extenders, for example image URI, version, integrity or checksum, and policy, so extenders can fetch and apply the correct binaries.
 
 1. During upgrade or restart, IEEE1905 should gracefully stop transmission workers and release resources in deterministic order.
 2. On startup after upgrade, the service should rebuild local interface state, restart discovery and notification timers, and repopulate topology state through normal convergence.
 3. If role-bearing entities such as agent, controller, or registrar restart, role selection and split-brain protection flow must be re-evaluated using the same tie-break logic.
-4. Upgrade procedures should be backward compatible for topology and CMDU behavior across adjacent firmware versions whenever feasible.
+4. Upgrade procedures should be backward compatible for topology and CMDU behavior across adjacent binary versions whenever feasible.
 5. During rolling upgrades, Higher Layer Query and Response should be used to detect peer upgrade state and capability and gate feature activation until compatibility is confirmed.
 
 ![ARCH](docs/architecture/call_flow_diagram/IEEE1905_fw_repo.jpg)
@@ -1160,11 +1147,10 @@ In this model, the **controller** exposes the artifact exchange HTTP service and
 
 ### Artifact Types
 
-We will provide three different kinds of artifacts to be exchanged between controller and agents:
+We will provide two different kinds of artifacts to be exchanged between controller and agents:
 
 1. `logs`: platform telemetry artifacts generated by AL entities and extenders for diagnostics, observability, and troubleshooting.
 2. `binaries`: executable artifacts used to distribute agent upgrades.
-3. `wasm`: WebAssembly artifacts used to distribute small applications to the extenders.
 
 ### Activation
 
@@ -1200,47 +1186,35 @@ The artifact exchange service will use the following directory structure:
 ├── tx/                                          (artifacts prepared to be transmitted to a remote AL entity)
 │   ├── logs/                                    (log artifacts to send)
 │   │   └── 11-22-33-44-55-66__2026-04-29T12-30-00Z__telemetry.log
-│   ├── binaries/                                (binary artifacts to send)
-│   │   └── 11-22-33-44-55-66__2026-04-29T12-30-00Z__easy_mesh_agent
-│   └── wasm/                                    (WASM artifacts to send)
-│       └── 11-22-33-44-55-66__2026-04-29T12-30-00Z__speed_test_agent.wasm
+│   └── binaries/                                (binary artifacts to send)
+│       └── 11-22-33-44-55-66__2026-04-29T12-30-00Z__easy_mesh_agent
 ├── rx/                                          (artifacts received from a remote AL entity)
 │   ├── logs/                                    (received log artifacts)
 │   │   └── aa-bb-cc-dd-ee-ff__2026-04-29T12-31-00Z__telemetry.log
-│   ├── binaries/                                (received binary artifacts)
-│   │   └── aa-bb-cc-dd-ee-ff__2026-04-29T12-31-00Z__easy_mesh_agent
-│   └── wasm/                                    (received WASM artifacts)
-│       └── aa-bb-cc-dd-ee-ff__2026-04-29T12-31-00Z__speed_test_agent.wasm
+│   └── binaries/                                (received binary artifacts)
+│       └── aa-bb-cc-dd-ee-ff__2026-04-29T12-31-00Z__easy_mesh_agent
 ├── failed/                                      (artifacts whose transmission or reception failed)
 │   ├── tx/                                      (artifacts that could not be transmitted successfully)
 │   │   ├── logs/                                (log artifacts that failed during transmission)
 │   │   │   └── 11-22-33-44-55-66__2026-04-29T12-30-00Z__telemetry.log
-│   │   ├── binaries/                            (binary artifacts that failed during transmission)
-│   │   │   └── 11-22-33-44-55-66__2026-04-29T12-30-00Z__easy_mesh_agent
-│   │   └── wasm/                                (WASM artifacts that failed during transmission)
-│   │       └── 11-22-33-44-55-66__2026-04-29T12-30-00Z__speed_test_agent.wasm
+│   │   └── binaries/                            (binary artifacts that failed during transmission)
+│   │       └── 11-22-33-44-55-66__2026-04-29T12-30-00Z__easy_mesh_agent
 │   └── rx/                                      (artifacts that could not be received, validated, or stored successfully)
 │       ├── logs/                                (received log artifacts that failed processing)
 │       │   └── aa-bb-cc-dd-ee-ff__2026-04-29T12-31-00Z__telemetry.log
-│       ├── binaries/                            (received binary artifacts that failed processing)
-│       │   └── aa-bb-cc-dd-ee-ff__2026-04-29T12-31-00Z__easy_mesh_agent
-│       └── wasm/                                (received WASM artifacts that failed processing)
-│           └── aa-bb-cc-dd-ee-ff__2026-04-29T12-31-00Z__speed_test_agent.wasm
+│       └── binaries/                            (received binary artifacts that failed processing)
+│           └── aa-bb-cc-dd-ee-ff__2026-04-29T12-31-00Z__easy_mesh_agent
 └── archive/                                     (artifacts kept as history after successful transmission or reception)
     ├── tx/                                      (artifacts successfully transmitted and retained for traceability)
     │   ├── logs/                                (sent log artifacts archived for history)
     │   │   └── 11-22-33-44-55-66__2026-04-29T12-30-00Z__telemetry.log
-    │   ├── binaries/                            (sent binary artifacts archived for history)
-    │   │   └── 11-22-33-44-55-66__2026-04-29T12-30-00Z__easy_mesh_agent
-    │   └── wasm/                                (sent WASM artifacts archived for history)
-    │       └── 11-22-33-44-55-66__2026-04-29T12-30-00Z__speed_test_agent.wasm
+    │   └── binaries/                            (sent binary artifacts archived for history)
+    │       └── 11-22-33-44-55-66__2026-04-29T12-30-00Z__easy_mesh_agent
     └── rx/                                      (artifacts successfully received and retained for traceability)
         ├── logs/                                (received log artifacts archived for history)
         │   └── aa-bb-cc-dd-ee-ff__2026-04-29T12-31-00Z__telemetry.log
-        ├── binaries/                            (received binary artifacts archived for history)
-        │   └── aa-bb-cc-dd-ee-ff__2026-04-29T12-31-00Z__easy_mesh_agent
-        └── wasm/                                (received WASM artifacts archived for history)
-            └── aa-bb-cc-dd-ee-ff__2026-04-29T12-31-00Z__speed_test_agent.wasm
+        └── binaries/                            (received binary artifacts archived for history)
+            └── aa-bb-cc-dd-ee-ff__2026-04-29T12-31-00Z__easy_mesh_agent
 ```
 
 ### Transport Model
