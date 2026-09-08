@@ -12,6 +12,10 @@ jobs:
   rss-usage:
     runs-on: ubuntu-latest
 
+    # fork PRs get a read-only GITHUB_TOKEN regardless of the permissions above
+    # skip the whole job is such case
+    if: github.event.pull_request.head.repo.full_name == github.repository
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
