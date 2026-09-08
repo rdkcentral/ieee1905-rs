@@ -34,6 +34,7 @@ use rbus_provider::element::object::rbus_object;
 use rbus_provider::element::property::rbus_property;
 use rbus_provider::element::table::rbus_table;
 use rbus_provider::provider::{RBusProvider, RBusProviderError};
+use std::ffi::CString;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -99,11 +100,12 @@ impl RBusConnection {
 
     #[rustfmt::skip]
     fn register(instance: u32) -> Result<RBusProvider, RBusProviderError> {
-        RBusProvider::open(c"Device.IEEE1905", || {
+        let name = CString::new(format!("Device.IEEE1905.{instance}"));
+        RBusProvider::open(name.as_deref().unwrap_or_default(), || {
             rbus_object("Device", (
                 rbus_object("IEEE1905", (
                     rbus_object("AL", (
-                        rbus_object(format!("{instance}"), Self::register_nested()),
+                        rbus_object(format!("{instance}"), Self::build_al(instance)),
                     )),
                     rbus_object("Network", (
                         rbus_object(format!("{instance}"), Self::build_network(instance)),
@@ -114,7 +116,7 @@ impl RBusConnection {
     }
 
     #[rustfmt::skip]
-    fn register_nested() -> impl RBusProviderElement {
+    fn build_al(instance: u32) -> impl RBusProviderElement {
         (
             rbus_property("IEEE1905Id", RBus_Al_Device),
             rbus_property("InterfaceNumberOfEntries", RBus_Al_Device),
@@ -161,15 +163,15 @@ impl RBusConnection {
                     (
                         rbus_property("BridgingTupleNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
                         rbus_table("BridgingTuple", RBus_NetworkTopology_Ieee1905Device_BridgingTuple, (
-                            rbus_property("InterfaceList", RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList),
+                            rbus_property("InterfaceList", RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList { instance }),
                         )),
                     ),
                     (
                         rbus_property("IEEE1905NeighborNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
-                        rbus_table("IEEE1905Neighbor", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor, (
-                            rbus_property("LocalInterface", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor),
-                            rbus_property("NeighborDeviceId", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor),
-                            rbus_property("MetricNumberOfEntries", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor),
+                        rbus_table("IEEE1905Neighbor", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor { instance }, (
+                            rbus_property("LocalInterface", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor { instance }),
+                            rbus_property("NeighborDeviceId", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor { instance }),
+                            rbus_property("MetricNumberOfEntries", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor { instance }),
                             rbus_table("Metric", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric, (
                                 rbus_property("NeighborMACAddress", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
                                 rbus_property("IEEE802dot1Bridge", RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor_Metric),
@@ -186,9 +188,9 @@ impl RBusConnection {
                     ),
                     (
                         rbus_property("NonIEEE1905NeighborNumberOfEntries", RBus_NetworkTopology_Ieee1905Device),
-                        rbus_table("NonIEEE1905Neighbor", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor, (
-                            rbus_property("LocalInterface", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor),
-                            rbus_property("NeighborInterfaceId", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor),
+                        rbus_table("NonIEEE1905Neighbor", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor { instance }, (
+                            rbus_property("LocalInterface", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor { instance }),
+                            rbus_property("NeighborInterfaceId", RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor { instance }),
                         )),
                     ),
                     (
@@ -249,8 +251,8 @@ impl RBusConnection {
                 ),
                 (
                     rbus_property("BridgingTupleNumberOfEntries", RBus_Network_Al),
-                    rbus_table("BridgingTuple", RBus_Network_Al_BridgingTuple, (
-                        rbus_property("InterfaceList", RBus_Network_Al_BridgingTuple),
+                    rbus_table("BridgingTuple", RBus_Network_Al_BridgingTuple { instance }, (
+                        rbus_property("InterfaceList", RBus_Network_Al_BridgingTuple { instance }),
                     ))
                 ),
                 (

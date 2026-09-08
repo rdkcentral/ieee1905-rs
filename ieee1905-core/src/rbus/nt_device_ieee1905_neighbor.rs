@@ -13,7 +13,9 @@ use rbus_provider::element::table::{RBusProviderTableSync, RBusProviderTableSync
 /// - NeighborDeviceId
 /// - MetricNumberOfEntries
 ///
-pub struct RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor;
+pub struct RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor {
+    pub instance: u32,
+}
 
 pub struct Ieee1905Neighbor<'a> {
     if_index: usize,
@@ -63,8 +65,9 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor
 
         match args.path_name.as_bytes() {
             b"LocalInterface" => {
+                let instance = self.instance;
                 let if_index = info.if_index;
-                args.property.set(&format!("Device.IEEE1905.AL.0.NetworkTopology.IEEE1905Device.{node_index}.Interface.{if_index}"));
+                args.property.set(&format!("Device.IEEE1905.AL.{instance}.NetworkTopology.IEEE1905Device.{node_index}.Interface.{if_index}"));
                 Ok(())
             }
             b"NeighborDeviceId" => {

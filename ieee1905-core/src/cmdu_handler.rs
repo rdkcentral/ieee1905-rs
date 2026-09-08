@@ -147,42 +147,38 @@ impl CMDUHandler {
             Err(e) => return error!(message_id, %e, "Failed to parse TLVs"),
         };
 
-        let handled;
-        match cmdu_type {
+        let handled = match cmdu_type {
             CMDUType::TopologyDiscovery => {
                 self.handle_topology_discovery(&tlvs, message_id, source_mac, local_interface_mac)
                     .await;
-                handled = true;
+                true
             }
             CMDUType::TopologyNotification => {
-                handled = self
-                    .handle_topology_notification(
-                        &tlvs,
-                        message_id,
-                        source_mac,
-                        local_interface_mac,
-                    )
-                    .await
+                self.handle_topology_notification(
+                    &tlvs,
+                    message_id,
+                    source_mac,
+                    local_interface_mac,
+                )
+                .await
             }
             CMDUType::TopologyQuery => {
-                handled = self
-                    .handle_topology_query(&tlvs, message_id, source_mac, local_interface_mac)
+                self.handle_topology_query(&tlvs, message_id, source_mac, local_interface_mac)
                     .await
             }
             CMDUType::TopologyResponse => {
-                handled = self
-                    .handle_topology_response(&tlvs, message_id, source_mac, local_interface_mac)
+                self.handle_topology_response(&tlvs, message_id, source_mac, local_interface_mac)
                     .await
             }
             CMDUType::LinkMetricQuery => {
                 self.handle_link_metric_query(&tlvs, message_id, source_mac)
                     .await;
-                handled = true;
+                true
             }
             CMDUType::LinkMetricResponse => {
                 self.handle_link_metric_response(&tlvs, message_id, source_mac)
                     .await;
-                handled = true;
+                true
             }
             CMDUType::ApAutoConfigSearch => {
                 self.handle_ap_auto_config_search(
@@ -192,28 +188,27 @@ impl CMDUHandler {
                     local_interface_mac,
                 )
                 .await;
-                handled = false;
+                false
             }
             CMDUType::ApAutoConfigResponse => {
                 self.handle_ap_auto_config_response(&tlvs, message_id, source_mac)
                     .await;
-                handled = false;
+                false
             }
             CMDUType::ApAutoConfigWCS => {
                 self.handle_ap_auto_config_wcs(&tlvs, message_id, source_mac)
                     .await;
-                handled = false;
+                false
             }
             CMDUType::HigherLayerQuery => {
                 self.handle_higher_layer_query(message_id, source_mac).await;
-                handled = true;
+                true
             }
             CMDUType::HigherLayerResponse => {
-                handled = self
-                    .handle_higher_layer_response(&tlvs, message_id, source_mac)
-                    .await;
+                self.handle_higher_layer_response(&tlvs, message_id, source_mac)
+                    .await
             }
-            _ => handled = false,
+            _ => false,
         };
 
         if !handled {
@@ -363,18 +358,17 @@ impl CMDUHandler {
                 return false;
             };
             node.device_data.destination_frame_mac = source_mac;
+            node.device_data.local_interface_mac = local_interface_mac;
             node.device_data
         };
 
         let remote_al_mac = device_data.al_mac;
-        let has_vendor_info = VendorSpecificInfo::find(tlvs).is_some_and(|e| e.oui == COMCAST_OUI);
+        let pure_1905_packet = MultiApProfile::find(tlvs).is_none();
 
         let transmission_events = topology_db
             .update_ieee1905_topology(
                 device_data,
-                UpdateType::QueryReceived {
-                    force: has_vendor_info,
-                },
+                UpdateType::QueryReceived { pure_1905_packet },
                 None,
                 Some(message_id),
                 None,
@@ -827,11 +821,7 @@ impl CMDUHandler {
         };
 
         TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
-            .handle_ap_auto_config_response(
-                source_mac,
-                supported_role,
-                supported_freq_band,
-            )
+            .handle_ap_auto_config_response(source_mac, supported_role, supported_freq_band)
             .await;
 
         info!(source = %source_mac, "ApAutoConfigResponse Processed");
@@ -1308,7 +1298,7 @@ mod tests {
         // Prepare sender
         let mutex_tx = Arc::new(Mutex::new(()));
         let sender = Arc::new(EthernetSender::new(
-            &forwarding_interface,
+            forwarding_interface,
             Arc::clone(&mutex_tx),
         ));
 

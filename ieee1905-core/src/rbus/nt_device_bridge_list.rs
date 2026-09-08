@@ -7,7 +7,9 @@ use rbus_provider::element::property::{RBusProviderGetter, RBusProviderGetterArg
 ///
 /// Device.IEEE1905.AL.NetworkTopology.IEEE1905Device.{i}.BridgingTuple.{i}.InterfaceList
 ///
-pub struct RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList;
+pub struct RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList {
+    pub instance: u32,
+}
 
 impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device_BridgingTuple_InterfaceList {
     type UserData = ();
@@ -27,10 +29,12 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device_BridgingTuple_In
 
         let mut interface_list = String::new();
         let mut separator = "";
+        let instance = self.instance;
+
         for if_index in interfaces {
             interface_list.push_str(separator);
             interface_list.push_str(&format!(
-                "Device.IEEE1905.AL.0.NetworkTopology.IEEE1905Device.{node_index}.Interface.{if_index}"
+                "Device.IEEE1905.AL.{instance}.NetworkTopology.IEEE1905Device.{node_index}.Interface.{if_index}"
             ));
             separator = ",";
         }
