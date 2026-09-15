@@ -147,42 +147,38 @@ impl CMDUHandler {
             Err(e) => return error!(message_id, %e, "Failed to parse TLVs"),
         };
 
-        let handled;
-        match cmdu_type {
+        let handled = match cmdu_type {
             CMDUType::TopologyDiscovery => {
                 self.handle_topology_discovery(&tlvs, message_id, source_mac, local_interface_mac)
                     .await;
-                handled = true;
+                true
             }
             CMDUType::TopologyNotification => {
-                handled = self
-                    .handle_topology_notification(
-                        &tlvs,
-                        message_id,
-                        source_mac,
-                        local_interface_mac,
-                    )
-                    .await
+                self.handle_topology_notification(
+                    &tlvs,
+                    message_id,
+                    source_mac,
+                    local_interface_mac,
+                )
+                .await
             }
             CMDUType::TopologyQuery => {
-                handled = self
-                    .handle_topology_query(&tlvs, message_id, source_mac, local_interface_mac)
+                self.handle_topology_query(&tlvs, message_id, source_mac, local_interface_mac)
                     .await
             }
             CMDUType::TopologyResponse => {
-                handled = self
-                    .handle_topology_response(&tlvs, message_id, source_mac, local_interface_mac)
+                self.handle_topology_response(&tlvs, message_id, source_mac, local_interface_mac)
                     .await
             }
             CMDUType::LinkMetricQuery => {
                 self.handle_link_metric_query(&tlvs, message_id, source_mac)
                     .await;
-                handled = true;
+                true
             }
             CMDUType::LinkMetricResponse => {
                 self.handle_link_metric_response(&tlvs, message_id, source_mac)
                     .await;
-                handled = true;
+                true
             }
             CMDUType::ApAutoConfigSearch => {
                 self.handle_ap_auto_config_search(
@@ -192,28 +188,27 @@ impl CMDUHandler {
                     local_interface_mac,
                 )
                 .await;
-                handled = false;
+                false
             }
             CMDUType::ApAutoConfigResponse => {
                 self.handle_ap_auto_config_response(&tlvs, message_id, source_mac)
                     .await;
-                handled = false;
+                false
             }
             CMDUType::ApAutoConfigWCS => {
                 self.handle_ap_auto_config_wcs(&tlvs, message_id, source_mac)
                     .await;
-                handled = false;
+                false
             }
             CMDUType::HigherLayerQuery => {
                 self.handle_higher_layer_query(message_id, source_mac).await;
-                handled = true;
+                true
             }
             CMDUType::HigherLayerResponse => {
-                handled = self
-                    .handle_higher_layer_response(&tlvs, message_id, source_mac)
-                    .await;
+                self.handle_higher_layer_response(&tlvs, message_id, source_mac)
+                    .await
             }
-            _ => handled = false,
+            _ => false,
         };
 
         if !handled {
@@ -271,7 +266,7 @@ impl CMDUHandler {
             ..Default::default()
         };
 
-        let transmission_event = topology_db
+        let transmission_events = topology_db
             .update_ieee1905_topology(
                 device_data,
                 UpdateType::DiscoveryReceived,
@@ -288,44 +283,39 @@ impl CMDUHandler {
             "Topology Discovery Processed",
         );
 
-        // Now react to the event
-        match transmission_event {
-            TransmissionEvent::SendTopologyQuery(destination_al_mac) => {
-                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
-                spawn_named(
-                    format!("proxy_topo_query/{destination_al_mac}"),
-                    cmdu_topology_query_transmission(
-                        self.interface_name.clone(),
-                        self.sender.clone(),
-                        self.message_id_generator.clone(),
-                        self.local_al_mac,
-                        destination_al_mac,
-                        forwarding_interface_mac,
-                    ),
-                );
-            }
-            TransmissionEvent::StartHigherLayerQueryWorker((destination, token)) => {
-                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
-                spawn_named(
-                    format!("proxy_hle_query/{destination}"),
-                    cmdu_higher_layer_query_transmission_worker(
-                        topology_db.clone(),
-                        self.sender.clone(),
-                        self.message_id_generator.clone(),
-                        forwarding_interface_mac,
-                        destination,
-                        token,
-                    ),
-                );
-            }
-            TransmissionEvent::None => {
-                debug!(
-                    remote = %remote_al_mac,
-                    "No transmission needed after topology discovery update"
-                );
-            }
-            _ => {
-                warn!("Unexpected TransmissionEvent in handle_topology_discovery");
+        for transmission_event in transmission_events {
+            match transmission_event {
+                TransmissionEvent::SendTopologyQuery(destination_al_mac) => {
+                    let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+                    spawn_named(
+                        format!("proxy_topo_query/{destination_al_mac}"),
+                        cmdu_topology_query_transmission(
+                            self.interface_name.clone(),
+                            self.sender.clone(),
+                            self.message_id_generator.clone(),
+                            self.local_al_mac,
+                            destination_al_mac,
+                            forwarding_interface_mac,
+                        ),
+                    );
+                }
+                TransmissionEvent::StartHigherLayerQueryWorker((destination, token)) => {
+                    let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+                    spawn_named(
+                        format!("proxy_hle_query/{destination}"),
+                        cmdu_higher_layer_query_transmission_worker(
+                            topology_db.clone(),
+                            self.sender.clone(),
+                            self.message_id_generator.clone(),
+                            forwarding_interface_mac,
+                            destination,
+                            token,
+                        ),
+                    );
+                }
+                _ => {
+                    warn!("Unexpected TransmissionEvent in handle_topology_discovery");
+                }
             }
         }
     }
@@ -368,18 +358,17 @@ impl CMDUHandler {
                 return false;
             };
             node.device_data.destination_frame_mac = source_mac;
+            node.device_data.local_interface_mac = local_interface_mac;
             node.device_data
         };
 
         let remote_al_mac = device_data.al_mac;
-        let has_vendor_info = VendorSpecificInfo::find(tlvs).is_some_and(|e| e.oui == COMCAST_OUI);
+        let pure_1905_packet = MultiApProfile::find(tlvs).is_none();
 
-        let transmission_event = topology_db
+        let transmission_events = topology_db
             .update_ieee1905_topology(
                 device_data,
-                UpdateType::QueryReceived {
-                    force: has_vendor_info,
-                },
+                UpdateType::QueryReceived { pure_1905_packet },
                 None,
                 Some(message_id),
                 None,
@@ -392,41 +381,37 @@ impl CMDUHandler {
             "Topology Query Processed",
         );
 
-        match transmission_event {
-            TransmissionEvent::SendTopologyResponse(destination_mac) => {
-                debug!(
-                    remote = %remote_al_mac,
-                    local = %self.local_al_mac,
-                    "Preparing to send Topology Response"
-                );
+        let mut sent_response = false;
+        for transmission_event in transmission_events {
+            match transmission_event {
+                TransmissionEvent::SendTopologyResponse(destination_mac) => {
+                    debug!(
+                        remote = %remote_al_mac,
+                        local = %self.local_al_mac,
+                        "Preparing to send Topology Response"
+                    );
 
-                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+                    let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
 
-                spawn_named(
-                    format!("proxy_topo_response/{destination_mac}"),
-                    cmdu_topology_response_transmission(
-                        self.interface_name.clone(),
-                        self.sender.clone(),
-                        self.local_al_mac,
-                        destination_mac,
-                        forwarding_interface_mac,
-                        message_id,
-                    ),
-                );
-                true
-            }
-            TransmissionEvent::None => {
-                debug!(
-                    remote = %remote_al_mac,
-                    "No transmission needed after topology query update"
-                );
-                false
-            }
-            _ => {
-                warn!("Unexpected TransmissionEvent in handle_topology_query");
-                false
+                    spawn_named(
+                        format!("proxy_topo_response/{destination_mac}"),
+                        cmdu_topology_response_transmission(
+                            self.interface_name.clone(),
+                            self.sender.clone(),
+                            self.local_al_mac,
+                            destination_mac,
+                            forwarding_interface_mac,
+                            message_id,
+                        ),
+                    );
+                    sent_response = true;
+                }
+                _ => {
+                    warn!("Unexpected TransmissionEvent in handle_topology_query");
+                }
             }
         }
+        sent_response
     }
 
     /// Handles and logs TLVs for Topology Response.
@@ -450,29 +435,25 @@ impl CMDUHandler {
             return true;
         }
 
-        let mut remote_al_mac = AlMacAddress::find(tlvs).map(|e| e.al_mac_address);
-        let mut interfaces = Vec::new();
-        let device_bridging_capability = DeviceBridgingCapability::find(tlvs);
+        let Some(device_information) = DeviceInformation::find(tlvs) else {
+            warn!("Missing DeviceInformation TLV. Discarding Topology Response.");
+            return true;
+        };
 
-        if let Some(info) = DeviceInformation::find(tlvs) {
-            remote_al_mac = Some(info.al_mac_address);
-            interfaces.extend(info.local_interface_list.into_iter().map(|iface| {
-                Ieee1905InterfaceData {
-                    mac: iface.mac_address,
-                    media_type: iface.media_type,
-                    media_type_extra: iface.special_info,
-                    bridging_flag: false,
-                    bridging_tuple: None,
-                    vlan: None,
-                    metric: None,
-                    phy_rate: None,
-                    link_availability: None,
-                    signal_strength_dbm: None,
-                    non_ieee1905_neighbors: None,
-                    ieee1905_neighbors: None,
-                }
-            }));
-        }
+        let device_bridging_capability = DeviceBridgingCapability::find(tlvs);
+        let remote_al_mac = AlMacAddress::find(tlvs)
+            .map_or(device_information.al_mac_address, |e| e.al_mac_address);
+
+        let mut interfaces = device_information
+            .local_interface_list
+            .into_iter()
+            .map(|e| Ieee1905InterfaceData {
+                mac: e.mac_address,
+                media_type: e.media_type,
+                media_type_extra: e.special_info,
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
 
         let mut ieee_neighbors_map = Ieee1905NeighborDevice::find_all(tlvs)
             .map(|e| (e.local_mac_address, e.neighborhood_list))
@@ -538,15 +519,17 @@ impl CMDUHandler {
         }
 
         let remote_al_mac = node.device_data.al_mac;
+        let l2_neighbor_devices = L2NeighborDevice::find_all(tlvs).collect();
         let updated_device_data = Ieee1905DeviceData {
             al_mac: remote_al_mac,
             destination_frame_mac: source_mac,
             local_interface_mac,
             local_interface_list: Some(interfaces.clone()),
+            l2_neighbor_devices,
             ..Default::default()
         };
 
-        let transmission_event = topology_db
+        let transmission_events = topology_db
             .update_ieee1905_topology(
                 updated_device_data,
                 UpdateType::ResponseReceived,
@@ -563,41 +546,36 @@ impl CMDUHandler {
             "Topology Response Processed",
         );
 
-        match transmission_event {
-            TransmissionEvent::SendTopologyNotification(_destination_mac) => {
-                debug!(
-                    al_mac = %remote_al_mac,
-                    source = %source_mac,
-                    "Sending Topology Notification because topology changed"
-                );
+        let mut sent_notification = false;
+        for transmission_event in transmission_events {
+            match transmission_event {
+                TransmissionEvent::SendTopologyNotification(_destination_mac) => {
+                    debug!(
+                        al_mac = %remote_al_mac,
+                        source = %source_mac,
+                        "Sending Topology Notification because topology changed"
+                    );
 
-                let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
+                    let forwarding_interface_mac = topology_db.get_forwarding_interface_mac().await;
 
-                spawn_named(
-                    "proxy_topo_notification",
-                    cmdu_topology_notification_transmission(
-                        self.interface_name.clone(),
-                        self.sender.clone(),
-                        self.message_id_generator.clone(),
-                        self.local_al_mac,
-                        forwarding_interface_mac,
-                    ),
-                );
-                true
-            }
-            TransmissionEvent::None => {
-                debug!(
-                    al_mac = %remote_al_mac,
-                    source = %source_mac,
-                    "Topology update did not require sending notification"
-                );
-                false
-            }
-            _ => {
-                warn!("Unexpected TransmissionEvent in handle_topology_response");
-                false
+                    spawn_named(
+                        "proxy_topo_notification",
+                        cmdu_topology_notification_transmission(
+                            self.interface_name.clone(),
+                            self.sender.clone(),
+                            self.message_id_generator.clone(),
+                            self.local_al_mac,
+                            forwarding_interface_mac,
+                        ),
+                    );
+                    sent_notification = true;
+                }
+                _ => {
+                    warn!("Unexpected TransmissionEvent in handle_topology_response");
+                }
             }
         }
+        sent_notification
     }
 
     /// Handles and logs TLVs from the CMDU payload for Topology Notification.
@@ -641,7 +619,7 @@ impl CMDUHandler {
             ..Default::default()
         };
 
-        let transmission_event = topology_db
+        let transmission_events = topology_db
             .update_ieee1905_topology(
                 received_device_data,
                 UpdateType::NotificationReceived,
@@ -657,31 +635,30 @@ impl CMDUHandler {
             "Topology Notification Processed",
         );
 
-        match transmission_event {
-            TransmissionEvent::SendTopologyQuery(dest_mac) => {
-                let forwarding_interface = topology_db.get_forwarding_interface_mac().await;
-                spawn_named(
-                    format!("proxy_topo_query/{remote_al_mac_address}"),
-                    cmdu_topology_query_transmission(
-                        self.interface_name.clone(),
-                        self.sender.clone(),
-                        self.message_id_generator.clone(),
-                        self.local_al_mac,
-                        dest_mac,
-                        forwarding_interface,
-                    ),
-                );
-                true
-            }
-            TransmissionEvent::None => {
-                debug!("No transmission event triggered by Topology Notification");
-                false
-            }
-            _ => {
-                warn!("Unexpected TransmissionEvent in handle_topology_notification");
-                false
+        let mut sent_query = false;
+        for transmission_event in transmission_events {
+            match transmission_event {
+                TransmissionEvent::SendTopologyQuery(dest_mac) => {
+                    let forwarding_interface = topology_db.get_forwarding_interface_mac().await;
+                    spawn_named(
+                        format!("proxy_topo_query/{remote_al_mac_address}"),
+                        cmdu_topology_query_transmission(
+                            self.interface_name.clone(),
+                            self.sender.clone(),
+                            self.message_id_generator.clone(),
+                            self.local_al_mac,
+                            dest_mac,
+                            forwarding_interface,
+                        ),
+                    );
+                    sent_query = true;
+                }
+                _ => {
+                    warn!("Unexpected TransmissionEvent in handle_topology_notification");
+                }
             }
         }
+        sent_query
     }
 
     /// Handles and logs TLVs for Link Metric Query.
@@ -776,11 +753,12 @@ impl CMDUHandler {
             al_mac: al_mac.al_mac_address,
             destination_frame_mac: source_mac,
             local_interface_mac,
+            registrar: SearchedRole::find(tlvs).map(|_| false),
             ..Default::default()
         };
 
         let topo_db = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name);
-        let transmission_event = topo_db
+        let transmission_events = topo_db
             .update_ieee1905_topology(
                 device_data,
                 UpdateType::ApAutoConfigSearch,
@@ -790,33 +768,31 @@ impl CMDUHandler {
             )
             .await;
 
-        match transmission_event {
-            TransmissionEvent::StartLinkMetricQueryWorker((destination, cancellation_token)) => {
-                debug!(
-                    al_mac = %al_mac.al_mac_address,
-                    source = %source_mac,
-                    "Topology update started link metric query worker"
-                );
-                spawn_named(
-                    format!("proxy_link_metric_query/{destination}"),
-                    cmdu_link_metric_query_transmission_worker(
-                        topo_db,
-                        self.sender.clone(),
-                        self.message_id_generator.clone(),
-                        local_interface_mac,
-                        destination,
-                        cancellation_token,
-                    ),
-                );
+        for transmission_event in transmission_events {
+            match transmission_event {
+                TransmissionEvent::StartLinkMetricQueryWorker((
+                    destination,
+                    cancellation_token,
+                )) => {
+                    debug!(
+                        al_mac = %al_mac.al_mac_address,
+                        source = %source_mac,
+                        "Topology update started link metric query worker"
+                    );
+                    spawn_named(
+                        format!("proxy_link_metric_query/{destination}"),
+                        cmdu_link_metric_query_transmission_worker(
+                            topo_db.clone(),
+                            self.sender.clone(),
+                            self.message_id_generator.clone(),
+                            local_interface_mac,
+                            destination,
+                            cancellation_token,
+                        ),
+                    );
+                }
+                _ => warn!("Unexpected TransmissionEvent in handle_ap_auto_config_search"),
             }
-            TransmissionEvent::None => {
-                debug!(
-                    al_mac = %al_mac.al_mac_address,
-                    source = %source_mac,
-                    "Topology update did not require sending notification"
-                );
-            }
-            _ => warn!("Unexpected TransmissionEvent in handle_ap_auto_config_search"),
         }
 
         info!(source = %source_mac, "ApAutoConfigSearch Processed");
@@ -837,12 +813,15 @@ impl CMDUHandler {
             "Handling ApAutoConfigResponse CMDU",
         );
 
+        let Some(supported_role) = SupportedRole::find(tlvs) else {
+            return error!("ApAutoConfigResponse CMDU missing SupportedRole TLV");
+        };
         let Some(supported_freq_band) = SupportedFreqBand::find(tlvs) else {
             return error!("ApAutoConfigResponse CMDU missing SupportedFreqBand TLV");
         };
 
         TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
-            .handle_ap_auto_config_response(source_mac, supported_freq_band)
+            .handle_ap_auto_config_response(source_mac, supported_role, supported_freq_band)
             .await;
 
         info!(source = %source_mac, "ApAutoConfigResponse Processed");
@@ -921,16 +900,31 @@ impl CMDUHandler {
             return true;
         };
 
-        let Some(device_identification) = DeviceIdentificationType::find(tlvs) else {
+        let Some(profile_version) = Ieee1905ProfileVersion::find(tlvs) else {
+            error!("HigherLayerResponse CMDU missing Ieee1905ProfileVersion TLV");
+            return true;
+        };
+
+        let Some(device) = DeviceIdentificationType::find(tlvs) else {
             error!("HigherLayerResponse CMDU missing DeviceIdentificationType TLV");
             return true;
         };
 
         let al_mac = al_mac.al_mac_address;
         let control_url = ControlUrl::find(tlvs);
+        let ipv4 = Ipv4::find(tlvs);
+        let ipv6 = Ipv6::find(tlvs);
 
         let result = TopologyDatabase::get_instance(self.local_al_mac, &self.interface_name)
-            .handle_higher_layer_response(al_mac, message_id, device_identification, control_url)
+            .handle_higher_layer_response(
+                al_mac,
+                message_id,
+                profile_version,
+                device,
+                control_url,
+                ipv4,
+                ipv6,
+            )
             .await;
 
         info!(source = %source_mac, "HigherLayerResponse Processed");
@@ -1033,7 +1027,7 @@ mod tests {
     use crate::cmdu_codec::tests::make_dummy_cmdu;
     use crate::cmdu_message_id_generator::get_message_id_generator;
     use crate::cmdu_reassembler::CmduReassemblyError;
-    use crate::interface_manager::get_forwarding_interface_name;
+    use crate::interface_manager::get_interface_info;
     use crate::interface_manager::get_local_al_mac;
     use tokio::sync::Mutex;
 
@@ -1294,19 +1288,17 @@ mod tests {
     async fn test_handle_cmdu_function_for_oversized_cmdu() {
         // Prepare forwarding interface
         let interface_name = "eth0".to_string();
-        let forwarding_interface =
-            if let Some(iface) = get_forwarding_interface_name(interface_name.clone()) {
-                tracing::info!("Forwarding interface: {}", iface);
-                iface
-            } else {
-                tracing::debug!("No Ethernet interface found for forwarding, using default.");
-                "eth_default".to_string() // Default interface name if none found
-            };
+        let Some(forwarding_interface) = get_interface_info(&interface_name) else {
+            panic!("No Ethernet interface found for forwarding");
+        };
+
+        let forwarding_interface = &forwarding_interface.if_name;
+        tracing::info!("Forwarding interface: {forwarding_interface}");
 
         // Prepare sender
         let mutex_tx = Arc::new(Mutex::new(()));
         let sender = Arc::new(EthernetSender::new(
-            &forwarding_interface,
+            forwarding_interface,
             Arc::clone(&mutex_tx),
         ));
 

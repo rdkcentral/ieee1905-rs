@@ -1,4 +1,4 @@
-use crate::artifact_exchange_service::common::{
+use crate::artifact_exchange_service::http::common::{
     ArtifactExchangeConfig, ArtifactExchangeFilter, format_mac_as_file_prefix,
     is_file_name_sanitized,
 };

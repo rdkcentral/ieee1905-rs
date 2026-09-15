@@ -7,7 +7,7 @@ license = "Apache-2.0"
 
 [dependencies]
 # core library
-ieee1905 = { path = "../ieee1905-core" }
+ieee1905 = { path = "../ieee1905-core", features = ["topology_ui"] }
 
 tokio  = { version = "1.48.0", features = ["rt-multi-thread", "macros", "net", "time", "fs"] }
 tokio-util = "0.7.17"

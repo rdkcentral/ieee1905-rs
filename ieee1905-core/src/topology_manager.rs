@@ -20,26 +20,31 @@
 #![deny(warnings)]
 #![allow(clippy::too_many_arguments)]
 
-use crate::cmdu_codec::{ControlUrl, LinkMetricRx, LinkMetricTx};
+use crate::artifact_exchange_service::client::{
+    ArtifactExchangeClient, ArtifactExchangeClientFactory,
+};
+use crate::cmdu_codec::{
+    ControlUrl, IEEE1905_CONTROL_ADDRESS, Ipv4, Ipv6, LinkMetricRx, LinkMetricRxPair, LinkMetricTx,
+    LinkMetricTxPair, SupportedRole,
+};
+use crate::interface_manager::{WirelessRadioBss, get_interfaces};
 use crate::linux::if_link::RtnlLinkStats64;
 use crate::lldpdu::PortId;
 use crate::{
-    artifact_exchange_service::client::ArtifactExchangeClient,
+    cmdu::IEEE1905Neighbor, interface_manager::get_forwarding_interface_mac, next_task_id,
+};
+use crate::{
     cmdu_codec::{
         CMDUFragmentation, DeviceIdentificationType, Ieee1905ProfileVersion, LinkMetricQuery,
         MediaType, MediaTypeSpecialInfo, Profile2ApCapability, SupportedFreqBand,
     },
     spawn_named,
 };
-use crate::{
-    artifact_exchange_service::client::ArtifactExchangeClientFactory,
-    interface_manager::get_interfaces,
-};
-use crate::{
-    cmdu::IEEE1905Neighbor, interface_manager::get_forwarding_interface_mac, next_task_id,
-};
+
+use crate::cmdu::L2NeighborDevice;
+#[cfg(feature = "topology_ui")]
 use crossterm::{
-    event::{self, KeyCode},
+    event::EventStream,
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -47,6 +52,7 @@ use indexmap::IndexMap;
 use neli::consts::rtnl::Iff;
 use parking_lot::Mutex;
 use pnet::datalink::MacAddr;
+#[cfg(feature = "topology_ui")]
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -56,11 +62,11 @@ use ratatui::{
 };
 use std::net::Ipv6Addr;
 use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{RwLockMappedWriteGuard, RwLockWriteGuard};
 use tokio::{
     sync::RwLock,
-    task::yield_now,
     time::{Duration, Instant, interval},
 };
 use tokio_util::sync::CancellationToken;
@@ -86,7 +92,7 @@ pub enum UpdateType {
     DiscoveryReceived,
     NotificationReceived,
     QuerySent,
-    QueryReceived { force: bool },
+    QueryReceived { pure_1905_packet: bool },
     ResponseSent,
     ResponseReceived,
     ApAutoConfigSearch,
@@ -98,7 +104,6 @@ pub enum TransmissionEvent {
     SendTopologyNotification(MacAddr),
     StartLinkMetricQueryWorker((MacAddr, CancellationToken)),
     StartHigherLayerQueryWorker((MacAddr, CancellationToken)),
-    None,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +113,55 @@ pub struct Ieee1905LocalInterface {
     pub flags: Iff,
     pub link_stats: Option<RtnlLinkStats64>,
     pub data: Ieee1905InterfaceData,
+}
+
+impl Ieee1905LocalInterface {
+    pub fn get_link_metric_pair(
+        &self,
+        neighbor: &Ieee1905DeviceData,
+    ) -> Option<(LinkMetricRxPair, LinkMetricTxPair)> {
+        let neighbors = self.ieee1905_neighbors.as_ref()?;
+        neighbors
+            .iter()
+            .find(|e| neighbor.has_port(e.neighbor_al_mac))?;
+
+        let neighbour_if1 = neighbor.destination_mac;
+        let neighbour_if2 = neighbor.destination_frame_mac;
+        let neighbour_if = neighbour_if1.unwrap_or(neighbour_if2);
+
+        fn to_u16_sat(value: u64) -> u16 {
+            u16::try_from(value).unwrap_or(u16::MAX)
+        }
+
+        fn to_u32_sat(value: u64) -> u32 {
+            u32::try_from(value).unwrap_or(u32::MAX)
+        }
+
+        let link_stats = self.link_stats.unwrap_or_default();
+        let rx = LinkMetricRxPair {
+            receiver_interface_mac: self.mac,
+            neighbour_interface_mac: neighbour_if,
+            interface_type: self.media_type,
+            packet_errors: to_u32_sat(link_stats.rx_errors),
+            packets_received: to_u32_sat(link_stats.rx_packets),
+            rssi: self.signal_strength_dbm.unwrap_or(0xffu8 as i8),
+        };
+
+        let phy_rate = to_u16_sat(self.phy_rate.unwrap_or_default() / 1_000_000);
+        let tx = LinkMetricTxPair {
+            receiver_interface_mac: self.mac,
+            neighbour_interface_mac: neighbour_if,
+            interface_type: self.media_type,
+            has_more_ieee802_bridges: self.bridging_flag.into(),
+            packet_errors: to_u32_sat(link_stats.tx_errors),
+            transmitted_packets: to_u32_sat(link_stats.tx_packets),
+            mac_throughput_capacity: phy_rate,
+            link_availability: self.link_availability.unwrap_or(100).into(),
+            phy_rate,
+        };
+
+        Some((rx, tx))
+    }
 }
 
 impl Default for Ieee1905LocalInterface {
@@ -305,10 +359,17 @@ pub struct Ieee1905DeviceData {
     pub local_interface_mac: MacAddr,
     pub local_interface_list: Option<Vec<Ieee1905InterfaceData>>,
     pub registry_role: Option<Role>,
+    pub registrar: Option<bool>,
     pub supported_fragmentation: CMDUFragmentation,
     pub supported_freq_band: Option<SupportedFreqBand>,
-    pub ieee1905profile_version: Option<Ieee1905ProfileVersion>,
+    pub ieee1905_profile_version: Ieee1905ProfileVersion,
+    pub control_url: Option<ControlUrl>,
     pub device_identification_type: Option<DeviceIdentificationType>,
+    pub ipv4: Option<Ipv4>,
+    pub ipv6: Option<Ipv6>,
+    pub link_metric_rx: Vec<LinkMetricRx>,
+    pub link_metric_tx: Vec<LinkMetricTx>,
+    pub l2_neighbor_devices: Vec<L2NeighborDevice>,
 }
 
 impl Ieee1905DeviceData {
@@ -328,10 +389,7 @@ impl Ieee1905DeviceData {
             local_interface_mac,
             local_interface_list,
             registry_role,
-            supported_fragmentation: Default::default(),
-            supported_freq_band: None,
-            ieee1905profile_version: None,
-            device_identification_type: None,
+            ..Default::default()
         }
     }
 
@@ -345,14 +403,6 @@ impl Ieee1905DeviceData {
         if let Some(interfaces) = other.local_interface_list {
             changed = true;
             self.local_interface_list = Some(interfaces);
-        }
-        if let Some(value) = other.ieee1905profile_version {
-            changed = true;
-            self.ieee1905profile_version = Some(value);
-        }
-        if let Some(value) = other.device_identification_type {
-            changed = true;
-            self.device_identification_type = Some(value);
         }
         changed
     }
@@ -425,34 +475,38 @@ impl Ieee1905NodeInternal {
         }
     }
 
-    fn prepare_link_metrics_query_transmission_event_if_needed(&mut self) -> TransmissionEvent {
+    fn prepare_link_metrics_query_transmission_event_if_needed(
+        &mut self,
+    ) -> Option<TransmissionEvent> {
         if self.link_metrics_query_cancellation_token.is_some() {
-            return TransmissionEvent::None;
+            return None;
         }
 
         let cancellation_token = CancellationToken::new();
         let drop_guard = cancellation_token.clone().drop_guard();
         self.link_metrics_query_cancellation_token = Some(drop_guard);
 
-        TransmissionEvent::StartLinkMetricQueryWorker((
+        Some(TransmissionEvent::StartLinkMetricQueryWorker((
             self.device_data.destination_frame_mac,
             cancellation_token,
-        ))
+        )))
     }
 
-    fn prepare_higher_layer_query_transmission_event_if_needed(&mut self) -> TransmissionEvent {
+    fn prepare_higher_layer_query_transmission_event_if_needed(
+        &mut self,
+    ) -> Option<TransmissionEvent> {
         if self.higher_layer_query_cancellation_token.is_some() {
-            return TransmissionEvent::None;
+            return None;
         }
 
         let cancellation_token = CancellationToken::new();
         let drop_guard = cancellation_token.clone().drop_guard();
         self.higher_layer_query_cancellation_token = Some(drop_guard);
 
-        TransmissionEvent::StartHigherLayerQueryWorker((
+        Some(TransmissionEvent::StartHigherLayerQueryWorker((
             self.device_data.destination_frame_mac,
             cancellation_token,
-        ))
+        )))
     }
 
     fn update_artifact_exchange_client(
@@ -504,8 +558,10 @@ pub struct TopologyDatabase {
     pub interface_name: String,
     pub local_mac: Arc<RwLock<MacAddr>>,
     pub local_interface_list: Arc<RwLock<Option<Vec<Ieee1905LocalInterface>>>>,
+    pub ap_operational_bss: Arc<RwLock<Vec<WirelessRadioBss>>>,
     pub nodes: Arc<RwLock<IndexMap<MacAddr, Ieee1905NodeInternal>>>,
     pub local_role: Arc<RwLock<Option<Role>>>,
+    active_mode: AtomicBool,
     artifact_exchange_client_factory: Mutex<Option<ArtifactExchangeClientFactory>>,
     artifact_exchange_server_ip_address: Mutex<Option<Ipv6Addr>>,
 }
@@ -527,8 +583,10 @@ impl TopologyDatabase {
             interface_name,
             local_mac: Arc::new(RwLock::new(local_mac)),
             local_interface_list: Arc::new(RwLock::new(None)),
+            ap_operational_bss: Default::default(),
             nodes: Arc::new(RwLock::new(IndexMap::new())),
             local_role: Arc::new(RwLock::new(None)),
+            active_mode: AtomicBool::new(false),
             artifact_exchange_client_factory: Default::default(),
             artifact_exchange_server_ip_address: Default::default(),
         });
@@ -551,6 +609,18 @@ impl TopologyDatabase {
     pub async fn set_local_role(&self, role: Option<Role>) {
         let mut write_guard = self.local_role.write().await;
         *write_guard = role;
+    }
+
+    pub fn is_passive_mode(&self) -> bool {
+        !self.is_active_mode()
+    }
+
+    pub fn is_active_mode(&self) -> bool {
+        self.active_mode.load(Ordering::Relaxed)
+    }
+
+    pub fn set_active_mode(&self, enabled: bool) {
+        self.active_mode.store(enabled, Ordering::Relaxed);
     }
 
     pub async fn get_forwarding_interface_mac(&self) -> MacAddr {
@@ -681,10 +751,10 @@ impl TopologyDatabase {
                 if let StateLocal::ConvergingLocal(when) = node.metadata.node_state_local
                     && now.duration_since(when) >= Duration::from_secs(5)
                 {
-                    debug!(
+                    info!(
                         al_mac = ?al_mac,
                         state = ?node.metadata.last_update,
-                        "Removing node stuck in local convergence for too long"
+                        "Removing node stuck in local convergence for too long",
                     );
                     return false; // Remove from database
                 }
@@ -693,10 +763,10 @@ impl TopologyDatabase {
                 if let StateRemote::ConvergingRemote(when) = node.metadata.node_state_remote
                     && now.duration_since(when) >= Duration::from_secs(5)
                 {
-                    debug!(
+                    info!(
                         al_mac = ?al_mac,
                         state = ?node.metadata.last_update,
-                        "Removing node stuck in remote convergence for too long"
+                        "Removing node stuck in remote convergence for too long",
                     );
                     return false; // Remove from database
                 }
@@ -704,7 +774,11 @@ impl TopologyDatabase {
                 // Remove nodes that have been inactive
                 let elapsed = now.duration_since(node.metadata.last_seen);
                 if elapsed >= Duration::from_secs(60) {
-                    tracing::debug!(al_mac = ?al_mac, "Removing node due to timeout");
+                    info!(
+                        al_mac = ?al_mac,
+                        state = ?node.metadata.last_update,
+                        "Removing node due to timeout",
+                    );
                     return false; // Remove from database
                 }
 
@@ -729,19 +803,21 @@ impl TopologyDatabase {
         loop {
             interval.tick().await;
 
-            match get_interfaces().await {
-                Ok(mut interfaces) => {
+            match get_interfaces(&self.interface_name).await {
+                Ok(mut result) => {
                     Self::update_local_neighbours_ieee1905_compatibility(
-                        &mut interfaces,
+                        &mut result.interfaces,
                         &*self.nodes.read().await,
                     );
 
+                    *self.ap_operational_bss.write().await = result.radios;
+
                     let mut list = self.local_interface_list.write().await;
-                    if interfaces.is_empty() {
+                    if result.interfaces.is_empty() {
                         *list = None;
                         debug!("No interfaces found — set to None");
                     } else {
-                        *list = Some(interfaces);
+                        *list = Some(result.interfaces);
                         debug!("Updated local interfaces");
                     }
                 }
@@ -770,9 +846,9 @@ impl TopologyDatabase {
         local_msg_id: Option<u16>,
         remote_msg_id: Option<u16>,
         lldp_neighbor: Option<PortId>,
-    ) -> TransmissionEvent {
+    ) -> Vec<TransmissionEvent> {
         let al_mac = device_data.al_mac;
-        let transmission_event;
+        let transmission_events;
 
         //TODO: use new update types.
         tracing::debug!("WAITING for write lock");
@@ -785,8 +861,9 @@ impl TopologyDatabase {
                     tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Updating existing node");
 
                     node.device_data.local_interface_mac = device_data.local_interface_mac;
+                    node.device_data.destination_frame_mac = device_data.destination_frame_mac;
 
-                    transmission_event = match operation {
+                    transmission_events = match operation {
                         UpdateType::DiscoveryReceived => {
                             let local_state = node.metadata.node_state_local;
 
@@ -800,10 +877,12 @@ impl TopologyDatabase {
                                 None,
                             );
 
-                            if local_state == StateLocal::Idle {
-                                TransmissionEvent::SendTopologyQuery(al_mac)
+                            if local_state == StateLocal::Idle && self.is_active_mode() {
+                                vec![TransmissionEvent::SendTopologyQuery(al_mac)]
                             } else {
                                 node.prepare_higher_layer_query_transmission_event_if_needed()
+                                    .into_iter()
+                                    .collect()
                             }
                         }
                         UpdateType::NotificationReceived => {
@@ -818,15 +897,30 @@ impl TopologyDatabase {
                                     Some(StateLocal::Idle),
                                     None,
                                 );
-                                TransmissionEvent::SendTopologyQuery(al_mac)
+                                if self.is_passive_mode() {
+                                    debug!("passive mode: notification processed");
+                                    vec![]
+                                } else {
+                                    debug!("Event: Send Topology Query");
+                                    vec![TransmissionEvent::SendTopologyQuery(al_mac)]
+                                }
                             } else {
-                                TransmissionEvent::None
+                                vec![]
                             }
                         }
-                        UpdateType::QueryReceived { force } => {
-                            let remote_state = node.metadata.node_state_remote;
-
-                            if force || remote_state != StateRemote::ConvergedRemote {
+                        UpdateType::QueryReceived { pure_1905_packet } => {
+                            if self.is_passive_mode() {
+                                node.metadata.update(
+                                    Some(operation),
+                                    local_msg_id,
+                                    remote_msg_id,
+                                    None,
+                                    None,
+                                    Some(StateRemote::ConvergingRemote(Instant::now())),
+                                );
+                                debug!("passive node: query processed");
+                                vec![]
+                            } else if pure_1905_packet {
                                 node.metadata.update(
                                     Some(operation),
                                     local_msg_id,
@@ -836,9 +930,9 @@ impl TopologyDatabase {
                                     Some(StateRemote::ConvergingRemote(Instant::now())),
                                 );
                                 debug!("Event: Send Topology Response");
-                                TransmissionEvent::SendTopologyResponse(al_mac)
+                                vec![TransmissionEvent::SendTopologyResponse(al_mac)]
                             } else {
-                                TransmissionEvent::None
+                                vec![]
                             }
                         }
 
@@ -855,6 +949,10 @@ impl TopologyDatabase {
                                     None,
                                 );
 
+                                node.device_data
+                                    .l2_neighbor_devices
+                                    .clone_from(&device_data.l2_neighbor_devices);
+
                                 debug!(
                                     current_local_interface_list = ?node.device_data.local_interface_list,
                                     new_local_interface_list = ?device_data.local_interface_list,
@@ -866,22 +964,29 @@ impl TopologyDatabase {
 
                                     node.device_data.update_from(device_data);
 
-                                    let multicast_mac =
-                                        MacAddr::new(0x01, 0x80, 0xC2, 0x00, 0x00, 0x13);
-                                    debug!("Event: Send Topology Notification");
-                                    TransmissionEvent::SendTopologyNotification(multicast_mac)
+                                    if self.is_active_mode() {
+                                        debug!("Event: Send Topology Notification");
+                                        vec![TransmissionEvent::SendTopologyNotification(
+                                            IEEE1905_CONTROL_ADDRESS,
+                                        )]
+                                    } else {
+                                        debug!("passive node: response processed");
+                                        vec![]
+                                    }
                                 } else {
-                                    debug!("Device data unchanged — no transmission needed");
-                                    TransmissionEvent::None
+                                    debug!("Device data unchanged");
+                                    vec![]
                                 }
                             } else {
                                 debug!("Ignoring ResponseReceived — not in ConvergingLocal state");
-                                TransmissionEvent::None
+                                vec![]
                             }
                         }
 
                         UpdateType::QuerySent => {
-                            if node.metadata.node_state_local != StateLocal::ConvergedLocal {
+                            if self.is_passive_mode()
+                                || node.metadata.node_state_local != StateLocal::ConvergedLocal
+                            {
                                 node.metadata.update(
                                     Some(operation),
                                     local_msg_id,
@@ -891,11 +996,15 @@ impl TopologyDatabase {
                                     None,
                                 );
                             }
-                            TransmissionEvent::None
+                            vec![]
                         }
+
                         UpdateType::ResponseSent => {
-                            if let StateRemote::ConvergingRemote(_) =
-                                node.metadata.node_state_remote
+                            if self.is_passive_mode()
+                                || matches!(
+                                    node.metadata.node_state_remote,
+                                    StateRemote::ConvergingRemote(_)
+                                )
                             {
                                 node.metadata.update(
                                     Some(operation),
@@ -906,7 +1015,7 @@ impl TopologyDatabase {
                                     Some(StateRemote::ConvergedRemote),
                                 );
                             }
-                            TransmissionEvent::None
+                            vec![]
                         }
                         UpdateType::LldpUpdate => {
                             node.metadata.update(
@@ -918,19 +1027,28 @@ impl TopologyDatabase {
                                 None,
                             );
                             debug!(al_mac = ?al_mac, lldp_neighbor = ?lldp_neighbor, "Updated LLDP neighbor status");
-                            TransmissionEvent::None
+                            vec![]
                             //If needed we can indicate here a notification event to update topology data base in al neighbors but for now it is not needed
                             //initial DB snapshot covers current uses cases for RDK-B but we can update this part if needed in the future
                         }
                         UpdateType::ApAutoConfigSearch => {
+                            if let Some(registrar) = device_data.registrar
+                                && node.device_data.registrar != Some(registrar)
+                            {
+                                info!("node {al_mac:?} registrar flag changed to  {registrar}");
+                                node.device_data.registrar = Some(registrar);
+                            }
+
                             node.prepare_link_metrics_query_transmission_event_if_needed()
+                                .into_iter()
+                                .collect()
                         }
                     };
                 }
                 None => {
                     tracing::debug!(al_mac = ?al_mac, operation = ?operation, "Node not found — inserting");
 
-                    let mut new_node = Ieee1905NodeInternal {
+                    let new_node = Ieee1905NodeInternal {
                         metadata: Ieee1905NodeInfo {
                             al_mac: device_data.al_mac,
                             last_update: operation,
@@ -950,31 +1068,49 @@ impl TopologyDatabase {
                     };
 
                     let node_was_created;
-                    transmission_event = match operation {
+                    transmission_events = match operation {
                         UpdateType::DiscoveryReceived => {
                             nodes.insert(al_mac, new_node);
                             node_was_created = true;
-                            debug!(al_mac = ?al_mac, "Inserted node from Discovery");
-                            TransmissionEvent::SendTopologyQuery(al_mac)
+
+                            if self.is_active_mode() {
+                                debug!("Inserted node from Discovery (active)");
+                                vec![TransmissionEvent::SendTopologyQuery(al_mac)]
+                            } else {
+                                debug!("Inserted node from Discovery (passive)");
+                                vec![]
+                            }
                         }
-                        UpdateType::QueryReceived { .. } => {
-                            new_node.metadata.node_state_remote =
-                                StateRemote::ConvergingRemote(Instant::now());
-                            nodes.insert(al_mac, new_node);
+                        UpdateType::QueryReceived { pure_1905_packet } => {
+                            let node = nodes.entry(al_mac).insert_entry(new_node).into_mut();
                             node_was_created = true;
-                            debug!(al_mac = ?al_mac, "Inserted node from query");
-                            TransmissionEvent::SendTopologyResponse(al_mac)
+                            node.metadata.node_state_remote =
+                                StateRemote::ConvergingRemote(Instant::now());
+
+                            if self.is_active_mode() {
+                                debug!("Inserted node from Query (active)");
+                                if pure_1905_packet {
+                                    vec![TransmissionEvent::SendTopologyResponse(al_mac)]
+                                } else {
+                                    vec![]
+                                }
+                            } else {
+                                debug!("Inserted node from Query (passive)");
+                                vec![]
+                            }
                         }
                         UpdateType::ApAutoConfigSearch => {
                             let node = nodes.entry(al_mac).insert_entry(new_node).into_mut();
                             node_was_created = true;
                             debug!(al_mac = ?al_mac, "Inserted node from ApAutoConfigSearch");
                             node.prepare_link_metrics_query_transmission_event_if_needed()
+                                .into_iter()
+                                .collect()
                         }
                         _ => {
                             debug!(al_mac = ?al_mac, operation = ?operation, "Insertion skipped — unsupported operation");
                             node_was_created = false;
-                            TransmissionEvent::None
+                            vec![]
                         }
                     };
 
@@ -989,7 +1125,7 @@ impl TopologyDatabase {
         }
 
         debug!("Lock released — function continues safely");
-        transmission_event
+        transmission_events
     }
 
     pub async fn handle_notification_sent(&self) {
@@ -1014,16 +1150,16 @@ impl TopologyDatabase {
         };
 
         let node_al_mac = node.device_data.al_mac;
-        let neighbors = match query.neighbor_mac {
-            Some(e) => {
-                let Some(neighbor) = Self::find_node_by_port(nodes.values(), e) else {
-                    debug!(%source, "link_metric_query — neighbor {e} not found");
-                    return None;
-                };
-                vec![neighbor.into()]
-            }
-            None => nodes.iter().map(|e| e.1.into()).collect(),
-        };
+        let neighbors: Vec<Ieee1905Node>;
+        if let Some(neighbor_mac) = query.neighbor_mac {
+            let Some(neighbor) = Self::find_node_by_port(nodes.values(), neighbor_mac) else {
+                debug!(%source, "link_metric_query — neighbor {neighbor_mac} not found");
+                return None;
+            };
+            neighbors = vec![Ieee1905Node::from(neighbor)];
+        } else {
+            neighbors = nodes.values().map(Ieee1905Node::from).collect();
+        }
 
         Some((node_al_mac, neighbors))
     }
@@ -1055,21 +1191,30 @@ impl TopologyDatabase {
             return;
         }
 
-        if tracing::enabled!(tracing::Level::TRACE) {
-            trace!(%source, "link metric rx stats: {:#?}", Vec::from_iter(link_metric_rx));
-            trace!(%source, "link metric tx stats: {:#?}", Vec::from_iter(link_metric_tx));
-        }
+        node.device_data.link_metric_rx = link_metric_rx.into_iter().collect();
+        node.device_data.link_metric_tx = link_metric_tx.into_iter().collect();
+
+        trace!(%source, "link metric rx stats: {:#?}", node.device_data.link_metric_rx);
+        trace!(%source, "link metric tx stats: {:#?}", node.device_data.link_metric_tx);
     }
 
     pub async fn handle_ap_auto_config_response(
         &self,
         source: MacAddr,
+        supported_role: SupportedRole,
         supported_freq_band: SupportedFreqBand,
     ) {
         let mut nodes = self.nodes.write().await;
         let Some(node) = Self::find_node_by_port_mut(nodes.values_mut(), source) else {
             return debug!(%source, "handle_ap_auto_config_response — node not found");
         };
+
+        let registrar = supported_role.role == SupportedRole::TYPE_REGISTRAR;
+        if node.device_data.registrar != Some(registrar) {
+            let al_mac = node.metadata.al_mac;
+            info!("node {al_mac:?} registrar flag changed to {registrar}");
+            node.device_data.registrar = Some(registrar);
+        }
 
         node.device_data.supported_freq_band = Some(supported_freq_band);
     }
@@ -1102,8 +1247,11 @@ impl TopologyDatabase {
         &self,
         al_mac: MacAddr,
         message_id: u16,
+        profile_version: Ieee1905ProfileVersion,
         device_information: DeviceIdentificationType,
         control_url: Option<ControlUrl>,
+        ipv4: Option<Ipv4>,
+        ipv6: Option<Ipv6>,
     ) -> bool {
         let mut nodes = self.nodes.write().await;
         let Some(node) = Self::find_node_by_port_mut(nodes.values_mut(), al_mac) else {
@@ -1121,29 +1269,42 @@ impl TopologyDatabase {
             return false;
         }
 
+        node.device_data.ipv4 = ipv4;
+        node.device_data.ipv6 = ipv6;
+        node.device_data.ieee1905_profile_version = profile_version;
+        node.device_data.control_url = control_url;
+
+        let device_information = node
+            .device_data
+            .device_identification_type
+            .insert(device_information);
+
         if device_information.friendly_name == Self::HLE_ARTIFACT_EXCHANGE_SERVICE {
             let factory = self.artifact_exchange_client_factory.lock();
-            node.update_artifact_exchange_client(factory.as_ref(), control_url.map(|e| e.url));
+            node.update_artifact_exchange_client(
+                factory.as_ref(),
+                node.device_data.control_url.as_ref().map(|e| e.url.clone()),
+            );
             return true;
         }
         false
     }
 
+    #[cfg(feature = "topology_ui")]
     pub async fn start_topology_cli(self: Arc<Self>) -> std::io::Result<()> {
         enable_raw_mode()?;
         let mut stdout = std::io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
+        let mut event_stream = EventStream::new();
 
         loop {
             let local_mac = self.al_mac_address.to_string();
             let interfaces = self.local_interface_list.read().await.clone();
             let nodes = {
                 let lock = self.nodes.read().await;
-                lock.iter()
-                    .map(|(k, v)| (*k, Ieee1905Node::from(v)))
-                    .collect::<Vec<_>>()
+                lock.values().map(Ieee1905Node::from).collect::<Vec<_>>()
             };
 
             let mut al_sap_enabled = None;
@@ -1216,7 +1377,7 @@ impl TopologyDatabase {
                     .title("IEEE 1905 Devices")
                     .borders(Borders::ALL);
 
-                let rows = nodes.iter().map(|(mac, node)| {
+                let rows = nodes.iter().map(|node| {
                     let destination_mac = node
                         .device_data
                         .destination_mac
@@ -1254,7 +1415,7 @@ impl TopologyDatabase {
                     let last_seen_secs = node.metadata.last_seen.elapsed().as_secs();
 
                     Row::new(vec![
-                        mac.to_string(),
+                        node.device_data.al_mac.to_string(),
                         format!("{:?}", node.metadata.node_state_local),
                         format!("{:?}", node.metadata.node_state_remote),
                         format!("{}s ago", last_seen_secs),
@@ -1303,11 +1464,10 @@ impl TopologyDatabase {
                 f.render_widget(paragraph3, chunks[2]);
             })?;
 
-            yield_now().await;
-
-            if event::poll(Duration::from_millis(500))?
-                && let event::Event::Key(key) = event::read()?
-                && key.code == KeyCode::Char('q')
+            let event_future = futures::StreamExt::next(&mut event_stream);
+            let event_timeout = tokio::time::timeout(Duration::from_millis(500), event_future);
+            if let Ok(Some(Ok(crossterm::event::Event::Key(event)))) = event_timeout.await
+                && event.code == crossterm::event::KeyCode::Char('q')
             {
                 break;
             }

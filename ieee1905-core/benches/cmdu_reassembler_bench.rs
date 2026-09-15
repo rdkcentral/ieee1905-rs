@@ -1,4 +1,6 @@
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use ieee1905::cmdu::CMDU;
 use ieee1905::cmdu_reassembler::CmduReassembler;
 use pnet::datalink::MacAddr;

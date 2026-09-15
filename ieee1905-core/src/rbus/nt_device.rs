@@ -1,8 +1,14 @@
 use crate::TopologyDatabase;
-use crate::cmdu_codec::{DeviceIdentificationType, Ieee1905ProfileVersion, SupportedFreqBand};
+use crate::cmdu_codec::{
+    DeviceIdentificationType, Ieee1905ProfileVersion, Ipv4, Ipv6, Ipv6Entry, SupportedFreqBand,
+};
 use crate::rbus::nt_device_bridge::RBus_NetworkTopology_Ieee1905Device_BridgingTuple;
+use crate::rbus::nt_device_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor;
+use crate::rbus::nt_device_ipv4::RBus_NetworkTopology_Ieee1905Device_IPv4;
+use crate::rbus::nt_device_ipv6::RBus_NetworkTopology_Ieee1905Device_IPv6;
+use crate::rbus::nt_device_l2_neighbor::RBus_NetworkTopology_Ieee1905Device_L2Neighbor;
 use crate::rbus::nt_device_non_ieee1905_neighbor::RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor;
-use crate::rbus::{format_mac_address, peek_topology_database};
+use crate::rbus::peek_topology_database;
 use crate::topology_manager::{
     Ieee1905InterfaceData, Ieee1905LocalInterface, Ieee1905NodeInternal,
 };
@@ -22,8 +28,12 @@ use tokio::sync::RwLockReadGuard;
 /// - FriendlyName
 /// - ManufacturerName
 /// - ManufacturerModel
+/// - L2NeighborNumberOfEntries
 /// - BridgingTupleNumberOfEntries
+/// - IEEE1905NeighborNumberOfEntries
 /// - NonIEEE1905NeighborNumberOfEntries
+/// - IPv4AddressNumberOfEntries
+/// - IPv6AddressNumberOfEntries
 ///
 pub struct RBus_NetworkTopology_Ieee1905Device;
 
@@ -55,18 +65,16 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device {
             b"IEEE1905Id" => {
                 let al_mac_str = match node {
                     RBus_Ieee1905Device_Node::Local(_) => {
-                        let mac = format_mac_address(&db.local_mac.blocking_read());
-                        format!("{mac}-local",)
+                        let mac = db.local_mac.blocking_read();
+                        format!("{mac}-local")
                     }
-                    RBus_Ieee1905Device_Node::Remote(e) => {
-                        format_mac_address(&e.device_data.al_mac)
-                    }
+                    RBus_Ieee1905Device_Node::Remote(e) => e.device_data.al_mac.to_string(),
                 };
                 args.property.set(&al_mac_str);
                 Ok(())
             }
             b"Version" => {
-                let value = match node.ieee1905profile_version().unwrap_or_default() {
+                let value = match node.ieee1905profile_version() {
                     Ieee1905ProfileVersion::Ieee1905_1 => Cow::Borrowed("1905.1"),
                     Ieee1905ProfileVersion::Ieee1905_1a => Cow::Borrowed("1905.1a"),
                     Ieee1905ProfileVersion::Reserved(e) => format!("unknown({e})").into(),
@@ -109,15 +117,34 @@ impl RBusProviderGetter for RBus_NetworkTopology_Ieee1905Device {
                 args.property.set(value);
                 Ok(())
             }
+            b"L2NeighborNumberOfEntries" => {
+                let iter = RBus_NetworkTopology_Ieee1905Device_L2Neighbor::iter(&node);
+                args.property.set(&(iter.count() as u32));
+                Ok(())
+            }
             b"BridgingTupleNumberOfEntries" => {
                 let tuples = RBus_NetworkTopology_Ieee1905Device_BridgingTuple::get_tuples(&node);
                 args.property.set(&(tuples.len() as u32));
                 Ok(())
             }
+            b"IEEE1905NeighborNumberOfEntries" => {
+                let iter = RBus_NetworkTopology_Ieee1905Device_IEEE1905Neighbor::iter(&node);
+                args.property.set(&(iter.count() as u32));
+                Ok(())
+            }
             b"NonIEEE1905NeighborNumberOfEntries" => {
-                let neighbors =
-                    RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor::iter_neighbors(&node);
-                args.property.set(&(neighbors.count() as u32));
+                let iter = RBus_NetworkTopology_Ieee1905Device_NonIEEE1905Neighbor::iter(&node);
+                args.property.set(&(iter.count() as u32));
+                Ok(())
+            }
+            b"IPv4AddressNumberOfEntries" => {
+                let pairs = RBus_NetworkTopology_Ieee1905Device_IPv4::iter(&node);
+                args.property.set(&(pairs.count() as u32));
+                Ok(())
+            }
+            b"IPv6AddressNumberOfEntries" => {
+                let pairs = RBus_NetworkTopology_Ieee1905Device_IPv6::iter(&node);
+                args.property.set(&(pairs.count() as u32));
                 Ok(())
             }
             _ => Err(RBusError::ElementDoesNotExists),
@@ -152,10 +179,10 @@ impl<'a> RBus_Ieee1905Device_Node<'a> {
         }
     }
 
-    pub fn ieee1905profile_version(&self) -> Option<Ieee1905ProfileVersion> {
+    pub fn ieee1905profile_version(&self) -> Ieee1905ProfileVersion {
         match self {
-            RBus_Ieee1905Device_Node::Local(_) => Some(Ieee1905ProfileVersion::Ieee1905_1),
-            RBus_Ieee1905Device_Node::Remote(e) => e.device_data.ieee1905profile_version,
+            RBus_Ieee1905Device_Node::Local(_) => Ieee1905ProfileVersion::Ieee1905_1,
+            RBus_Ieee1905Device_Node::Remote(e) => e.device_data.ieee1905_profile_version,
         }
     }
 
@@ -182,6 +209,30 @@ impl<'a> RBus_Ieee1905Device_Node<'a> {
                 let ifs = e.device_data.local_interface_list.as_deref();
                 Either::Right(ifs.unwrap_or_default().iter())
             }
+        }
+    }
+
+    pub fn ipv4_addresses(&self) -> Option<&Ipv4> {
+        match self {
+            RBus_Ieee1905Device_Node::Local(_) => None,
+            RBus_Ieee1905Device_Node::Remote(e) => e.device_data.ipv4.as_ref(),
+        }
+    }
+
+    pub fn ipv6_addresses(&self) -> Option<Ipv6> {
+        match self {
+            RBus_Ieee1905Device_Node::Local(_) => {
+                let db = peek_topology_database().ok()?;
+                let address = db.get_artifact_exchange_server_ip_address()?;
+                Some(Ipv6 {
+                    entries: vec![Ipv6Entry {
+                        mac_address: db.al_mac_address,
+                        link_local_address: address,
+                        routable_addresses: vec![],
+                    }],
+                })
+            }
+            RBus_Ieee1905Device_Node::Remote(e) => e.device_data.ipv6.clone(),
         }
     }
 }

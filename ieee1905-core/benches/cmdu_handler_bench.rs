@@ -1,4 +1,6 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use ieee1905::cmdu::{CMDU, CMDUType};
 use ieee1905::cmdu_handler::CMDUHandler;
 use ieee1905::cmdu_message_id_generator::get_message_id_generator;
@@ -6,11 +8,13 @@ use ieee1905::ethernet_subject_transmission::EthernetSender;
 use ieee1905::topology_manager::{Ieee1905DeviceData, TopologyDatabase, UpdateType};
 use pnet::datalink::MacAddr;
 use std::sync::Arc;
-use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 
 fn bench_handle_cmdu(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
 
     let (handler, cmdu, src_missing, src_present, dst, if_mac, local_al_mac) = rt.block_on(async {
         let sender = Arc::new(EthernetSender::new("lo", Arc::new(Mutex::new(()))));

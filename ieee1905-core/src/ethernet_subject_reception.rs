@@ -27,7 +27,7 @@ use pnet::datalink::{self, Channel::Ethernet, Config};
 use pnet::packet::Packet;
 use pnet::packet::ethernet::EthernetPacket;
 use pnet::util::MacAddr;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
 use std::io::ErrorKind;
 use std::time::Duration;
@@ -77,7 +77,7 @@ impl EthernetReceiver {
         let ether_type = observer.get_ethertype();
         debug!("Trying to subscribe observer for EtherType: 0x{ether_type:04X}");
 
-        // Si ya hay un canal para ese ethertype, no duplicamos suscripciones
+        // If there is already a channel for that ether_type, we do not duplicate subscriptions
         let observer_entry = match self.observers.entry(ether_type) {
             Entry::Occupied(_) => {
                 warn!(
@@ -155,6 +155,10 @@ impl EthernetReceiver {
             Err(e) => bail!("Failed to create datalink channel: {e}"),
         };
 
+        // Only EtherTypes with a subscribed observer can ever be dispatched,
+        // so anything else is dropped before the expensive payload copy.
+        let subscribed_ether_types: HashSet<u16> = self.observers.keys().copied().collect();
+
         let name = format!("eth_recv/{interface_name}/block");
         spawn_join_set_blocking_named(name, &mut self.join_set, move || {
             let _span = info_span!(parent: None, "ethernet_receiver_reader", task = next_task_id())
@@ -183,9 +187,14 @@ impl EthernetReceiver {
                     continue;
                 };
 
+                let ether_type = eth_packet.get_ethertype().0;
+                if !subscribed_ether_types.contains(&ether_type) {
+                    continue;
+                }
+
                 let message = EthernetMessage {
                     interface_mac,
-                    ether_type: eth_packet.get_ethertype().0,
+                    ether_type,
                     payload: eth_packet.payload().to_vec(),
                     source_mac: eth_packet.get_source(),
                     destination_mac: eth_packet.get_destination(),

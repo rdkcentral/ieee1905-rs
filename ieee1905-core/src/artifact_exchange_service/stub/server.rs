@@ -1,0 +1,43 @@
+use crate::TopologyDatabase;
+use crate::interface_manager::InterfaceInfo;
+use std::net::Ipv6Addr;
+use std::sync::Arc;
+
+////////////////////////////////////////////////////////////////////////////////
+#[derive(Debug)]
+pub struct ArtifactExchangeServer {
+    if_info: InterfaceInfo,
+}
+
+impl ArtifactExchangeServer {
+    ////////////////////////////////////////////////////////////////////////////////
+    pub fn new(topo_db: Arc<TopologyDatabase>, if_info: InterfaceInfo) -> Self {
+        let _ = topo_db;
+        Self { if_info }
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    pub fn format_base_url(ipv6: Ipv6Addr) -> String {
+        format!("http://[{ipv6}]/")
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    pub fn if_info(&self) -> &InterfaceInfo {
+        &self.if_info
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    pub fn ip_address(&self) -> Ipv6Addr {
+        Ipv6Addr::UNSPECIFIED
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    pub async fn start(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    pub fn stop(&mut self, if_name: &str) {
+        let _ = if_name;
+    }
+}

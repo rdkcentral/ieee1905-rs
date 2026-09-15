@@ -41,11 +41,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Mutex;
+use tokio::task::JoinSet;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct CliArgs {
     /// Turn on the topology text UI
+    #[cfg(feature = "topology_ui")]
     #[arg(short, long, default_value_t = false)]
     topology_ui: bool,
     /// Ethernet interface to be used
@@ -80,8 +82,12 @@ struct CliArgs {
     #[arg(long)]
     no_lldp_receivers: bool,
     /// Enables artifact exchange server
-    #[arg(long)]
+    #[arg(short, long)]
     artifact_exchange: Option<ArtifactExchange>,
+    /// Drive topology queries and responses instead of only
+    /// relying on the EasyMesh layer (passive is the default)
+    #[arg(long)]
+    active_mode: bool,
 }
 
 #[derive(ValueEnum, Debug, Clone)]
@@ -97,10 +103,6 @@ async fn main() -> anyhow::Result<()> {
     let _guard = logger::init_logger(&cli);
     tracing::info!("Tracing initialized!");
 
-    tracing::info!("Fragmentation type: SIZE BASED");
-
-    tracing::info!("TOPOLOGY_UI {:?}", cli.topology_ui);
-
     //ADDING logic for CRYPTO_CONTEXT here
     //let context = CRYPTO_CONTEXT.clone();
     //let ctx = context.lock().await;
@@ -114,30 +116,28 @@ async fn main() -> anyhow::Result<()> {
 
     let mut join_sets = Vec::new();
 
-    //Set AL MAC & test MAC addresses
-    let forwarding_interface =
-        if let Some(iface) = get_forwarding_interface_name(cli.interface.clone()) {
-            tracing::info!("Forwarding interface: {}", iface);
-            iface
-        } else {
-            tracing::debug!("No Ethernet interface found for forwarding, using default.");
-            "eth_default".to_string() // Default interface name if none found
-        };
-
-    // Calculate AL MAC Address (Derived from Forwarding Ethernet Interface)
     let Some(if_info) = get_interface_info(&cli.interface) else {
         anyhow::bail!("failed to get local interface {}", cli.interface);
     };
+
+    let forwarding_interface = if_info.if_name.clone();
+    tracing::info!("Forwarding interface: {forwarding_interface}");
 
     let al_mac = if_info.mac;
     tracing::info!("AL MAC address: {}", al_mac);
 
     // // Initialize Database
 
-    let topology_db = TopologyDatabase::get_instance(al_mac, &cli.interface);
+    let topology_db = TopologyDatabase::get_instance(al_mac, &forwarding_interface);
 
     // Upon every loop restart topology database role can change
     topology_db.set_local_role(None).await;
+    topology_db.set_active_mode(cli.active_mode);
+
+    tracing::info!(
+        "Topology discovery is in {} mode",
+        if cli.active_mode { "active" } else { "passive" },
+    );
 
     // Find Forwarding MAC Address (Ethernet Interface)
     let forwarding_mac = topology_db.get_forwarding_interface_mac().await;
@@ -147,6 +147,10 @@ async fn main() -> anyhow::Result<()> {
     let chassis_id = al_mac;
 
     let mut _artifact_exchange_server = None;
+    #[cfg(not(feature = "artifact_exchange"))]
+    if cli.artifact_exchange.is_some() {
+        anyhow::bail!("version was built without artifact exchange service support");
+    }
     match cli.artifact_exchange.as_ref() {
         Some(ArtifactExchange::Server) => {
             tracing::info!("Artifact exchange server is enabled");
@@ -216,7 +220,7 @@ async fn main() -> anyhow::Result<()> {
     let cmdu_observer = CMDUObserver::new(Arc::clone(&cmdu_handler));
     // FLAG to enable and disable LLDP
     // Initialize LLDP Observer with chassis_id assuming al_mac an chassis id have the same value as idicated in IEEE1905
-    let lldp_observer = LLDPObserver::new(chassis_id, cli.interface.clone());
+    let lldp_observer = LLDPObserver::new(chassis_id, forwarding_interface.clone());
 
     tracing::info!("LLDP and CMDU observers initilized with local MAC: {al_mac}");
 
@@ -232,7 +236,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Sart of the discovery process
 
-    for interface in get_lldp_compatible_interfaces().await {
+    for interface in get_lldp_compatible_interfaces(&forwarding_interface).await {
         tracing::info!(
             no_receiver = cli.no_lldp_receivers,
             "Starting LLDP Discovery on {}/{}",
@@ -268,29 +272,38 @@ async fn main() -> anyhow::Result<()> {
         ),
     );
 
+    // setup exit conditions
+
     let mut signal_terminate = signal(SignalKind::terminate())?;
     let mut signal_interrupt = signal(SignalKind::interrupt())?;
 
-    // if topology_cli is running
-    // you can close app by pressing q
-    tokio::select! {
-        _ = signal_terminate.recv() => {let _ = sd_notify::notify(true, &[NotifyState::Stopping]);},
-        _ = signal_interrupt.recv() => {let _ = sd_notify::notify(true, &[NotifyState::Stopping]);},
-        _ = topology_db.start_topology_cli(), if cli.topology_ui => {}
+    let mut join_set = JoinSet::new();
+    join_set.spawn(async move {
+        signal_terminate.recv().await;
+    });
+    join_set.spawn(async move {
+        signal_interrupt.recv().await;
+    });
+
+    #[cfg(feature = "topology_ui")]
+    if cli.topology_ui {
+        join_set.spawn(async move {
+            if let Err(e) = topology_db.start_topology_cli().await {
+                tracing::error!("topology_cli failed: {e}");
+            }
+        });
     }
+
+    join_set.join_next().await;
+    let _ = sd_notify::notify(&[NotifyState::Stopping]);
     Ok(())
 }
 
-async fn get_lldp_compatible_interfaces() -> Vec<Ieee1905LocalInterface> {
-    let mut interfaces = get_interfaces().await.unwrap_or_default();
-
-    if let Some(bridge) = interfaces
-        .iter()
-        .find(|e| e.name.eq_ignore_ascii_case("brlan0"))
-    {
-        let bridge_index = bridge.index.cast_unsigned();
-        interfaces.retain(|e| e.bridging_tuple == Some(bridge_index));
-    }
+async fn get_lldp_compatible_interfaces(interface_name: &str) -> Vec<Ieee1905LocalInterface> {
+    let mut interfaces = get_interfaces(interface_name)
+        .await
+        .unwrap_or_default()
+        .interfaces;
 
     interfaces.retain(|e| e.media_type.is_ethernet());
     interfaces

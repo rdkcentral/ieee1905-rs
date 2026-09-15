@@ -2,7 +2,7 @@ mod get_artifact;
 mod get_artifact_list;
 mod put_artifact;
 
-use crate::artifact_exchange_service::common::ArtifactExchangeConfig;
+use crate::artifact_exchange_service::http::common::ArtifactExchangeConfig;
 use crate::interface_manager::{
     InterfaceInfo, call_rt_new_address_v6, call_rt_remove_address_v6, convert_mac_to_eui64,
 };

@@ -235,6 +235,10 @@ pub enum Nl80211Attribute {
     /// association request when used with NL80211_CMD_NEW_STATION). Can be set
     /// only if %NL80211_STA_FLAG_WME is set.
     EhtCapability = 310,
+    /// nested attribute with the links of an MLD (Wi-Fi 7 multi-link device);
+    /// one nested attribute per link with nla_type = link id + 1, each
+    /// containing e.g. the link address as %NL80211_ATTR_MAC
+    MloLinks = 312,
 }
 impl NlAttrType for Nl80211Attribute {}
 

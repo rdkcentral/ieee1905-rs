@@ -1,7 +1,7 @@
-use crate::artifact_exchange_service::common::{
+use crate::artifact_exchange_service::http::common::{
     ArtifactExchangeConfig, ArtifactExchangeFilter, parse_mac_as_file_prefix,
 };
-use crate::artifact_exchange_service::server::ArtifactExchangeServerInstanceActor;
+use crate::artifact_exchange_service::http::server::ArtifactExchangeServerInstanceActor;
 use axum::Json;
 use axum::extract::Query;
 use axum::http::StatusCode;

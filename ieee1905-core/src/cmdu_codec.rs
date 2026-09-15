@@ -28,15 +28,15 @@ use nom::{
     number::complete::{be_i8, be_u8, be_u16, be_u32},
 };
 
+// Internal modules
+use crate::cmdu_reassembler::CmduReassemblyError;
+use crate::tlv_cmdu_codec::{TLV, TLVTrait};
 use anyhow::bail;
 use nom::combinator::{all_consuming, cond};
 use nom::multi::{count, length_count, many0};
 use pnet::datalink::MacAddr;
 use std::fmt::{Debug, Display, Formatter};
 use std::net::{Ipv4Addr, Ipv6Addr};
-// Internal modules
-use crate::cmdu_reassembler::CmduReassemblyError;
-use crate::tlv_cmdu_codec::{TLV, TLVTrait};
 
 ///////////////////////////////////////////////////////////////////////////
 //DEFINITION OF CMDU TYPES and IEEE1905 TLVs
@@ -172,10 +172,13 @@ pub enum IEEE1905TLVType {
     DeviceIdentificationType,
     ControlUrl,
     Ieee1905ProfileVersion,
+    L2NeighborDevice,
     SupportedService,
+    ApOperationalBss,
     ClientAssociation,
     MultiApProfile,
     Profile2ApCapability,
+    BssConfigurationReport,
     DeviceInventory,
     Unknown(u8), // To handle unknown or unsupported TLV types
 }
@@ -205,10 +208,13 @@ impl IEEE1905TLVType {
             0x15 => IEEE1905TLVType::DeviceIdentificationType,
             0x16 => IEEE1905TLVType::ControlUrl,
             0x1a => IEEE1905TLVType::Ieee1905ProfileVersion,
+            0x1e => IEEE1905TLVType::L2NeighborDevice,
             0x80 => IEEE1905TLVType::SupportedService,
+            0x83 => IEEE1905TLVType::ApOperationalBss,
             0x92 => IEEE1905TLVType::ClientAssociation,
             0xb3 => IEEE1905TLVType::MultiApProfile,
             0xb4 => IEEE1905TLVType::Profile2ApCapability,
+            0xb7 => IEEE1905TLVType::BssConfigurationReport,
             0xd4 => IEEE1905TLVType::DeviceInventory,
             _ => IEEE1905TLVType::Unknown(value), // For unrecognized types
         }
@@ -238,10 +244,13 @@ impl IEEE1905TLVType {
             IEEE1905TLVType::DeviceIdentificationType => 0x15,
             IEEE1905TLVType::ControlUrl => 0x16,
             IEEE1905TLVType::Ieee1905ProfileVersion => 0x1a,
+            IEEE1905TLVType::L2NeighborDevice => 0x1e,
             IEEE1905TLVType::SupportedService => 0x80,
+            IEEE1905TLVType::ApOperationalBss => 0x83,
             IEEE1905TLVType::ClientAssociation => 0x92,
             IEEE1905TLVType::MultiApProfile => 0xb3,
             IEEE1905TLVType::Profile2ApCapability => 0xb4,
+            IEEE1905TLVType::BssConfigurationReport => 0xb7,
             IEEE1905TLVType::DeviceInventory => 0xd4,
             IEEE1905TLVType::Unknown(value) => value, // Return the unknown value as-is
         }
@@ -304,7 +313,7 @@ impl TLVTrait for MacAddress {
     }
 }
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv4 {
     pub entries: Vec<Ipv4Entry>,
 }
@@ -328,7 +337,7 @@ impl TLVTrait for Ipv4 {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv4Entry {
     pub mac: MacAddr,
     pub addresses: Vec<Ipv4Address>,
@@ -353,7 +362,7 @@ impl Ipv4Entry {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv4Address {
     pub kind: IPv4AddressType,
     pub address: Ipv4Addr,
@@ -386,7 +395,7 @@ impl Ipv4Address {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IPv4AddressType {
     Unknown,
     DHCP,
@@ -483,11 +492,11 @@ impl Ipv6AddressEntry {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv6Entry {
     pub mac_address: MacAddr,
     pub link_local_address: Ipv6Addr,
-    pub other_addresses: Vec<Ipv6AddressEntry>,
+    pub routable_addresses: Vec<Ipv6AddressEntry>,
 }
 
 impl Ipv6Entry {
@@ -500,24 +509,24 @@ impl Ipv6Entry {
         let this = Self {
             mac_address,
             link_local_address,
-            other_addresses: other,
+            routable_addresses: other,
         };
 
         Ok((input, this))
     }
 
     fn serialize(&self) -> Vec<u8> {
-        let mut vec = Vec::with_capacity(23 + self.other_addresses.len() * 33);
+        let mut vec = Vec::with_capacity(23 + self.routable_addresses.len() * 33);
         vec.extend(&self.mac_address.octets());
         vec.extend(&self.link_local_address.octets());
-        vec.extend((self.other_addresses.len() as u8).to_be_bytes());
-        vec.extend(self.other_addresses.iter().flat_map(|e| e.serialize()));
+        vec.extend((self.routable_addresses.len() as u8).to_be_bytes());
+        vec.extend(self.routable_addresses.iter().flat_map(|e| e.serialize()));
         vec
     }
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ipv6 {
     pub entries: Vec<Ipv6Entry>,
 }
@@ -835,6 +844,8 @@ pub struct IEEE1905Neighbor {
 }
 
 impl IEEE1905Neighbor {
+    pub const FLAG_BRIDGED: u8 = 0b1000_0000;
+
     /// Parse an `IEEE1905Neighbor` from a byte slice
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         // Parse the neighbor_al_mac (6 bytes)
@@ -882,19 +893,107 @@ impl TLVTrait for Ieee1905NeighborDevice {
         let (input, neighborhood_list) =
             all_consuming(many0(IEEE1905Neighbor::parse)).parse(input)?;
 
-        Ok((
-            input,
-            Ieee1905NeighborDevice {
-                local_mac_address,
-                neighborhood_list,
-            },
-        ))
+        let this = Ieee1905NeighborDevice {
+            local_mac_address,
+            neighborhood_list,
+        };
+
+        Ok((input, this))
     }
 
     fn serialize(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend(self.local_mac_address.octets());
         bytes.extend(self.neighborhood_list.iter().flat_map(|e| e.serialize()));
+        bytes
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct L2NeighborDevice {
+    pub local_interfaces: Vec<L2NeighborLocalInterface>,
+}
+
+impl TLVTrait for L2NeighborDevice {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::L2NeighborDevice;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, local_interfaces_len) = be_u8(input)?;
+        let (input, local_interfaces) = all_consuming(count(
+            L2NeighborLocalInterface::parse,
+            local_interfaces_len as usize,
+        ))
+        .parse(input)?;
+
+        Ok((input, Self { local_interfaces }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend((self.local_interfaces.len() as u8).to_be_bytes());
+        bytes.extend(self.local_interfaces.iter().flat_map(|e| e.serialize()));
+        bytes
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct L2NeighborLocalInterface {
+    pub mac_address: MacAddr,
+    pub neighbors: Vec<L2Neighbor>,
+}
+
+impl L2NeighborLocalInterface {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, mac_address) = take_mac_addr(input)?;
+        let (input, neighbors_len) = be_u16(input)?;
+        let (input, neighbors) = count(L2Neighbor::parse, neighbors_len as usize).parse(input)?;
+
+        let this = Self {
+            mac_address,
+            neighbors,
+        };
+
+        Ok((input, this))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(self.mac_address.octets());
+        bytes.extend((self.neighbors.len() as u16).to_be_bytes());
+        bytes.extend(self.neighbors.iter().flat_map(|e| e.serialize()));
+        bytes
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct L2Neighbor {
+    pub mac_address: MacAddr,
+    pub behind_mac_addresses: Vec<MacAddr>,
+}
+
+impl L2Neighbor {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, mac_address) = take_mac_addr(input)?;
+        let (input, behind_mac_addresses_len) = be_u16(input)?;
+        let (input, behind_mac_addresses) =
+            count(take_mac_addr, behind_mac_addresses_len as usize).parse(input)?;
+
+        let this = Self {
+            mac_address,
+            behind_mac_addresses,
+        };
+
+        Ok((input, this))
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(self.mac_address.octets());
+        bytes.extend((self.behind_mac_addresses.len() as u16).to_be_bytes());
+        bytes.extend(self.behind_mac_addresses.iter().flat_map(|e| e.octets()));
         bytes
     }
 }
@@ -1010,23 +1109,21 @@ pub struct SearchedRole {
     pub role: u8,
 }
 
+impl SearchedRole {
+    pub const TYPE_REGISTRAR: u8 = 0x00;
+}
+
 impl TLVTrait for SearchedRole {
     const TYPE: IEEE1905TLVType = IEEE1905TLVType::SearchedRole;
 
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, role_bytes) = take(1usize)(input)?;
-        let role = role_bytes[0];
+        let (input, role) = be_u8(input)?;
 
-        if role != 0x00 {
+        if role != Self::TYPE_REGISTRAR {
             return Err(nom::Err::Failure(Error::new(input, ErrorKind::Verify)));
         }
 
-        Ok((
-            input,
-            Self {
-                role: role_bytes[0],
-            },
-        ))
+        Ok((input, Self { role }))
     }
 
     fn serialize(&self) -> Vec<u8> {
@@ -1040,14 +1137,17 @@ pub struct SupportedRole {
     pub role: u8,
 }
 
+impl SupportedRole {
+    pub const TYPE_REGISTRAR: u8 = 0x00;
+}
+
 impl TLVTrait for SupportedRole {
     const TYPE: IEEE1905TLVType = IEEE1905TLVType::SupportedRole;
 
     fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        let (input, role_bytes) = take(1usize)(input)?;
-        let role = role_bytes[0];
+        let (input, role) = be_u8(input)?;
 
-        if role != 0x00 {
+        if role != Self::TYPE_REGISTRAR {
             return Err(nom::Err::Failure(Error::new(input, ErrorKind::Verify)));
         }
 
@@ -1142,7 +1242,7 @@ impl TLVTrait for DeviceIdentificationType {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControlUrl {
     pub url: String,
 }
@@ -1253,6 +1353,88 @@ impl TLVTrait for SupportedService {
         for service in self.services.iter() {
             vec.push(service.to_u8());
         }
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApOperationalBss {
+    pub radios: Vec<ApOperationalBssRadio>,
+}
+
+impl TLVTrait for ApOperationalBss {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::ApOperationalBss;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, radios) = length_count(u8, ApOperationalBssRadio::parse).parse(input)?;
+
+        Ok((input, Self { radios }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend((self.radios.len() as u8).to_be_bytes());
+        vec.extend(self.radios.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApOperationalBssRadio {
+    pub radio_unique_id: MacAddr,
+    pub bss: Vec<ApOperationalBssInterface>,
+}
+
+impl ApOperationalBssRadio {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, radio_unique_id) = take_mac_addr(input)?;
+        let (input, bss) = length_count(u8, ApOperationalBssInterface::parse).parse(input)?;
+
+        let this = Self {
+            radio_unique_id,
+            bss,
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.radio_unique_id.octets());
+        vec.extend((self.bss.len() as u8).to_be_bytes());
+        vec.extend(self.bss.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApOperationalBssInterface {
+    pub ap_mac: MacAddr,
+    pub ssid: Vec<u8>,
+}
+
+impl ApOperationalBssInterface {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, ap_mac) = take_mac_addr(input)?;
+        let (input, ssid) = length_count(u8, u8).parse(input)?;
+
+        Ok((input, Self { ap_mac, ssid }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.ap_mac.octets());
+        vec.extend((self.ssid.len() as u8).to_be_bytes());
+        vec.extend(self.ssid.as_slice());
         vec
     }
 }
@@ -1447,6 +1629,108 @@ impl ByteCounterUnits {
 }
 
 ///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BssConfigurationReport {
+    pub radios: Vec<BssConfigurationReportRadio>,
+}
+
+impl TLVTrait for BssConfigurationReport {
+    const TYPE: IEEE1905TLVType = IEEE1905TLVType::BssConfigurationReport;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, radios) = length_count(u8, BssConfigurationReportRadio::parse).parse(input)?;
+
+        Ok((input, Self { radios }))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend((self.radios.len() as u8).to_be_bytes());
+        vec.extend(self.radios.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BssConfigurationReportRadio {
+    pub radio_unique_id: MacAddr,
+    pub bss: Vec<BssConfigurationReportInterface>,
+}
+
+impl BssConfigurationReportRadio {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, radio_unique_id) = take_mac_addr(input)?;
+        let (input, bss) = length_count(u8, BssConfigurationReportInterface::parse).parse(input)?;
+
+        let this = Self {
+            radio_unique_id,
+            bss,
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.radio_unique_id.octets());
+        vec.extend((self.bss.len() as u8).to_be_bytes());
+        vec.extend(self.bss.iter().flat_map(|e| e.serialize()));
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BssConfigurationReportInterface {
+    pub bssid: MacAddr,
+    pub flags: u8,
+    pub reserved: u8,
+    pub ssid: Vec<u8>,
+}
+
+impl BssConfigurationReportInterface {
+    pub const FLAG_BACK_HAUL_BSS: u8 = 1 << 7;
+    pub const FLAG_FRONT_HAUL_BSS: u8 = 1 << 6;
+    pub const FLAG_R1_DISALLOWED_STATUS: u8 = 1 << 5;
+    pub const FLAG_R2_DISALLOWED_STATUS: u8 = 1 << 4;
+    pub const FLAG_MULTIPLE_BSSID: u8 = 1 << 3;
+    pub const FLAG_TRANSMITTED_BSSID: u8 = 1 << 2;
+
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        use nom::number::complete::u8;
+
+        let (input, bssid) = take_mac_addr(input)?;
+        let (input, flags) = be_u8(input)?;
+        let (input, flags_reserved) = be_u8(input)?;
+        let (input, ssid) = length_count(u8, u8).parse(input)?;
+
+        let this = Self {
+            bssid,
+            flags,
+            reserved: flags_reserved,
+            ssid,
+        };
+
+        Ok((input, this))
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(self.bssid.octets());
+        vec.extend(self.flags.to_be_bytes());
+        vec.extend(self.reserved.to_be_bytes());
+        vec.extend((self.ssid.len() as u8).to_be_bytes());
+        vec.extend(self.ssid.as_slice());
+        vec
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
 #[derive(Debug, PartialEq, Eq)]
 pub struct DeviceInventory {
     pub serial_number: String,
@@ -1566,7 +1850,7 @@ impl TLVTrait for LinkMetricQuery {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkMetricTx {
     pub source_al_mac: MacAddr,
     pub neighbour_al_mac: MacAddr,
@@ -1604,7 +1888,7 @@ impl TLVTrait for LinkMetricTx {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkMetricTxPair {
     pub receiver_interface_mac: MacAddr,
     pub neighbour_interface_mac: MacAddr,
@@ -1661,7 +1945,7 @@ impl LinkMetricTxPair {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkMetricRx {
     pub source_al_mac: MacAddr,
     pub neighbour_al_mac: MacAddr,
@@ -1699,13 +1983,13 @@ impl TLVTrait for LinkMetricRx {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkMetricRxPair {
     pub receiver_interface_mac: MacAddr,
     pub neighbour_interface_mac: MacAddr,
     pub interface_type: MediaType,
     pub packet_errors: u32,
-    pub transmitted_packets: u32,
+    pub packets_received: u32,
     pub rssi: i8,
 }
 
@@ -1715,7 +1999,7 @@ impl LinkMetricRxPair {
         let (input, neighbour_interface_mac) = take_mac_addr(input)?;
         let (input, interface_type) = MediaType::parse(input)?;
         let (input, packet_errors) = be_u32(input)?;
-        let (input, transmitted_packets) = be_u32(input)?;
+        let (input, packets_received) = be_u32(input)?;
         let (input, rssi) = be_i8(input)?;
 
         Ok((
@@ -1725,7 +2009,7 @@ impl LinkMetricRxPair {
                 neighbour_interface_mac,
                 interface_type,
                 packet_errors,
-                transmitted_packets,
+                packets_received,
                 rssi,
             },
         ))
@@ -1737,7 +2021,7 @@ impl LinkMetricRxPair {
         vec.extend(self.neighbour_interface_mac.octets());
         vec.extend(self.interface_type.serialize());
         vec.extend(self.packet_errors.to_be_bytes());
-        vec.extend(self.transmitted_packets.to_be_bytes());
+        vec.extend(self.packets_received.to_be_bytes());
         vec.extend(self.rssi.to_be_bytes());
         vec
     }
@@ -1863,6 +2147,13 @@ pub enum MediaTypeSpecialInfo {
 }
 
 impl MediaTypeSpecialInfo {
+    pub fn as_wifi(&self) -> Option<&MediaTypeSpecialInfoWifi> {
+        match self {
+            MediaTypeSpecialInfo::Wifi(e) => Some(e),
+            MediaTypeSpecialInfo::Other(_) => None,
+        }
+    }
+
     pub fn parse(media_type: MediaType, input: &[u8]) -> IResult<&[u8], Self> {
         if (0x0100..0x0108).contains(&media_type.0) {
             // Wifi6 and Wifi7 don't have extras
@@ -1906,6 +2197,12 @@ pub struct MediaTypeSpecialInfoWifi {
 impl MediaTypeSpecialInfoWifi {
     const MASK_ROLE: u8 = 0x0F;
     const MASK_RESERVED: u8 = 0xF0;
+
+    pub const ROLE_NO_AD_NO_PCP_STATION: u8 = 0b0100;
+    pub const ROLE_AP: u8 = 0b0000;
+    pub const ROLE_P2P_CLIENT: u8 = 0b1000;
+    pub const ROLE_P2P_GROUP_OWNER: u8 = 0b1001;
+    pub const ROLE_802_11AD_PCP: u8 = 0b1010;
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (input, bssid) = take_mac_addr(input)?;
@@ -2513,18 +2810,9 @@ pub mod tests {
             IEEE1905TLVType::from_u8(0x10),
             IEEE1905TLVType::SupportedFreqBand
         );
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x16),
-            IEEE1905TLVType::ControlUrl
-        );
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x17),
-            IEEE1905TLVType::Ipv4
-        );
-        assert_eq!(
-            IEEE1905TLVType::from_u8(0x18),
-            IEEE1905TLVType::Ipv6
-        );
+        assert_eq!(IEEE1905TLVType::from_u8(0x16), IEEE1905TLVType::ControlUrl);
+        assert_eq!(IEEE1905TLVType::from_u8(0x17), IEEE1905TLVType::Ipv4);
+        assert_eq!(IEEE1905TLVType::from_u8(0x18), IEEE1905TLVType::Ipv6);
         assert_eq!(
             IEEE1905TLVType::from_u8(0x14),
             IEEE1905TLVType::GenericPhyDeviceInformation
@@ -2538,8 +2826,16 @@ pub mod tests {
             IEEE1905TLVType::Ieee1905ProfileVersion
         );
         assert_eq!(
+            IEEE1905TLVType::from_u8(0x1e),
+            IEEE1905TLVType::L2NeighborDevice
+        );
+        assert_eq!(
             IEEE1905TLVType::from_u8(0x80),
             IEEE1905TLVType::SupportedService,
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0x83),
+            IEEE1905TLVType::ApOperationalBss,
         );
         assert_eq!(
             IEEE1905TLVType::from_u8(0x92),
@@ -2552,6 +2848,10 @@ pub mod tests {
         assert_eq!(
             IEEE1905TLVType::from_u8(0xb4),
             IEEE1905TLVType::Profile2ApCapability,
+        );
+        assert_eq!(
+            IEEE1905TLVType::from_u8(0xb7),
+            IEEE1905TLVType::BssConfigurationReport,
         );
         assert_eq!(
             IEEE1905TLVType::from_u8(0xd4),
@@ -2592,11 +2892,16 @@ pub mod tests {
         assert_eq!(SearchedRole::TYPE, IEEE1905TLVType::SearchedRole);
         assert_eq!(SupportedRole::TYPE, IEEE1905TLVType::SupportedRole);
         assert_eq!(SupportedService::TYPE, IEEE1905TLVType::SupportedService);
+        assert_eq!(ApOperationalBss::TYPE, IEEE1905TLVType::ApOperationalBss);
         assert_eq!(ClientAssociation::TYPE, IEEE1905TLVType::ClientAssociation);
         assert_eq!(MultiApProfile::TYPE, IEEE1905TLVType::MultiApProfile);
         assert_eq!(
             Profile2ApCapability::TYPE,
             IEEE1905TLVType::Profile2ApCapability,
+        );
+        assert_eq!(
+            BssConfigurationReport::TYPE,
+            IEEE1905TLVType::BssConfigurationReport,
         );
         assert_eq!(DeviceInventory::TYPE, IEEE1905TLVType::DeviceInventory);
     }
@@ -2628,9 +2933,11 @@ pub mod tests {
         assert_eq!(IEEE1905TLVType::DeviceIdentificationType.to_u8(), 0x15);
         assert_eq!(IEEE1905TLVType::Ieee1905ProfileVersion.to_u8(), 0x1a);
         assert_eq!(IEEE1905TLVType::SupportedService.to_u8(), 0x80);
+        assert_eq!(IEEE1905TLVType::ApOperationalBss.to_u8(), 0x83);
         assert_eq!(IEEE1905TLVType::ClientAssociation.to_u8(), 0x92);
         assert_eq!(IEEE1905TLVType::MultiApProfile.to_u8(), 0xb3);
         assert_eq!(IEEE1905TLVType::Profile2ApCapability.to_u8(), 0xb4);
+        assert_eq!(IEEE1905TLVType::BssConfigurationReport.to_u8(), 0xb7);
         assert_eq!(IEEE1905TLVType::DeviceInventory.to_u8(), 0xd4);
     }
 
@@ -2929,6 +3236,68 @@ pub mod tests {
         assert_eq!(parsed_device.neighborhood_list.len(), 0);
     }
 
+    // Verify serializing and parsing L2 neighbor device
+    #[test]
+    fn test_l2_neighbor_device_parse_and_serialize() {
+        let input = [
+            0x02, // local interface count: 2
+            0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, // local interface MAC: aa:bb:cc:dd:ee:ff
+            0x00, 0x02, // L2 neighbor device count: 2
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, // L2 neighbor MAC: 11:22:33:44:55:66
+            0x00, 0x02, // behind MAC address count: 2
+            0x21, 0x22, 0x23, 0x24, 0x25, 0x26, // behind MAC address: 21:22:23:24:25:26
+            0x31, 0x32, 0x33, 0x34, 0x35, 0x36, // behind MAC address: 31:32:33:34:35:36
+            0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, // L2 neighbor MAC: 77:88:99:aa:bb:cc
+            0x00, 0x00, // behind MAC address count: 0
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // local interface MAC: 00:11:22:33:44:55
+            0x00, 0x00, // L2 neighbor device count: 0
+        ];
+        let expected = L2NeighborDevice {
+            local_interfaces: vec![
+                L2NeighborLocalInterface {
+                    mac_address: MacAddr::new(0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF),
+                    neighbors: vec![
+                        L2Neighbor {
+                            mac_address: MacAddr::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66),
+                            behind_mac_addresses: vec![
+                                MacAddr::new(0x21, 0x22, 0x23, 0x24, 0x25, 0x26),
+                                MacAddr::new(0x31, 0x32, 0x33, 0x34, 0x35, 0x36),
+                            ],
+                        },
+                        L2Neighbor {
+                            mac_address: MacAddr::new(0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC),
+                            behind_mac_addresses: vec![],
+                        },
+                    ],
+                },
+                L2NeighborLocalInterface {
+                    mac_address: MacAddr::new(0x00, 0x11, 0x22, 0x33, 0x44, 0x55),
+                    neighbors: vec![],
+                },
+            ],
+        };
+
+        let (remaining, parsed) = L2NeighborDevice::parse(&input).unwrap();
+        assert!(remaining.is_empty());
+        assert_eq!(parsed, expected);
+        assert_eq!(parsed.serialize(), input);
+    }
+
+    // Verify L2 neighbor device parser rejects trailing bytes inside TLV value
+    #[test]
+    fn test_l2_neighbor_device_parse_rejects_trailing_bytes() {
+        let mut serialized = L2NeighborDevice {
+            local_interfaces: vec![L2NeighborLocalInterface {
+                mac_address: MacAddr::new(0x00, 0x11, 0x22, 0x33, 0x44, 0x55),
+                neighbors: vec![],
+            }],
+        }
+        .serialize();
+        serialized.push(0x00);
+
+        assert!(L2NeighborDevice::parse(&serialized).is_err());
+    }
+
     // Verify parsing and serializing vendor specific info
     #[test]
     fn test_vendor_specific_info_parse_and_serialize() {
@@ -3201,6 +3570,7 @@ pub mod tests {
         device_id[64..76].copy_from_slice(b"Manufacturer");
         device_id[128..137].copy_from_slice(b"ModelName");
 
+        #[rustfmt::skip]
         let input: Vec<u8> = [
             [0x00, 0x00, 0x00, 0x0E, 0xDB, 0x9E, 0x00, 0x80].as_slice(), // CMDU header
             &[0x01, 0x00, 0x06, 0x02, 0x42, 0xC0, 0xA8, 0x64, 0x02], // AlMacAddress TLV
@@ -3695,7 +4065,7 @@ pub mod tests {
             entries: vec![Ipv6Entry {
                 mac_address: MacAddr::new(0x02, 0x42, 0xc0, 0xa8, 0x64, 0x02),
                 link_local_address: Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0042, 0xc0ff, 0xfea8, 0x6402),
-                other_addresses: vec![Ipv6AddressEntry {
+                routable_addresses: vec![Ipv6AddressEntry {
                     address_type: IPv6AddressType::SLAAC,
                     ipv6_address: Ipv6Addr::new(0x2001, 0x0db8, 0, 1, 0, 0, 0, 1),
                     ipv6_originator: Ipv6Addr::new(0x2001, 0x0db8, 0, 2, 0, 0, 0, 1),
@@ -3858,6 +4228,23 @@ pub mod tests {
     }
 
     #[test]
+    fn test_ap_operational_bss_parse_and_serialize() {
+        let original = ApOperationalBss {
+            radios: vec![ApOperationalBssRadio {
+                radio_unique_id: MacAddr::new(0x00, 0x01, 0x02, 0x03, 0x04, 0x05),
+                bss: vec![ApOperationalBssInterface {
+                    ap_mac: MacAddr::new(0x01, 0x02, 0x03, 0x04, 0x05, 0x06),
+                    ssid: b"NestWifiEver".to_vec(),
+                }],
+            }],
+        };
+
+        let serialized = original.serialize();
+        let parsed = ApOperationalBss::parse(&serialized).unwrap().1;
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
     fn test_client_association_serialization() {
         let original = ClientAssociation {
             sta_mac: MacAddr::new(1, 2, 3, 4, 5, 6),
@@ -3919,6 +4306,25 @@ pub mod tests {
         assert_eq!(ByteCounterUnits::KiB.to_u8(), 0x01);
         assert_eq!(ByteCounterUnits::MiB.to_u8(), 0x02);
         assert_eq!(ByteCounterUnits::Reserved.to_u8(), 0x03);
+    }
+
+    #[test]
+    fn test_bss_configuration_report_serialization() {
+        let original = BssConfigurationReport {
+            radios: vec![BssConfigurationReportRadio {
+                radio_unique_id: MacAddr::new(0x00, 0x01, 0x02, 0x03, 0x04, 0x05),
+                bss: vec![BssConfigurationReportInterface {
+                    bssid: MacAddr::new(0x01, 0x01, 0x02, 0x03, 0x04, 0x05),
+                    flags: BssConfigurationReportInterface::FLAG_BACK_HAUL_BSS,
+                    reserved: 0,
+                    ssid: b"BestWifiEver".to_vec(),
+                }],
+            }],
+        };
+
+        let serialized = original.serialize();
+        let parsed = BssConfigurationReport::parse(&serialized).unwrap().1;
+        assert_eq!(parsed, original);
     }
 
     #[test]
@@ -4071,7 +4477,7 @@ pub mod tests {
         );
         assert_eq!(pair.interface_type, MediaType::ETHERNET_802_3ab);
         assert_eq!(pair.packet_errors, 0x13);
-        assert_eq!(pair.transmitted_packets, 0x42);
+        assert_eq!(pair.packets_received, 0x42);
         assert_eq!(pair.rssi, 0x10);
 
         let serialized = parsed.serialize();

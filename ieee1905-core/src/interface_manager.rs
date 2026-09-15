@@ -20,11 +20,9 @@
 #![deny(warnings)]
 
 use netdev::interface::types::InterfaceType;
-use std::net::Ipv6Addr;
-// External crates
 use pnet::datalink::{self, MacAddr};
+use std::net::Ipv6Addr;
 
-// Standard library
 use crate::cmdu_codec::{MediaType, MediaTypeSpecialInfo, MediaTypeSpecialInfoWifi};
 use crate::linux::eth_tool::{
     ETH_TOOL_GENL_NAME, EthToolBitsetAttr, EthToolBitsetBitAttr, EthToolHeaderAttribute,
@@ -55,7 +53,7 @@ use neli::socket::asynchronous::NlSocketHandle;
 use neli::types::{GenlBuffer, RtBuffer};
 use neli::utils::Groups;
 use std::ops::{BitAnd, Div};
-use tracing::{error, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
@@ -81,11 +79,11 @@ pub fn get_local_al_mac(interface_name: String) -> Option<MacAddr> {
 
 pub fn get_interface_info(if_name: &str) -> Option<InterfaceInfo> {
     let interfaces = datalink::interfaces();
-    let interface = interfaces.iter().find(|e| e.name == if_name)?;
+    let interface = interfaces.into_iter().find(|e| e.name == if_name)?;
     Some(InterfaceInfo {
         mac: interface.mac?,
         if_index: interface.index,
-        if_name: if_name.to_string(),
+        if_name: interface.name,
     })
 }
 
@@ -107,18 +105,6 @@ pub fn get_forwarding_interface_mac(interface_name: &str) -> MacAddr {
     }
 }
 
-/// **Returns `Some(String)` if found, otherwise `None`.**
-pub fn get_forwarding_interface_name(interface_name: String) -> Option<String> {
-    // Fetch all network interfaces
-    let interfaces = datalink::interfaces();
-
-    // Find the first Ethernet interface (`ethX`) and return its name
-    interfaces
-        .iter()
-        .find(|iface| iface.name.starts_with(&interface_name))
-        .map(|iface| iface.name.clone()) // Extract and return interface name
-}
-
 /// **Gets the MAC address of a given network interface**
 pub fn get_mac_address_by_interface(interface_name: &str) -> Option<MacAddr> {
     // Fetch all available interfaces
@@ -131,22 +117,50 @@ pub fn get_mac_address_by_interface(interface_name: &str) -> Option<MacAddr> {
         .and_then(|iface| iface.mac) // Extract MAC address if found
 }
 
-pub async fn get_interfaces() -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
-    let mut interfaces = Vec::new();
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct GetInterfacesResult {
+    pub radios: Vec<WirelessRadioBss>,
+    pub interfaces: Vec<Ieee1905LocalInterface>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct WirelessRadioBss {
+    pub radio_unique_id: MacAddr,
+    pub bss_list: Vec<WirelessBssInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WirelessBssInfo {
+    pub if_name: String,
+    pub bssid: MacAddr,
+    pub ssid: Vec<u8>,
+}
+
+pub async fn get_interfaces(forwarding_if_name: &str) -> anyhow::Result<GetInterfacesResult> {
+    let mut result = GetInterfacesResult::default();
     let mut links = get_link_interfaces().await?;
 
+    // filter out interfaces that are not bridged with the forwarding interfaces
+    filter_interfaces_by_bridge(forwarding_if_name, &mut links).await;
+
+    // filter out veth (virtual) interfaces
+    links.retain(|_, e| e.if_name == forwarding_if_name || e.link_kind.as_deref() != Some("veth"));
+
     match get_wireless_interfaces(&mut links).await {
-        Ok(e) => interfaces.extend(e),
+        Ok((radios, interfaces)) => {
+            result.radios = radios;
+            result.interfaces.extend(interfaces);
+        }
         Err(e) => error!(%e, "get_wireless_interfaces failed"),
     }
 
     match get_ethernet_interfaces(&links).await {
-        Ok(e) => interfaces.extend(e),
+        Ok(e) => result.interfaces.extend(e),
         Err(e) => error!(%e, "get_ethernet_interfaces failed"),
     }
 
-    trace!("get_interfaces => {interfaces:#?}");
-    Ok(interfaces)
+    trace!("get_interfaces => {result:#?}");
+    Ok(result)
 }
 
 async fn get_link_interfaces() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo>> {
@@ -166,13 +180,95 @@ async fn get_link_interfaces() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo
             }
         }
     }
-
-    // remove interfaces that are not part of the bridge
-    if let Some(interface) = links.values().find(|e| e.if_name == "brlan0") {
-        let bridge_if_index = interface.if_index;
-        links.retain(|_, e| e.bridge_if_index == Some(bridge_if_index as u32));
-    }
     Ok(links)
+}
+
+async fn filter_interfaces_by_bridge(
+    forwarding_if_name: &str,
+    links: &mut IndexMap<i32, LinkInterfaceInfo>,
+) {
+    if filter_interfaces_by_ovs_bridge(forwarding_if_name, links).await {
+        return;
+    }
+    if filter_interfaces_by_linux_bridge(forwarding_if_name, links) {
+        return;
+    }
+    debug!("forwarding interface has no bridge, removing others");
+    links.retain(|_, e| e.if_name == forwarding_if_name);
+}
+
+async fn filter_interfaces_by_ovs_bridge(
+    forwarding_if_name: &str,
+    links: &mut IndexMap<i32, LinkInterfaceInfo>,
+) -> bool {
+    let mut bridge_child_if_name = forwarding_if_name;
+
+    // select other veth pair endpoint if current endpoint is not connected to the bridge
+    if let Some(forwarding_interface) = links.values().find(|e| e.if_name == bridge_child_if_name)
+        && forwarding_interface.link_kind.as_deref() == Some("veth")
+        && forwarding_interface.bridge_if_index.is_none()
+        && let Some(pair_if_index) = forwarding_interface.link_if_index
+        && let Some(pair_interface) = links.get(&pair_if_index)
+    {
+        bridge_child_if_name = pair_interface.if_name.as_str();
+    }
+
+    let bridge = match call_ovs_interface_to_bridge(bridge_child_if_name).await {
+        Ok(e) => e,
+        Err(e) => {
+            debug!(%e, "ovs bridge not available");
+            return false;
+        }
+    };
+
+    let interfaces = match call_ovs_list_bridge_interfaces(&bridge).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!(bridge, %e, "call_ovs_list_bridge_interfaces failed");
+            return false;
+        }
+    };
+
+    debug!("filtering interfaces by {bridge:?} ovs bridge");
+    links.retain(|_, e| e.if_name == forwarding_if_name || interfaces.contains(&e.if_name));
+    true
+}
+
+fn filter_interfaces_by_linux_bridge(
+    forwarding_if_name: &str,
+    links: &mut IndexMap<i32, LinkInterfaceInfo>,
+) -> bool {
+    let Some(mut interface) = links.values().find(|e| e.if_name == forwarding_if_name) else {
+        warn!("forwarding interface {forwarding_if_name:?} not found, filtering skipped");
+        return false;
+    };
+
+    // select other veth pair endpoint if current endpoint is not connected to the bridge
+    if interface.link_kind.as_deref() == Some("veth")
+        && interface.bridge_if_index.is_none()
+        && let Some(pair_if_index) = interface.link_if_index
+        && let Some(pair_interface) = links.get(&pair_if_index)
+    {
+        interface = pair_interface;
+    }
+
+    // find interface bridge
+    let bridge = if interface.link_kind.as_deref() == Some("bridge") {
+        interface
+    } else if let Some(bridge_if_index) = interface.bridge_if_index
+        && let Some(bridge) = links.get(&(bridge_if_index as i32))
+    {
+        bridge
+    } else {
+        return false;
+    };
+
+    debug!("filtering interfaces by {:?} Linux bridge", bridge.if_name);
+    let bridge_if_index = bridge.if_index as u32;
+    links.retain(|_, e| {
+        e.if_name == forwarding_if_name || e.bridge_if_index == Some(bridge_if_index)
+    });
+    true
 }
 
 #[derive(Debug)]
@@ -181,6 +277,8 @@ struct LinkInterfaceInfo {
     if_index: i32,
     if_name: String,
     if_flags: Iff,
+    link_kind: Option<String>,
+    link_if_index: Option<i32>,
     bridge_if_index: Option<u32>,
     vlan_id: Option<u16>,
     link_stats: Option<RtnlLinkStats64>,
@@ -220,28 +318,40 @@ async fn call_rt_get_links() -> anyhow::Result<IndexMap<i32, LinkInterfaceInfo>>
         };
 
         let mut vlan_id = None;
-        if let Ok(link_info) = attr_handle.get_nested_attributes(Ifla::Linkinfo) {
-            match link_info.get_attr_payload_as_with_len_borrowed::<&[u8]>(IflaInfo::Kind) {
-                Ok(b"veth\0") => continue,
-                Ok(b"vlan\0") => {
-                    if let Ok(data) = link_info.get_nested_attributes(IflaInfo::Data) {
-                        vlan_id = data.get_attr_payload_as(IflaVlan::Id).ok();
-                    }
-                }
-                _ => {}
+        let mut link_kind = None;
+        if let Ok(link_info) = attr_handle.get_nested_attributes(Ifla::Linkinfo)
+            && let Ok(kind) = link_info.get_attr_payload_as_with_len::<String>(IflaInfo::Kind)
+        {
+            link_kind = Some(kind.clone()).filter(|s| !s.is_empty());
+
+            if kind.as_str() == "vlan"
+                && let Ok(data) = link_info.get_nested_attributes(IflaInfo::Data)
+            {
+                vlan_id = data.get_attr_payload_as(IflaVlan::Id).ok();
             }
         }
 
         let if_flags = *payload.ifi_flags();
         let if_index = *payload.ifi_index();
+        let link_if_index = attr_handle.get_attr_payload_as(Ifla::Link).ok();
         let bridge_if_index = attr_handle.get_attr_payload_as(Ifla::Master).ok();
         let link_stats = get_link_stats(&attr_handle);
+        trace!(
+            if_name = %if_name,
+            if_index,
+            ?link_kind,
+            ?link_if_index,
+            ?bridge_if_index,
+            "parsed link interface",
+        );
 
         let interface_info = LinkInterfaceInfo {
             mac: MacAddr::from(mac),
             if_index,
             if_name,
             if_flags,
+            link_kind,
+            link_if_index,
             bridge_if_index,
             vlan_id,
             link_stats,
@@ -371,12 +481,13 @@ pub async fn call_rt_remove_address_v6(if_index: u32, address: Ipv6Addr) -> anyh
 
 async fn get_wireless_interfaces(
     links: &mut IndexMap<i32, LinkInterfaceInfo>,
-) -> anyhow::Result<Vec<Ieee1905LocalInterface>> {
+) -> anyhow::Result<(Vec<WirelessRadioBss>, Vec<Ieee1905LocalInterface>)> {
     let (router, _) = NlRouter::connect(NlFamily::Generic, None, Groups::empty()).await?;
     let nl80211_family = router.resolve_genl_family(NL80211_GENL_NAME).await?;
 
     let interfaces = call_nl80211_get_interfaces(&router, nl80211_family).await?;
     let phy_map = call_nl80211_get_wiphy(&router, nl80211_family).await?;
+    let radios = build_wireless_radios(&phy_map, &interfaces);
 
     let mut result = Vec::new();
     for interface in interfaces {
@@ -436,7 +547,101 @@ async fn get_wireless_interfaces(
         };
         result.push(local_interface);
     }
-    Ok(result)
+    Ok((radios, result))
+}
+
+fn build_wireless_radios(
+    phy_map: &IndexMap<u32, WirelessPhyInfo>,
+    interfaces: &[WirelessInterfaceInfo],
+) -> Vec<WirelessRadioBss> {
+    // group operational AP BSSes by phy + frequency
+    let mut radios = IndexMap::<(u32, u32), WirelessRadioBss>::new();
+    for interface in interfaces.iter() {
+        if interface.if_type != Some(Nl80211IfType::Ap)
+            || interface.frequency == 0
+            || !interface.mlo_links.is_empty()
+        {
+            continue;
+        }
+        radios
+            .entry((interface.phy_index, interface.frequency))
+            .or_default()
+            .bss_list
+            .push(WirelessBssInfo {
+                if_name: interface.if_name.clone(),
+                bssid: interface.mac,
+                ssid: interface.ssid.clone().unwrap_or_default(),
+            });
+    }
+
+    // collect MLD mlo_link interfaces
+    for interface in interfaces.iter() {
+        if interface.if_type != Some(Nl80211IfType::Ap) {
+            continue;
+        }
+        for mlo_link in interface.mlo_links.iter() {
+            let radio = radios
+                .entry((interface.phy_index, mlo_link.frequency))
+                .or_default();
+
+            radio.radio_unique_id = mlo_link.mac;
+            radio.bss_list.push(WirelessBssInfo {
+                if_name: interface.if_name.clone(),
+                bssid: mlo_link.mac,
+                ssid: interface.ssid.clone().unwrap_or_default(),
+            });
+        }
+    }
+
+    // count how many radios each phy contains
+    let mut radios_per_phy = IndexMap::<u32, usize>::new();
+    for (phy_index, _freq) in radios.keys() {
+        *radios_per_phy.entry(*phy_index).or_default() += 1;
+    }
+
+    // helper closure to find wifi interface parent radio by name (wifi0.1 -> wifi0)
+    let find_parent_wifi_radio_mac = |if_name: &str| {
+        let interface = interfaces.iter().find(|interface| {
+            if_name
+                .strip_prefix(&interface.if_name)
+                .and_then(|e| e.chars().next())
+                .is_some_and(|e| !e.is_ascii_alphanumeric())
+        })?;
+        Some(interface.mac)
+    };
+
+    // helper closure to get radio uid from phy when only one radio-per-phy is present
+    let find_radio_uid_from_phy = |phy_index: u32| {
+        if radios_per_phy.get(&phy_index).copied() != Some(1) {
+            return None;
+        }
+        phy_map.get(&phy_index).and_then(|phy| phy.perm_addr)
+    };
+
+    // building final BSS configuration collection
+    let mut result = Vec::new();
+    for ((phy_index, _frequency), mut radio) in radios {
+        let Some(bss0) = radio.bss_list.first() else {
+            continue;
+        };
+
+        if radio.radio_unique_id.is_zero() {
+            radio.radio_unique_id = find_radio_uid_from_phy(phy_index)
+                .or_else(|| {
+                    let list = radio.bss_list.iter();
+                    list.filter_map(|e| find_parent_wifi_radio_mac(&e.if_name))
+                        .next()
+                })
+                .or_else(|| radio.bss_list.iter().map(|e| e.bssid).min())
+                .unwrap_or(bss0.bssid);
+        }
+
+        radio.bss_list.sort_by_key(|e| e.bssid);
+        result.push(radio);
+    }
+
+    result.sort_by_key(|e| e.radio_unique_id);
+    result
 }
 
 #[derive(Debug)]
@@ -446,10 +651,18 @@ struct WirelessInterfaceInfo {
     if_index: i32,
     if_name: String,
     if_type: Option<Nl80211IfType>,
+    ssid: Option<Vec<u8>>,
+    mlo_links: Vec<WirelessInterfaceMloLink>,
     frequency: u32,
     channel_width: Option<Nl80211ChannelWidth>,
     center_freq_index1: Option<u8>,
     center_freq_index2: Option<u8>,
+}
+
+#[derive(Debug)]
+struct WirelessInterfaceMloLink {
+    mac: MacAddr,
+    frequency: u32,
 }
 
 async fn call_nl80211_get_interfaces(
@@ -501,10 +714,28 @@ async fn call_nl80211_get_interfaces(
         };
 
         let if_type = handle.get_attr_payload_as(Nl80211Attribute::IfType).ok();
+        let ssid = handle.get_attr_payload_as_with_len(Nl80211Attribute::Ssid);
         let frequency = handle.get_attr_payload_as(Nl80211Attribute::WiphyFreq);
         let channel_width = handle.get_attr_payload_as(Nl80211Attribute::ChannelWidth);
         let center_freq1 = handle.get_attr_payload_as(Nl80211Attribute::CenterFreq1);
         let center_freq2 = handle.get_attr_payload_as(Nl80211Attribute::CenterFreq2);
+
+        let mut mlo_links = Vec::new();
+        if let Ok(links) = handle.get_nested_attributes::<u16>(Nl80211Attribute::MloLinks) {
+            for link in links.iter() {
+                let Ok(link_handle) = link.get_attr_handle::<Nl80211Attribute>() else {
+                    continue;
+                };
+
+                let link_mac = link_handle.get_attr_payload_as::<[u8; 6]>(Nl80211Attribute::Mac);
+                let link_frequency = link_handle.get_attr_payload_as(Nl80211Attribute::WiphyFreq);
+
+                mlo_links.push(WirelessInterfaceMloLink {
+                    mac: link_mac.unwrap_or_default().into(),
+                    frequency: link_frequency.unwrap_or(0),
+                });
+            }
+        }
 
         interfaces.push(WirelessInterfaceInfo {
             mac: MacAddr::from(mac),
@@ -512,6 +743,8 @@ async fn call_nl80211_get_interfaces(
             if_index,
             if_name,
             if_type,
+            ssid: ssid.ok(),
+            mlo_links,
             frequency: frequency.unwrap_or(0),
             channel_width: channel_width.ok(),
             center_freq_index1: center_freq1.ok().and_then(get_wifi_center_frequency_index),
@@ -629,6 +862,7 @@ async fn call_nl80211_get_survey(
 
 #[derive(Debug, Default)]
 struct WirelessPhyInfo {
+    perm_addr: Option<MacAddr>,
     bands: IndexMap<Nl80211Band, WirelessPhyBand>,
 }
 
@@ -678,6 +912,17 @@ async fn call_nl80211_get_wiphy(
         let handle = payload.attrs().get_attr_handle();
         let index = handle.get_attr_payload_as::<u32>(Nl80211Attribute::Wiphy)?;
         let phy = result.entry(index).or_insert_with(WirelessPhyInfo::default);
+
+        // The wiphy permanent MAC (perm_addr) is reported as NL80211_ATTR_MAC in
+        // the GetWiphy dump on Linux >= 5.4 (in any chunk of the split dump; the
+        // kernel emits it unconditionally, so all-zero values must be skipped).
+        if phy.perm_addr.is_none()
+            && let Ok(mac) = handle.get_attr_payload_as::<[u8; 6]>(Nl80211Attribute::Mac)
+            && let mac = MacAddr::from(mac)
+            && mac != MacAddr::zero()
+        {
+            phy.perm_addr = Some(mac);
+        }
 
         let bands = handle.get_nested_attributes::<Nl80211Band>(Nl80211Attribute::WiphyBands);
         for band in bands.ok().iter().flat_map(|e| e.iter()) {
@@ -894,6 +1139,48 @@ async fn call_netdev_get_ethernet_interfaces() -> anyhow::Result<Vec<EthernetInt
     Ok(result)
 }
 
+async fn call_ovs_interface_to_bridge(if_name: &str) -> anyhow::Result<String> {
+    debug!("ovs-vsctl iface-to-br {if_name}");
+
+    let output = tokio::process::Command::new("ovs-vsctl")
+        .args(["--timeout=5", "--", "iface-to-br", if_name])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("ovs-vsctl iface-to-br {if_name} failed: {stderr}");
+    }
+
+    let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    debug!("ovs-vsctl iface-to-br {if_name} -> {result:?}");
+    Ok(result)
+}
+
+async fn call_ovs_list_bridge_interfaces(bridge_name: &str) -> anyhow::Result<IndexSet<String>> {
+    debug!("ovs-vsctl list-ifaces {bridge_name}");
+
+    let output = tokio::process::Command::new("ovs-vsctl")
+        .args(["--timeout=5", "--", "list-ifaces", bridge_name])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("ovs-vsctl list-ifaces {bridge_name} failed: {stderr}");
+    }
+
+    let result = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .collect();
+
+    debug!("ovs-vsctl list-ifaces {bridge_name} -> {result:?}");
+    Ok(result)
+}
+
 fn get_link_stats(handle: &RtAttrHandle<Ifla>) -> Option<RtnlLinkStats64> {
     if let Ok(stats) = handle.get_attr_payload_as_with_len_borrowed::<&[u8]>(Ifla::Stats64) {
         unsafe {
@@ -1040,15 +1327,15 @@ fn convert_if_type_to_role(if_type: Option<Nl80211IfType>, frequency: u32) -> Op
     Some(match if_type? {
         Nl80211IfType::Station => {
             if frequency > 57_000 {
-                0b1010
+                MediaTypeSpecialInfoWifi::ROLE_802_11AD_PCP
             } else {
-                0b0100
+                MediaTypeSpecialInfoWifi::ROLE_NO_AD_NO_PCP_STATION
             }
         }
-        Nl80211IfType::Ap => 0b0000,
-        Nl80211IfType::ApVlan => 0b0000,
-        Nl80211IfType::P2pClient => 0b1000,
-        Nl80211IfType::P2pGo => 0b1001,
+        Nl80211IfType::Ap => MediaTypeSpecialInfoWifi::ROLE_AP,
+        Nl80211IfType::ApVlan => MediaTypeSpecialInfoWifi::ROLE_AP,
+        Nl80211IfType::P2pClient => MediaTypeSpecialInfoWifi::ROLE_P2P_CLIENT,
+        Nl80211IfType::P2pGo => MediaTypeSpecialInfoWifi::ROLE_P2P_GROUP_OWNER,
         _ => return None,
     })
 }
