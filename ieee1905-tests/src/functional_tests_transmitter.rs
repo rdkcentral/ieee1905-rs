@@ -26,6 +26,7 @@ use ieee1905::registration_codec::{
 };
 use ieee1905::sdu_codec::SDU;
 use ieee1905::tlv_cmdu_codec::TLVTrait;
+use ieee1905::topology_cli::TopologyCli;
 use ieee1905::topology_manager::{Ieee1905DeviceData, TopologyDatabase, UpdateType};
 use pnet::datalink::*;
 use std::process::exit;
@@ -2128,7 +2129,7 @@ async fn test1(
     let topology_db = topology_ui.then(|| {
         let topology_db =
             TopologyDatabase::get_instance(reg_resp.al_mac_address_local, interface_name);
-        tokio::task::spawn(topology_db.clone().start_topology_cli());
+        tokio::task::spawn(TopologyCli::start(topology_db.clone()));
         topology_db
     });
 
@@ -2679,7 +2680,7 @@ async fn test2_common_without_breaking_connection(
                                     rr.al_mac_address_local,
                                     interface_name,
                                 );
-                                tokio::task::spawn(db.clone().start_topology_cli());
+                                tokio::task::spawn(TopologyCli::start(db.clone()));
                                 topology_db = Some(db);
                             }
                             reg_resp = Some(rr);
@@ -2822,7 +2823,7 @@ async fn test3_breaking_connection(
                                     rr.al_mac_address_local,
                                     interface_name,
                                 );
-                                tokio::task::spawn(db.clone().start_topology_cli());
+                                tokio::task::spawn(TopologyCli::start(db.clone()));
                                 topology_db = Some(db);
                             }
                             reg_resp = Some(rr);
@@ -3002,7 +3003,7 @@ async fn test4_break_connection_and_receive(
                                     rr.al_mac_address_local,
                                     interface_name,
                                 );
-                                tokio::task::spawn(db.clone().start_topology_cli());
+                                tokio::task::spawn(TopologyCli::start(db.clone()));
                                 topology_db = Some(db);
                             }
                             reg_resp = Some(rr);
@@ -3105,7 +3106,7 @@ async fn test5_ap_autoconfig_request_loop(
     let reg_resp = register(&mut framed_control_socket).await?;
     let topology_db = topology_ui.then(|| {
         let db = TopologyDatabase::get_instance(reg_resp.al_mac_address_local, interface_name);
-        tokio::task::spawn(db.clone().start_topology_cli());
+        tokio::task::spawn(TopologyCli::start(db.clone()));
         db
     });
 
@@ -3153,7 +3154,7 @@ async fn test7_rogue_agent_malformed_searched_role_loop(
     let reg_resp = register(&mut framed_control_socket).await?;
     let topology_db = topology_ui.then(|| {
         let db = TopologyDatabase::get_instance(reg_resp.al_mac_address_local, interface_name);
-        tokio::task::spawn(db.clone().start_topology_cli());
+        tokio::task::spawn(TopologyCli::start(db.clone()));
         db
     });
 
@@ -3176,7 +3177,9 @@ async fn test7_rogue_agent_malformed_searched_role_loop(
         {
             Ok(Ok(())) => println!("ROGUE_AGENT: baseline AP autoconfig response received"),
             Ok(Err(e)) => println!("ROGUE_AGENT: baseline response validation failed: {e:?}"),
-            Err(_) => println!("ROGUE_AGENT: timed out waiting for baseline AP autoconfig response"),
+            Err(_) => {
+                println!("ROGUE_AGENT: timed out waiting for baseline AP autoconfig response")
+            }
         }
 
         message_id = if message_id == u16::MAX {
@@ -3251,7 +3254,7 @@ async fn test8_rogue_agent_fast_malformed_searched_role_loop(
     let reg_resp = register(&mut framed_control_socket).await?;
     let topology_db = topology_ui.then(|| {
         let db = TopologyDatabase::get_instance(reg_resp.al_mac_address_local, interface_name);
-        tokio::task::spawn(db.clone().start_topology_cli());
+        tokio::task::spawn(TopologyCli::start(db.clone()));
         db
     });
 
@@ -3322,7 +3325,9 @@ async fn test8_rogue_agent_fast_malformed_searched_role_loop(
         )
         .await
         {
-            Ok(Ok(())) => println!("ROGUE_AGENT_FAST: unexpectedly received AP autoconfig response"),
+            Ok(Ok(())) => {
+                println!("ROGUE_AGENT_FAST: unexpectedly received AP autoconfig response")
+            }
             Ok(Err(e)) => {
                 tracing::debug!(error = ?e, "ROGUE_AGENT_FAST: response validation failed")
             }
@@ -3353,7 +3358,7 @@ async fn test6_ap_autoconfig_request_with_traffic_loop(
     let reg_resp = register(&mut framed_control_socket).await?;
     let topology_db = topology_ui.then(|| {
         let db = TopologyDatabase::get_instance(reg_resp.al_mac_address_local, interface_name);
-        tokio::task::spawn(db.clone().start_topology_cli());
+        tokio::task::spawn(TopologyCli::start(db.clone()));
         db
     });
 

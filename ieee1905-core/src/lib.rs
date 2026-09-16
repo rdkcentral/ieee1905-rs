@@ -41,6 +41,9 @@ pub mod tlv_cmdu_codec;
 pub mod tlv_lldpdu_codec;
 pub mod topology_manager;
 
+#[cfg(feature = "topology_ui")]
+pub mod topology_cli;
+
 #[cfg(feature = "rbus")]
 pub mod rbus;
 

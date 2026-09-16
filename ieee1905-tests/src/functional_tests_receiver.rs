@@ -27,6 +27,7 @@ use ieee1905::registration_codec::{
 };
 use ieee1905::sdu_codec::SDU;
 use ieee1905::tlv_cmdu_codec::TLVTrait;
+use ieee1905::topology_cli::TopologyCli;
 use ieee1905::topology_manager::{Ieee1905DeviceData, TopologyDatabase, UpdateType};
 use std::process::exit;
 use std::sync::Arc;
@@ -341,7 +342,7 @@ pub async fn run_with_config(
     let topology_db = topology_ui.then(|| {
         let topology_db =
             TopologyDatabase::get_instance(reg_resp.al_mac_address_local, interface_name);
-        tokio::task::spawn(topology_db.clone().start_topology_cli());
+        tokio::task::spawn(TopologyCli::start(topology_db.clone()));
         topology_db
     });
 
