@@ -287,11 +287,7 @@ async fn main() -> anyhow::Result<()> {
 
     #[cfg(feature = "topology_ui")]
     if cli.topology_ui {
-        join_set.spawn(async move {
-            if let Err(e) = topology_db.start_topology_cli().await {
-                tracing::error!("topology_cli failed: {e}");
-            }
-        });
+        join_set.spawn(ieee1905::topology_cli::TopologyCli::start(topology_db));
     }
 
     join_set.join_next().await;
