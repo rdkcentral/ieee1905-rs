@@ -27,7 +27,7 @@ use pnet::datalink::{self, Channel::Ethernet, Config};
 use pnet::packet::Packet;
 use pnet::packet::ethernet::EthernetPacket;
 use pnet::util::MacAddr;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::io::ErrorKind;
 use std::time::Duration;
@@ -57,7 +57,6 @@ pub struct EthernetReceiver {
 
 struct EthernetMessage {
     interface_mac: MacAddr,
-    ether_type: u16,
     payload: Vec<u8>,
     source_mac: MacAddr,
     destination_mac: MacAddr,
@@ -148,25 +147,20 @@ impl EthernetReceiver {
             ..Default::default()
         };
 
-        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(128);
         let mut datalink_rx = match datalink::channel(&interface, config) {
             Ok(Ethernet(_, rx)) => rx,
             Ok(_) => bail!("Unsupported channel type"),
             Err(e) => bail!("Failed to create datalink channel: {e}"),
         };
 
-        // Only EtherTypes with a subscribed observer can ever be dispatched,
-        // so anything else is dropped before the expensive payload copy.
-        let subscribed_ether_types: HashSet<u16> = self.observers.keys().copied().collect();
-
-        let name = format!("eth_recv/{interface_name}/block");
+        let name = format!("eth_recv/{interface_name}");
         spawn_join_set_blocking_named(name, &mut self.join_set, move || {
             let _span = info_span!(parent: None, "ethernet_receiver_reader", task = next_task_id())
                 .entered();
 
             info!("Listening for Ethernet frames...");
             let mut retry_timeout = Self::RETRY_TIMEOUT_MIN;
-            while !notify_tx.is_closed() {
+            while self.observers.values().any(|e| !e.is_closed()) {
                 let packet = match datalink_rx.next() {
                     Ok(e) => {
                         retry_timeout = Self::RETRY_TIMEOUT_MIN;
@@ -188,32 +182,15 @@ impl EthernetReceiver {
                 };
 
                 let ether_type = eth_packet.get_ethertype().0;
-                if !subscribed_ether_types.contains(&ether_type) {
+                let Entry::Occupied(observer) = self.observers.entry(ether_type) else {
                     continue;
-                }
+                };
 
                 let message = EthernetMessage {
                     interface_mac,
-                    ether_type,
                     payload: eth_packet.payload().to_vec(),
                     source_mac: eth_packet.get_source(),
                     destination_mac: eth_packet.get_destination(),
-                };
-
-                if notify_tx.blocking_send(message).is_err() {
-                    warn!("Packet dropped: failed to send to async observer handler");
-                }
-            }
-        });
-
-        // TODO this intermediate channel is not needed and can be removed
-        let span = info_span!(parent: None, "eth_recv_intermediate", task = next_task_id());
-        let name = format!("eth_recv/{interface_name}");
-        spawn_join_set_named(name, Some(span), &mut self.join_set, async move {
-            while let Some(message) = notify_rx.recv().await {
-                let ether_type = message.ether_type;
-                let Some(observer) = self.observers.get(&ether_type) else {
-                    continue;
                 };
 
                 debug!(
@@ -224,10 +201,11 @@ impl EthernetReceiver {
                     "Received Ethernet frame"
                 );
 
-                if observer.send(message).await.is_ok() {
-                    debug!("Notified observer for EtherType: 0x{ether_type:04X}");
+                if let Err(e) = observer.get().blocking_send(message) {
+                    observer.remove();
+                    error!(%e, "Failed to notify observer for EtherType: 0x{ether_type:04X}");
                 } else {
-                    error!("Failed to notify observer for EtherType: 0x{ether_type:04X}");
+                    debug!("Notified observer for EtherType: 0x{ether_type:04X}");
                 }
             }
         });
