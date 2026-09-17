@@ -102,8 +102,5 @@ yarn.lock
 !ieee1905-tests/Dockerfile
 !ieee1905-tests/docker-compose.yaml
 
-# Ignore .dockignore files
-.dockerignore
-
 # Ignore lgs folder
 logs/
