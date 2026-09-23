@@ -1,12 +1,18 @@
 # Build Stage
-FROM rust:alpine AS builder
+FROM rust:1-bookworm AS builder
 
 # Build deps (bindgen needs libclang)
-RUN apk add --no-cache musl-dev openssl-dev pkgconfig build-base clang llvm-dev clang-dev
+RUN apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
+    build-essential \
+    libclang-dev \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Enable tokio-console support
 ENV RUSTFLAGS="--cfg tokio_unstable"
-ENV LIBCLANG_PATH="/usr/lib"
+ENV LIBCLANG_PATH="/usr/lib/llvm-14/lib"
 
 # Install tokio-console (optional, but you were using it)
 RUN cargo install tokio-console
@@ -22,13 +28,15 @@ RUN cargo build --release -p ieee1905 \
     && cargo build --release -p ieee1905-tests --bin ieee1905-test-node
 
 # Runtime Stage
-FROM alpine:latest
+FROM debian:bookworm-slim
 
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     htop \
-    libgcc \
-    libstdc++ \
-    openssl
+    libgcc-s1 \
+    libstdc++6 \
+    openssl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
