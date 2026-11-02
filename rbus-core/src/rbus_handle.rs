@@ -9,7 +9,7 @@ pub use element::*;
 pub use error::*;
 use rbus_sys::*;
 pub use status::*;
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
 
@@ -306,15 +306,15 @@ impl Drop for RBusHandle {
 }
 
 ///
-/// Table row name
+/// Table row name with owned strings that remain valid after the iterator is dropped.
 ///
-pub struct RBusRowName<'a> {
+pub struct RBusRowName {
     /// Instance number of the row
     pub instance: u32,
     /// Fully qualified row name
-    pub name: &'a CStr,
+    pub name: CString,
     /// Alias of the row.
-    pub alias: Option<&'a CStr>,
+    pub alias: Option<CString>,
 }
 
 ///
@@ -336,7 +336,7 @@ impl<'a> Drop for RBusRowNameIter<'a> {
 }
 
 impl<'a> Iterator for RBusRowNameIter<'a> {
-    type Item = RBusRowName<'a>;
+    type Item = RBusRowName;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.head.is_null() {
@@ -347,10 +347,10 @@ impl<'a> Iterator for RBusRowNameIter<'a> {
             let head = &*self.head;
             self.head = head.next;
 
-            let name = CStr::from_ptr(head.name);
+            let name = CStr::from_ptr(head.name).to_owned();
             let alias = match head.alias.is_null() {
                 true => None,
-                false => Some(CStr::from_ptr(head.alias)),
+                false => Some(CStr::from_ptr(head.alias).to_owned()),
             };
 
             Some(RBusRowName {
