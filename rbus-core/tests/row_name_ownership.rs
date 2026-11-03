@@ -1,15 +1,23 @@
-use anyhow::{Context, ensure};
-use rbus_core::{RBusDataElement, RBusHandle, RBusLibrary, RBusStatus};
+use anyhow::Context;
+use rbus_core::{RBusDataElement, RBusHandle, RBusLibrary, RBusOpenError, RBusStatus};
 use std::ffi::CString;
 
 // Requires librbus and a running broker; use Valgrind to detect invalid reads.
 #[test]
 fn collected_row_names_survive_iterator_drop() -> anyhow::Result<()> {
-    let library = RBusLibrary::load().context("load librbus and its native dependencies")?;
-    ensure!(
-        library.check_status() == RBusStatus::Enabled,
-        "RBus must be enabled and its broker running"
-    );
+    let library = match RBusLibrary::load() {
+        Ok(e) => e,
+        Err(RBusOpenError::NotAvailable) => {
+            eprintln!("library is not available, test ignored");
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    let status = library.check_status();
+    if status != RBusStatus::Enabled {
+        anyhow::bail!("RBus is not enabled: {status:?}");
+    }
 
     let component = CString::new(format!("Device.RowNameOwnershipTest{}", std::process::id()))?;
     let table = CString::new(format!("{}.Rows.", component.to_str()?))?;
