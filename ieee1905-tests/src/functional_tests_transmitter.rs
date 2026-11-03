@@ -2619,13 +2619,13 @@ async fn read_and_compare_data_named(
 async fn close_control_connection(
     framed_control_socket: &mut Framed<UnixStream, LengthDelimitedCodec>,
 ) {
-    let _ = framed_control_socket.flush().await;
-    let _ = framed_control_socket.close().await;
+    let _ = futures::SinkExt::<Bytes>::flush(framed_control_socket).await;
+    let _ = futures::SinkExt::<Bytes>::close(framed_control_socket).await;
 }
 
 async fn close_data_connection(framed_data_socket: &mut Framed<UnixStream, LengthDelimitedCodec>) {
-    let _close = framed_data_socket.flush().await;
-    let _close = framed_data_socket.close().await;
+    let _close = futures::SinkExt::<Bytes>::flush(framed_data_socket).await;
+    let _close = futures::SinkExt::<Bytes>::close(framed_data_socket).await;
 }
 
 // Common case: Connect -> Register -> Send data

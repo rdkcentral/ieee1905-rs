@@ -149,8 +149,8 @@ impl CmduReassembler {
 pub mod tests {
     use super::*;
     use crate::cmdu::TLV;
-    use crate::cmdu_codec::tests::make_dummy_cmdu;
     use crate::cmdu_codec::MessageVersion;
+    use crate::cmdu_codec::tests::make_dummy_cmdu;
     use tokio::time::sleep;
     use tracing::{error, trace};
 
