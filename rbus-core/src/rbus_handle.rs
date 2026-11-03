@@ -9,7 +9,8 @@ pub use element::*;
 pub use error::*;
 use rbus_sys::*;
 pub use status::*;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
+use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
 
@@ -269,16 +270,15 @@ impl RBusHandle {
     /// # Arguments
     /// * `table_name` - The name of a table (e.g. "Device.IP.Interface.")
     ///
-    pub fn get_table_row_names(&self, table_name: &CStr) -> Result<RBusRowNameIter<'_>, RBusError> {
+    pub fn get_table_row_names(&self, table_name: &CStr) -> Result<RBusRowNames<'_>, RBusError> {
         let mut row_info = std::ptr::null_mut();
         let library = self.library.as_raw();
         let result = unsafe {
             library.rbusTable_getRowNames(self.handle, table_name.as_ptr(), &mut row_info)
         };
-        RBusError::map(result, || RBusRowNameIter {
+        RBusError::map(result, || RBusRowNames {
             handle: self,
             root: row_info,
-            head: row_info,
         })
     }
 
@@ -305,28 +305,31 @@ impl Drop for RBusHandle {
     }
 }
 
-///
-/// Table row name with owned strings that remain valid after the iterator is dropped.
-///
-pub struct RBusRowName {
+pub struct RBusRowName<'a> {
     /// Instance number of the row
     pub instance: u32,
     /// Fully qualified row name
-    pub name: CString,
+    pub name: &'a CStr,
     /// Alias of the row.
-    pub alias: Option<CString>,
+    pub alias: Option<&'a CStr>,
 }
 
-///
-/// Iterator over table rows
-///
-pub struct RBusRowNameIter<'a> {
+pub struct RBusRowNames<'a> {
     handle: &'a RBusHandle,
     root: *mut rbusRowName_t,
-    head: *mut rbusRowName_t,
 }
 
-impl<'a> Drop for RBusRowNameIter<'a> {
+impl RBusRowNames<'_> {
+    /// Iterate over borrowed rows.
+    pub fn iter(&self) -> RBusRowNameIter<'_> {
+        RBusRowNameIter {
+            head: self.root,
+            phantom_data: PhantomData,
+        }
+    }
+}
+
+impl Drop for RBusRowNames<'_> {
     fn drop(&mut self) {
         unsafe {
             let library = self.handle.library.as_raw();
@@ -335,22 +338,28 @@ impl<'a> Drop for RBusRowNameIter<'a> {
     }
 }
 
+pub struct RBusRowNameIter<'a> {
+    head: *mut rbusRowName_t,
+    phantom_data: PhantomData<&'a rbusRowName_t>,
+}
+
 impl<'a> Iterator for RBusRowNameIter<'a> {
-    type Item = RBusRowName;
+    type Item = RBusRowName<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.head.is_null() {
             return None;
         }
 
+        // SAFETY: the collection keeps the list and strings valid for 'a.
         unsafe {
             let head = &*self.head;
             self.head = head.next;
 
-            let name = CStr::from_ptr(head.name).to_owned();
+            let name = CStr::from_ptr(head.name);
             let alias = match head.alias.is_null() {
                 true => None,
-                false => Some(CStr::from_ptr(head.alias).to_owned()),
+                false => Some(CStr::from_ptr(head.alias)),
             };
 
             Some(RBusRowName {
