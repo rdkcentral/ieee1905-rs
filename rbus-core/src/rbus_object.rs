@@ -2,7 +2,7 @@ use crate::rbus_library::RBusLibrary;
 use crate::rbus_property::RBusProperty;
 use crate::{RBusProperties, RBusValue};
 use rbus_sys::*;
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 
 pub struct RBusObject {
     pub(super) handle: rbusObject_t,
@@ -27,14 +27,14 @@ impl RBusObject {
     ///
     /// Get the name of the object.
     ///
-    pub fn get_name(&self) -> &CStr {
+    pub fn get_name(&self) -> CString {
         let library = self.library.as_raw();
         unsafe {
             let ptr = library.rbusObject_GetName(self.handle);
             if ptr.is_null() {
-                return c"";
+                return CString::default();
             }
-            CStr::from_ptr(ptr)
+            CStr::from_ptr(ptr).to_owned()
         }
     }
 

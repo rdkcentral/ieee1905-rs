@@ -77,7 +77,8 @@ impl RBusDataElementGet for RBusProviderGetter {
             return Err(RBusError::InvalidHandle);
         };
 
-        let path = property.get_name().to_bytes().into();
+        let name = property.get_name();
+        let path = name.to_bytes().into();
         instance.invoke_get(property, path)
     }
 }
