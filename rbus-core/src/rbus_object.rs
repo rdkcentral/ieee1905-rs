@@ -1,6 +1,6 @@
-use crate::RBusValue;
 use crate::rbus_library::RBusLibrary;
 use crate::rbus_property::RBusProperty;
+use crate::{RBusProperties, RBusValue};
 use rbus_sys::*;
 use std::ffi::CStr;
 
@@ -60,12 +60,14 @@ impl RBusObject {
 
     ///
     /// Get the property list of an object.
+    /// Returns an empty collection if the object has no properties.
+    /// The collection retains ownership of the list independently of the object.
     ///
-    pub fn get_properties(&self) -> RBusProperty {
+    pub fn get_properties(&self) -> RBusProperties {
         let library = self.library.as_raw();
         unsafe {
             let handle = library.rbusObject_GetProperties(self.handle);
-            RBusProperty::retain(&self.library, handle)
+            RBusProperties::retain(&self.library, handle)
         }
     }
 
