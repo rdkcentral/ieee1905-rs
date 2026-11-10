@@ -19,9 +19,35 @@ impl RBusValueGetError {
         match error {
             rbusValueError_t::RBUS_VALUE_ERROR_SUCCESS => Ok(success),
             rbusValueError_t::RBUS_VALUE_ERROR_TYPE => Err(Self::BadType),
-            rbusValueError_t::RBUS_VALUE_ERROR_NOT_FOUND => Err(Self::BadType),
-            rbusValueError_t::RBUS_VALUE_ERROR_NULL => Err(Self::BadType),
+            rbusValueError_t::RBUS_VALUE_ERROR_NOT_FOUND => Err(Self::NotFound),
+            rbusValueError_t::RBUS_VALUE_ERROR_NULL => Err(Self::Null),
             e => Err(Self::Unexpected(e)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn value_errors_preserve_native_categories() {
+        for (native, expected) in [
+            (rbusValueError_t::RBUS_VALUE_ERROR_SUCCESS, Ok(())),
+            (
+                rbusValueError_t::RBUS_VALUE_ERROR_TYPE,
+                Err(RBusValueGetError::BadType),
+            ),
+            (
+                rbusValueError_t::RBUS_VALUE_ERROR_NOT_FOUND,
+                Err(RBusValueGetError::NotFound),
+            ),
+            (
+                rbusValueError_t::RBUS_VALUE_ERROR_NULL,
+                Err(RBusValueGetError::Null),
+            ),
+        ] {
+            assert_eq!(RBusValueGetError::map(native, ()), expected, "{native:?}");
         }
     }
 }
