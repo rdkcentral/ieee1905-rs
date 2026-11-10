@@ -3,7 +3,7 @@ use crate::rbus_value::RBusValue;
 use crate::{RBusObject, RBusValueGetError, RBusValueReadable, RBusValueWritable};
 use rbus_sys::*;
 use std::cmp::Ordering;
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::mem::ManuallyDrop;
 
 pub struct RBusProperty {
@@ -39,14 +39,14 @@ impl RBusProperty {
     ///
     /// Get the name of a property.
     ///
-    pub fn get_name(&self) -> &CStr {
+    pub fn get_name(&self) -> CString {
         let library = self.library.as_raw();
         unsafe {
             let ptr = library.rbusProperty_GetName(self.handle);
             if ptr.is_null() {
-                return c"";
+                return CString::default();
             }
-            CStr::from_ptr(ptr)
+            CStr::from_ptr(ptr).to_owned()
         }
     }
 
