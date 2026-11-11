@@ -20,14 +20,14 @@ impl RBusValueReadable for String {
                 return result;
             }
 
-            if ptr.is_null() {
-                return rbusValueError_t::RBUS_VALUE_ERROR_SUCCESS;
-            }
+            this.clear();
 
-            let slice = std::slice::from_raw_parts(ptr.cast(), len as usize);
-            match String::from_utf8_lossy(slice) {
-                Cow::Owned(e) => *this = e,
-                Cow::Borrowed(e) => this.push_str(e),
+            if !ptr.is_null() {
+                let slice = std::slice::from_raw_parts(ptr.cast(), len as usize);
+                match String::from_utf8_lossy(slice) {
+                    Cow::Owned(e) => *this = e,
+                    Cow::Borrowed(e) => this.push_str(e),
+                }
             }
         }
         rbusValueError_t::RBUS_VALUE_ERROR_SUCCESS
@@ -80,3 +80,62 @@ define!(u32, rbusValue_GetUInt32Ex);
 define!(u64, rbusValue_GetUInt64Ex);
 define!(f32, rbusValue_GetSingleEx);
 define!(f64, rbusValue_GetDoubleEx);
+
+#[cfg(test)]
+mod tests {
+    use crate::{RBusLibrary, RBusOpenError, RBusValue, RBusValueGetError};
+
+    // Requires librbus, but no running broker.
+    fn load_library() -> anyhow::Result<Option<RBusLibrary>> {
+        match RBusLibrary::load() {
+            Ok(library) => Ok(Some(library)),
+            Err(RBusOpenError::NotAvailable) => {
+                eprintln!("library is not available, test ignored");
+                Ok(None)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    #[test]
+    fn string_reads_replace_destination() -> anyhow::Result<()> {
+        let Some(library) = load_library()? else {
+            return Ok(());
+        };
+
+        let null_string = RBusValue::new(&library);
+        // Native RBus allows a string value with a null buffer.
+        unsafe {
+            library
+                .as_raw()
+                .rbusValue_SetString(null_string.handle, std::ptr::null());
+        }
+        for (value, expected) in [
+            (RBusValue::from(&library, "new"), "new"),
+            (RBusValue::from(&library, "été"), "été"),
+            (RBusValue::from(&library, ""), ""),
+            (RBusValue::from(&library, b"\xff".as_slice()), "�"),
+            (null_string, ""),
+        ] {
+            let mut target = String::from("old");
+            for _ in 0..2 {
+                value.get_into(&mut target)?;
+                assert_eq!(target, expected);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn string_read_error_preserves_destination() -> anyhow::Result<()> {
+        let Some(library) = load_library()? else {
+            return Ok(());
+        };
+
+        let value = RBusValue::from(&library, &42_i32);
+        let mut target = String::from("old");
+        assert_eq!(value.get_into(&mut target), Err(RBusValueGetError::BadType));
+        assert_eq!(target, "old");
+        Ok(())
+    }
+}
