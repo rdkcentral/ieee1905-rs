@@ -1,5 +1,6 @@
 mod element;
 mod error;
+mod name;
 mod status;
 
 use crate::rbus_library::RBusLibrary;
@@ -7,6 +8,7 @@ use crate::rbus_value::RBusValue;
 use crate::{RBusValueReadable, RBusValueWritable};
 pub use element::*;
 pub use error::*;
+use name::RBusHandleName;
 use rbus_sys::*;
 pub use status::*;
 use std::ffi::CStr;
@@ -20,6 +22,7 @@ use std::os::raw::{c_char, c_int};
 pub struct RBusHandle {
     pub(crate) handle: rbusHandle_t,
     pub(crate) library: RBusLibrary,
+    _name_reservation: Option<RBusHandleName>,
 }
 
 unsafe impl Send for RBusHandle {}
@@ -33,8 +36,9 @@ impl RBusHandle {
     /// calls this API will establish a new socket connection to the bus broker.
     /// All calls to this API will receive a dedicated bus handle for that component.
     ///
-    /// If a component calls this API more than once, any previous busHandle and all
-    /// previous data element registrations will be canceled.
+    /// Opening a component name that is already in use returns
+    /// RBusError::ComponentNameDuplication without closing the existing connection.
+    /// The name can be reused after its handle is dropped.
     ///
     /// Note: This API supports a single component per software process and also
     /// supports multiple components that share a software process. In the case of
@@ -46,12 +50,14 @@ impl RBusHandle {
     /// Used by: All RBus components to begin a connection with the bus.
     ///
     pub fn open(library: &RBusLibrary, name: &CStr) -> Result<Self, RBusError> {
+        let reserved_name = RBusHandleName::reserve(name)?;
         let mut handle = rbusHandle_t::default();
         let result = unsafe { library.as_raw().rbus_open(&mut handle, name.as_ptr()) };
 
         RBusError::map(result, || Self {
             handle,
             library: library.clone(),
+            _name_reservation: Some(reserved_name),
         })
     }
 
@@ -294,7 +300,11 @@ impl RBusHandle {
         F: FnOnce(&Self) -> Result<T, RBusError>,
     {
         let library = RBusLibrary::load().map_err(|_| RBusError::GeneralError)?;
-        let handle = ManuallyDrop::new(Self { handle, library });
+        let handle = ManuallyDrop::new(Self {
+            handle,
+            library,
+            _name_reservation: None,
+        });
         f(&handle)
     }
 }
