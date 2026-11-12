@@ -1,6 +1,6 @@
 use rbus_core::{RBusLibrary, RBusObject, RBusOpenError, RBusProperty, RBusValue};
 
-fn load_library() -> anyhow::Result<Option<RBusLibrary>> {
+fn load_library() -> anyhow::Result<Option<&'static RBusLibrary>> {
     match RBusLibrary::load() {
         Ok(library) => Ok(Some(library)),
         Err(RBusOpenError::NotAvailable) => {
@@ -14,12 +14,12 @@ fn load_library() -> anyhow::Result<Option<RBusLibrary>> {
 // Requires librbus, but no running broker. Run under Valgrind to detect UAFs.
 #[test]
 fn object_name_survives_renaming_and_drop() -> anyhow::Result<()> {
-    let Some(library) = load_library()? else {
+    let Some(_library) = load_library()? else {
         return Ok(());
     };
 
     for original in [c"Device.Original", c"", c"Device.\xff"] {
-        let object = RBusObject::new(&library, original);
+        let object = RBusObject::new(original)?;
         let alias = object.clone();
         let name = object.get_name();
 
@@ -43,13 +43,13 @@ fn object_name_survives_renaming_and_drop() -> anyhow::Result<()> {
 
 #[test]
 fn property_name_survives_renaming_and_drop() -> anyhow::Result<()> {
-    let Some(library) = load_library()? else {
+    let Some(_library) = load_library()? else {
         return Ok(());
     };
 
-    let value = RBusValue::new(&library);
+    let value = RBusValue::new()?;
     for original in [c"Device.Original", c"", c"Device.\xff"] {
-        let property = RBusProperty::new(&library, original, &value);
+        let property = RBusProperty::new(original, &value)?;
         let alias = property.clone();
         let name = property.get_name();
 

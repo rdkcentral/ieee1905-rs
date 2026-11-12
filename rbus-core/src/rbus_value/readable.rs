@@ -1,4 +1,4 @@
-use crate::RBusValue;
+use crate::{RBusLibrary, RBusValue};
 use rbus_sys::*;
 use std::borrow::Cow;
 
@@ -14,7 +14,7 @@ impl RBusValueReadable for String {
         let mut len = 0;
         let mut ptr = std::ptr::null();
         unsafe {
-            let library = value.library.as_raw();
+            let library = RBusLibrary::get();
             let result = library.rbusValue_GetStringEx(value.handle, &mut ptr, &mut len);
             if result != rbusValueError_t::RBUS_VALUE_ERROR_SUCCESS {
                 return result;
@@ -42,7 +42,7 @@ impl RBusValueReadable for Vec<u8> {
         let mut len = 0;
         let mut ptr = std::ptr::null();
         unsafe {
-            let library = value.library.as_raw();
+            let library = RBusLibrary::get();
             let result = library.rbusValue_GetBytesEx(value.handle, &mut ptr, &mut len);
             if result != rbusValueError_t::RBUS_VALUE_ERROR_SUCCESS {
                 return result;
@@ -62,7 +62,7 @@ macro_rules! define {
     ($kind:ty, $get_func:ident) => {
         impl RBusValueReadable for $kind {
             fn get(this: &mut Self, value: &RBusValue) -> rbusValueError_t {
-                let library = value.library.as_raw();
+                let library = RBusLibrary::get();
                 unsafe { library.$get_func(value.handle, this) }
             }
         }
@@ -86,7 +86,7 @@ mod tests {
     use crate::{RBusLibrary, RBusOpenError, RBusValue, RBusValueGetError};
 
     // Requires librbus, but no running broker.
-    fn load_library() -> anyhow::Result<Option<RBusLibrary>> {
+    fn load_library() -> anyhow::Result<Option<&'static RBusLibrary>> {
         match RBusLibrary::load() {
             Ok(library) => Ok(Some(library)),
             Err(RBusOpenError::NotAvailable) => {
@@ -99,22 +99,20 @@ mod tests {
 
     #[test]
     fn string_reads_replace_destination() -> anyhow::Result<()> {
-        let Some(library) = load_library()? else {
+        let Some(_library) = load_library()? else {
             return Ok(());
         };
 
-        let null_string = RBusValue::new(&library);
+        let null_string = RBusValue::new()?;
         // Native RBus allows a string value with a null buffer.
         unsafe {
-            library
-                .as_raw()
-                .rbusValue_SetString(null_string.handle, std::ptr::null());
+            RBusLibrary::get().rbusValue_SetString(null_string.handle, std::ptr::null());
         }
         for (value, expected) in [
-            (RBusValue::from(&library, "new"), "new"),
-            (RBusValue::from(&library, "été"), "été"),
-            (RBusValue::from(&library, ""), ""),
-            (RBusValue::from(&library, b"\xff".as_slice()), "�"),
+            (RBusValue::from("new")?, "new"),
+            (RBusValue::from("été")?, "été"),
+            (RBusValue::from("")?, ""),
+            (RBusValue::from(b"\xff".as_slice())?, "�"),
             (null_string, ""),
         ] {
             let mut target = String::from("old");
@@ -128,11 +126,11 @@ mod tests {
 
     #[test]
     fn string_read_error_preserves_destination() -> anyhow::Result<()> {
-        let Some(library) = load_library()? else {
+        let Some(_library) = load_library()? else {
             return Ok(());
         };
 
-        let value = RBusValue::from(&library, &42_i32);
+        let value = RBusValue::from(&42_i32)?;
         let mut target = String::from("old");
         assert_eq!(value.get_into(&mut target), Err(RBusValueGetError::BadType));
         assert_eq!(target, "old");

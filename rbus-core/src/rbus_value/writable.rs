@@ -1,4 +1,4 @@
-use crate::RBusValue;
+use crate::{RBusLibrary, RBusValue};
 use std::os::raw::c_int;
 
 pub trait RBusValueWritable {
@@ -11,7 +11,7 @@ pub trait RBusValueWritable {
 impl RBusValueWritable for str {
     fn set(this: &Self, value: &RBusValue) {
         let string = format!("{this}\0");
-        let library = value.library.as_raw();
+        let library = RBusLibrary::get();
         unsafe { library.rbusValue_SetString(value.handle, string.as_ptr().cast()) }
     }
 }
@@ -30,7 +30,7 @@ impl RBusValueWritable for String {
 ///
 impl RBusValueWritable for [u8] {
     fn set(this: &Self, value: &RBusValue) {
-        let library = value.library.as_raw();
+        let library = RBusLibrary::get();
         unsafe { library.rbusValue_SetBytes(value.handle, this.as_ptr(), this.len() as c_int) }
     }
 }
@@ -51,7 +51,7 @@ macro_rules! define {
     ($kind:ty, $set_func:ident) => {
         impl RBusValueWritable for $kind {
             fn set(this: &Self, value: &RBusValue) {
-                let library = value.library.as_raw();
+                let library = RBusLibrary::get();
                 unsafe { library.$set_func(value.handle, *this) };
             }
         }

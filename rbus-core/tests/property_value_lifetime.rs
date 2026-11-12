@@ -24,7 +24,7 @@ impl RBusValueReadable for ReplaceDuringRead {
 // Requires librbus, but no broker; use Valgrind to detect invalid reads and leaks.
 #[test]
 fn property_value_survives_replacement_during_conversion() -> anyhow::Result<()> {
-    let library = match RBusLibrary::load() {
+    let _library = match RBusLibrary::load() {
         Ok(library) => library,
         Err(RBusOpenError::NotAvailable) => {
             eprintln!("library is not available, test ignored");
@@ -34,11 +34,7 @@ fn property_value_survives_replacement_during_conversion() -> anyhow::Result<()>
     };
 
     // Dropping the temporary leaves the property as the value's only owner.
-    let property = RBusProperty::new(
-        &library,
-        c"test.value-lifetime",
-        &RBusValue::from(&library, &1_i32),
-    );
+    let property = RBusProperty::new(c"test.value-lifetime", &RBusValue::from(&1_i32)?)?;
     PROPERTY_TO_REPLACE.with(|slot| {
         *slot.borrow_mut() = Some(property.clone());
     });

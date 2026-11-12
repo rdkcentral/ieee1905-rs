@@ -11,11 +11,11 @@ pub struct RBusProperties {
 }
 
 impl RBusProperties {
-    pub(crate) fn retain(library: &RBusLibrary, handle: rbusProperty_t) -> Self {
+    pub(crate) fn retain(handle: rbusProperty_t) -> Self {
         let head = if handle.is_null() {
             None
         } else {
-            Some(RBusProperty::retain(library, handle))
+            Some(RBusProperty::retain(handle))
         };
         Self { head }
     }
@@ -53,14 +53,9 @@ impl Iterator for RBusPropertyIter {
         let property = self.next.take()?;
         // SAFETY: `property` owns a reference to this non-null native node,
         // which owns its next link. Retain that link before yielding the node.
-        let handle = unsafe {
-            property
-                .library
-                .as_raw()
-                .rbusProperty_GetNext(property.handle)
-        };
+        let handle = unsafe { RBusLibrary::get().rbusProperty_GetNext(property.handle) };
         if !handle.is_null() {
-            self.next = Some(RBusProperty::retain(&property.library, handle));
+            self.next = Some(RBusProperty::retain(handle));
         }
         Some(property)
     }

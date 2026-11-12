@@ -1,7 +1,7 @@
 use rbus_core::{RBusLibrary, RBusObject, RBusOpenError, RBusProperties, RBusProperty, RBusValue};
 
 // These tests require librbus, but no broker. Run under Valgrind to check native lifetimes.
-fn load_library() -> anyhow::Result<Option<RBusLibrary>> {
+fn load_library() -> anyhow::Result<Option<&'static RBusLibrary>> {
     match RBusLibrary::load() {
         Ok(library) => Ok(Some(library)),
         Err(RBusOpenError::NotAvailable) => {
@@ -12,21 +12,15 @@ fn load_library() -> anyhow::Result<Option<RBusLibrary>> {
     }
 }
 
-fn object_with_properties(library: &RBusLibrary) -> RBusObject {
-    let object = RBusObject::new(library, c"test.properties");
-    let first = RBusProperty::new(library, c"first", &RBusValue::from(library, &1_i32));
-    first.append_property(&RBusProperty::new(
-        library,
-        c"second",
-        &RBusValue::from(library, &2_i32),
-    ));
-    first.append_property(&RBusProperty::new(
-        library,
-        c"third",
-        &RBusValue::from(library, &3_i32),
-    ));
+fn object_with_properties() -> anyhow::Result<RBusObject> {
+    let object = RBusObject::new(c"test.properties")?;
+    let first = RBusProperty::new(c"first", &RBusValue::from(&1_i32)?)?;
+    let second = RBusProperty::new(c"second", &RBusValue::from(&2_i32)?)?;
+    let third = RBusProperty::new(c"third", &RBusValue::from(&3_i32)?)?;
+    first.append_property(&second);
+    first.append_property(&third);
     object.set_properties(&first);
-    object
+    Ok(object)
 }
 
 fn assert_original_properties(properties: &RBusProperties) -> anyhow::Result<()> {
@@ -44,10 +38,10 @@ fn assert_original_properties(properties: &RBusProperties) -> anyhow::Result<()>
 
 #[test]
 fn empty_object_returns_empty_collection() -> anyhow::Result<()> {
-    let Some(library) = load_library()? else {
+    let Some(_library) = load_library()? else {
         return Ok(());
     };
-    let object = RBusObject::new(&library, c"test.empty");
+    let object = RBusObject::new(c"test.empty")?;
     let properties = object.get_properties();
     drop(object);
 
@@ -60,10 +54,10 @@ fn empty_object_returns_empty_collection() -> anyhow::Result<()> {
 
 #[test]
 fn properties_iterate_in_native_order_and_can_be_revisited() -> anyhow::Result<()> {
-    let Some(library) = load_library()? else {
+    let Some(_library) = load_library()? else {
         return Ok(());
     };
-    let object = object_with_properties(&library);
+    let object = object_with_properties()?;
     let properties = object.get_properties();
 
     assert_original_properties(&properties)?;
@@ -73,16 +67,15 @@ fn properties_iterate_in_native_order_and_can_be_revisited() -> anyhow::Result<(
 
 #[test]
 fn collection_survives_list_replacement_and_object_drop() -> anyhow::Result<()> {
-    let Some(library) = load_library()? else {
+    let Some(_library) = load_library()? else {
         return Ok(());
     };
-    let object = object_with_properties(&library);
+    let object = object_with_properties()?;
     let properties = object.get_properties();
     object.set_properties(&RBusProperty::new(
-        &library,
         c"replacement",
-        &RBusValue::from(&library, &4_i32),
-    ));
+        &RBusValue::from(&4_i32)?,
+    )?);
     assert_eq!(
         object.get_properties().iter().next().unwrap().get_name(),
         c"replacement"
@@ -94,10 +87,10 @@ fn collection_survives_list_replacement_and_object_drop() -> anyhow::Result<()> 
 
 #[test]
 fn returned_properties_survive_collection_and_iterator_drop() -> anyhow::Result<()> {
-    let Some(library) = load_library()? else {
+    let Some(_library) = load_library()? else {
         return Ok(());
     };
-    let object = object_with_properties(&library);
+    let object = object_with_properties()?;
     let properties: Vec<_> = object.get_properties().iter().collect();
     drop(object);
 
@@ -111,10 +104,10 @@ fn returned_properties_survive_collection_and_iterator_drop() -> anyhow::Result<
 
 #[test]
 fn iterator_survives_collection_and_object_drop() -> anyhow::Result<()> {
-    let Some(library) = load_library()? else {
+    let Some(_library) = load_library()? else {
         return Ok(());
     };
-    let object = object_with_properties(&library);
+    let object = object_with_properties()?;
     let mut iter = object.get_properties().iter();
     drop(object);
 
@@ -130,10 +123,10 @@ fn iterator_survives_collection_and_object_drop() -> anyhow::Result<()> {
 
 #[test]
 fn iterator_retains_cursor_when_alias_replaces_next_property() -> anyhow::Result<()> {
-    let Some(library) = load_library()? else {
+    let Some(_library) = load_library()? else {
         return Ok(());
     };
-    let object = object_with_properties(&library);
+    let object = object_with_properties()?;
     let alias = object.clone();
     let properties = object.get_properties();
     let mut iter = properties.iter();
@@ -142,11 +135,7 @@ fn iterator_retains_cursor_when_alias_replaces_next_property() -> anyhow::Result
     drop(first);
 
     // Unlink the iterator's cursor from the list through another object wrapper.
-    alias.set_property(&RBusProperty::new(
-        &library,
-        c"second",
-        &RBusValue::from(&library, &20_i32),
-    ));
+    alias.set_property(&RBusProperty::new(c"second", &RBusValue::from(&20_i32)?)?);
     assert_eq!(
         alias
             .get_property(c"second")

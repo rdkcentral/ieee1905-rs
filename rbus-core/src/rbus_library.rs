@@ -6,19 +6,13 @@ use std::os::raw::{c_char, c_int};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use thiserror::Error;
 
-#[derive(Clone)]
-#[repr(transparent)]
 pub struct RBusLibrary {
-    inner: Arc<RBusLibraryInner>,
-}
-
-struct RBusLibraryInner {
     handle: RBusLibraryRaw,
     reserved_component_names: Mutex<HashSet<Arc<CStr>>>,
 }
 
 pub(crate) struct RBusComponentNameReservation {
-    library: RBusLibrary,
+    library: &'static RBusLibrary,
     component_name: Arc<CStr>,
 }
 
@@ -30,19 +24,18 @@ impl Drop for RBusComponentNameReservation {
     }
 }
 
+static LIBRARY: OnceLock<Result<RBusLibrary, RBusOpenError>> = OnceLock::new();
+
 impl RBusLibrary {
-    /// Dynamically load RBus library
-    pub fn load() -> Result<Self, RBusOpenError> {
-        static CELL: OnceLock<Result<RBusLibrary, RBusOpenError>> = OnceLock::new();
-        let library = CELL.get_or_init(|| {
+    /// Dynamically load the shared RBus library once for the lifetime of the process.
+    pub fn load() -> Result<&'static Self, RBusOpenError> {
+        let library = LIBRARY.get_or_init(|| {
             for library_name in ["librbus.so.0", "librbus.so"] {
                 match unsafe { RBusLibraryRaw::new(library_name) } {
                     Ok(e) => {
                         return Ok(RBusLibrary {
-                            inner: Arc::new(RBusLibraryInner {
-                                handle: e,
-                                reserved_component_names: Mutex::new(HashSet::new()),
-                            }),
+                            handle: e,
+                            reserved_component_names: Mutex::new(HashSet::new()),
                         });
                     }
                     Err(rbus_sys::libloading::Error::DlOpen { .. }) => continue,
@@ -52,7 +45,7 @@ impl RBusLibrary {
             }
             Err(RBusOpenError::NotAvailable)
         });
-        library.clone()
+        library.as_ref().map_err(Clone::clone)
     }
 
     ///
@@ -61,7 +54,7 @@ impl RBusLibrary {
     /// Used by: Components that uses rbus-provider to register events, tables and parameters.
     ///
     pub fn check_status(&self) -> RBusStatus {
-        let raw = unsafe { self.as_raw().rbus_checkStatus() };
+        let raw = unsafe { self.handle.rbus_checkStatus() };
         RBusStatus::from_raw(raw)
     }
 
@@ -103,16 +96,12 @@ impl RBusLibrary {
             });
         }
 
-        let result = unsafe { self.as_raw().rbus_registerLogHandler(Some(log::<T>)) };
+        let result = unsafe { self.handle.rbus_registerLogHandler(Some(log::<T>)) };
         RBusError::map(result, || ())
     }
 
-    pub(crate) fn as_raw(&self) -> &RBusLibraryRaw {
-        &self.inner.handle
-    }
-
     pub(crate) fn reserve_component_name(
-        &self,
+        &'static self,
         component_name: &CStr,
     ) -> Result<RBusComponentNameReservation, RBusError> {
         let mut component_names = self.reserved_component_names();
@@ -123,16 +112,25 @@ impl RBusLibrary {
         let component_name = Arc::<CStr>::from(component_name);
         component_names.insert(component_name.clone());
         Ok(RBusComponentNameReservation {
-            library: self.clone(),
+            library: self,
             component_name,
         })
     }
 
     fn reserved_component_names(&self) -> MutexGuard<'_, HashSet<Arc<CStr>>> {
-        self.inner
-            .reserved_component_names
+        self.reserved_component_names
             .lock()
             .unwrap_or_else(|error| error.into_inner())
+    }
+
+    /// Native wrappers can only be created after successful initialization.
+    pub(crate) fn get() -> &'static RBusLibraryRaw {
+        &LIBRARY
+            .get()
+            .expect("RBus library has not been initialized")
+            .as_ref()
+            .expect("RBus library initialization failed")
+            .handle
     }
 }
 

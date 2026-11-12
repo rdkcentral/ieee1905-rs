@@ -39,8 +39,8 @@ impl RBusProvider {
         F: FnOnce() -> T,
         T: RBusProviderElement,
     {
-        let library = RBusLibrary::load()?;
-        let handle = RBusHandle::open(&library, name)?;
+        RBusLibrary::load()?;
+        let handle = RBusHandle::open(name)?;
 
         let mut root_element = builder();
         let mut data_elements = RBusProviderElements::default();

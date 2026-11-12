@@ -49,7 +49,7 @@ fn test_properties() -> anyhow::Result<()> {
         anyhow::bail!("RBus is not enabled: {status:?}");
     }
 
-    let bus = RBusHandle::open(&library, ROOT_NAME)?;
+    let bus = RBusHandle::open(ROOT_NAME)?;
     let property = RBusDataElement::property_rw::<TestProperty>(TEST_VALUE);
 
     bus.register_data_elements(&[property])?;

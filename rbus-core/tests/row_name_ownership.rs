@@ -25,7 +25,7 @@ fn collected_row_names_survive_iterator_drop() -> anyhow::Result<()> {
     let expected_name = format!("{}1", table.to_str()?);
     let expected_alias = c"ownership-test-row";
 
-    let bus = RBusHandle::open(&library, &component).context("open test component")?;
+    let bus = RBusHandle::open(&component).context("open test component")?;
     bus.register_data_elements(&[RBusDataElement::table(&element)])
         .context("register test table")?;
     bus.register_table_row(&table, 1, Some(expected_alias))
