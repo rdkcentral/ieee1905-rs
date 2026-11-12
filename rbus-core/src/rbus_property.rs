@@ -4,7 +4,6 @@ use crate::{RBusObject, RBusValueGetError, RBusValueReadable, RBusValueWritable}
 use rbus_sys::*;
 use std::cmp::Ordering;
 use std::ffi::{CStr, CString};
-use std::mem::ManuallyDrop;
 
 pub struct RBusProperty {
     pub(super) handle: rbusProperty_t,
@@ -67,13 +66,7 @@ impl RBusProperty {
     where
         T: RBusValueReadable,
     {
-        let library = self.library.as_raw();
-        let handle = unsafe { library.rbusProperty_GetValue(self.handle) };
-        let handle = ManuallyDrop::new(RBusValue {
-            handle,
-            library: self.library.clone(),
-        });
-        handle.get()
+        self.get_value().get()
     }
 
     ///
