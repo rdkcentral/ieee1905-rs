@@ -4,9 +4,43 @@ use crate::{RBusObject, RBusValueGetError, RBusValueReadable, RBusValueWritable}
 use rbus_sys::*;
 use std::cmp::Ordering;
 use std::ffi::{CStr, CString};
+use std::ops::Deref;
 
+/// An owning reference to a native property.
+/// Dereferences to [`RBusPropertyRef`] for property operations.
+/// Cloning retains native ownership; dropping releases it.
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
 pub struct RBusProperty {
-    pub(super) handle: rbusProperty_t,
+    inner: RBusPropertyRef,
+}
+
+///
+/// Operations on a property, borrowed as `&RBusPropertyRef`.
+/// [`crate::RBusProperty`] retains and releases ownership of the native property.
+/// Callback-local instances drop their `RBusLibrary` field normally without
+/// releasing the native property. This type cannot be cloned or copied out of
+/// a borrow.
+///
+/// ```compile_fail,E0597
+/// use rbus_core::{RBusLibrary, RBusProperty, RBusValue};
+/// fn example(library: &RBusLibrary) {
+///     let borrowed: &rbus_core::RBusPropertyRef = {
+///         let value = RBusValue::from(library, &42_i32);
+///         let owner = RBusProperty::new(library, c"borrowed-property", &value);
+///         &owner
+///     };
+///     borrowed.get_name();
+/// }
+/// ```
+///
+/// ```compile_fail,E0507
+/// use rbus_core::RBusPropertyRef;
+/// fn take_property(property: &RBusPropertyRef) -> RBusPropertyRef {
+///     *property
+/// }
+/// ```
+pub struct RBusPropertyRef {
+    pub(crate) handle: rbusProperty_t,
     pub(crate) library: RBusLibrary,
 }
 
@@ -20,8 +54,10 @@ impl RBusProperty {
             library_raw.rbusProperty_Init(std::ptr::null_mut(), name.as_ptr(), value.handle)
         };
         Self {
-            handle,
-            library: library.clone(),
+            inner: RBusPropertyRef {
+                handle,
+                library: library.clone(),
+            },
         }
     }
 
@@ -29,6 +65,23 @@ impl RBusProperty {
         unsafe {
             library.as_raw().rbusProperty_Retain(handle);
         }
+        Self {
+            inner: RBusPropertyRef {
+                handle,
+                library: library.clone(),
+            },
+        }
+    }
+}
+
+impl RBusPropertyRef {
+    ///
+    /// Wrap a callback property without retaining its native ownership.
+    ///
+    /// # Safety
+    /// The property must remain valid while this wrapper or any reference to it is used.
+    ///
+    pub(crate) unsafe fn from_raw(library: &RBusLibrary, handle: rbusProperty_t) -> Self {
         Self {
             handle,
             library: library.clone(),
@@ -113,7 +166,7 @@ impl RBusProperty {
     ///
     /// Set the property of a property.
     ///
-    pub fn set_property(&self, value: &RBusProperty) {
+    pub fn set_property(&self, value: &RBusPropertyRef) {
         let library = self.library.as_raw();
         unsafe {
             library.rbusProperty_SetProperty(self.handle, value.handle);
@@ -121,9 +174,9 @@ impl RBusProperty {
     }
 
     ///
-    /// Append a property to the end of a property list.  
+    /// Append a property to the end of a property list.
     ///
-    pub fn append_property(&self, value: &RBusProperty) {
+    pub fn append_property(&self, value: &RBusPropertyRef) {
         let library = self.library.as_raw();
         unsafe {
             library.rbusProperty_Append(self.handle, value.handle);
@@ -131,37 +184,47 @@ impl RBusProperty {
     }
 }
 
+impl Deref for RBusProperty {
+    type Target = RBusPropertyRef;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
 impl Drop for RBusProperty {
     fn drop(&mut self) {
-        let library = self.library.as_raw();
+        let library = self.inner.library.as_raw();
         unsafe {
-            library.rbusProperty_Release(self.handle);
+            library.rbusProperty_Release(self.inner.handle);
         }
     }
 }
 
 impl Clone for RBusProperty {
     fn clone(&self) -> Self {
-        let library = self.library.as_raw();
+        let library = self.inner.library.as_raw();
         unsafe {
-            library.rbusProperty_Retain(self.handle);
+            library.rbusProperty_Retain(self.inner.handle);
         }
         Self {
-            handle: self.handle,
-            library: self.library.clone(),
+            inner: RBusPropertyRef {
+                handle: self.inner.handle,
+                library: self.inner.library.clone(),
+            },
         }
     }
 }
 
-impl Eq for RBusProperty {}
+impl Eq for RBusPropertyRef {}
 
-impl PartialEq for RBusProperty {
+impl PartialEq for RBusPropertyRef {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other).is_eq()
     }
 }
 
-impl Ord for RBusProperty {
+impl Ord for RBusPropertyRef {
     fn cmp(&self, other: &Self) -> Ordering {
         let library = self.library.as_raw();
         let result = unsafe { library.rbusProperty_Compare(self.handle, other.handle) };
@@ -175,7 +238,7 @@ impl Ord for RBusProperty {
     }
 }
 
-impl PartialOrd for RBusProperty {
+impl PartialOrd for RBusPropertyRef {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }

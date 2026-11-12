@@ -5,7 +5,7 @@ use crate::element::{
 };
 use crate::{IntoCowBStr, join_path};
 use bstr::BStr;
-use rbus_core::{RBusError, RBusProperty};
+use rbus_core::{RBusError, RBusPropertyRef};
 use std::borrow::Cow;
 use std::ffi::CString;
 
@@ -92,7 +92,7 @@ where
 /// Arguments used when handling property getter
 ///
 pub struct RBusProviderGetterArgs<'a, UserData> {
-    pub property: &'a RBusProperty,
+    pub property: &'a RBusPropertyRef,
     pub path_name: &'a BStr,
     pub path_full: &'a BStr,
     pub path_chunks: &'a [&'a BStr],
