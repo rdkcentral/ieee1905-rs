@@ -40,7 +40,11 @@ fn duplicate_component_is_rejected_and_name_can_be_reused() -> anyhow::Result<()
     first.register_data_elements(&[element])?;
     assert_eq!(first.get::<i32>(&property)?, 42);
     assert!(matches!(
-        RBusHandle::open(&library, &name),
+        RBusHandle::open(&library.clone(), &name),
+        Err(RBusError::ComponentNameDuplication)
+    ));
+    assert!(matches!(
+        RBusHandle::open(&RBusLibrary::load()?, &name),
         Err(RBusError::ComponentNameDuplication)
     ));
     assert_eq!(first.get::<i32>(&property)?, 42);

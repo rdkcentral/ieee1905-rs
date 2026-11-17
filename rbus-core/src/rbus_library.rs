@@ -1,14 +1,33 @@
 use crate::{RBusError, RBusStatus};
 use rbus_sys::{RBusLibraryRaw, rbusLogLevel_t};
+use std::collections::HashSet;
 use std::ffi::{CStr, c_uint};
 use std::os::raw::{c_char, c_int};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use thiserror::Error;
 
 #[derive(Clone)]
 #[repr(transparent)]
 pub struct RBusLibrary {
-    handle: Arc<RBusLibraryRaw>,
+    inner: Arc<RBusLibraryInner>,
+}
+
+struct RBusLibraryInner {
+    handle: RBusLibraryRaw,
+    reserved_component_names: Mutex<HashSet<Arc<CStr>>>,
+}
+
+pub(crate) struct RBusComponentNameReservation {
+    library: RBusLibrary,
+    component_name: Arc<CStr>,
+}
+
+impl Drop for RBusComponentNameReservation {
+    fn drop(&mut self) {
+        self.library
+            .reserved_component_names()
+            .remove(self.component_name.as_ref());
+    }
 }
 
 impl RBusLibrary {
@@ -20,7 +39,10 @@ impl RBusLibrary {
                 match unsafe { RBusLibraryRaw::new(library_name) } {
                     Ok(e) => {
                         return Ok(RBusLibrary {
-                            handle: Arc::new(e),
+                            inner: Arc::new(RBusLibraryInner {
+                                handle: e,
+                                reserved_component_names: Mutex::new(HashSet::new()),
+                            }),
                         });
                     }
                     Err(rbus_sys::libloading::Error::DlOpen { .. }) => continue,
@@ -39,7 +61,7 @@ impl RBusLibrary {
     /// Used by: Components that uses rbus-provider to register events, tables and parameters.
     ///
     pub fn check_status(&self) -> RBusStatus {
-        let raw = unsafe { self.handle.rbus_checkStatus() };
+        let raw = unsafe { self.as_raw().rbus_checkStatus() };
         RBusStatus::from_raw(raw)
     }
 
@@ -81,12 +103,36 @@ impl RBusLibrary {
             });
         }
 
-        let result = unsafe { self.handle.rbus_registerLogHandler(Some(log::<T>)) };
+        let result = unsafe { self.as_raw().rbus_registerLogHandler(Some(log::<T>)) };
         RBusError::map(result, || ())
     }
 
     pub(crate) fn as_raw(&self) -> &RBusLibraryRaw {
-        &self.handle
+        &self.inner.handle
+    }
+
+    pub(crate) fn reserve_component_name(
+        &self,
+        component_name: &CStr,
+    ) -> Result<RBusComponentNameReservation, RBusError> {
+        let mut component_names = self.reserved_component_names();
+        if component_names.contains(component_name) {
+            return Err(RBusError::ComponentNameDuplication);
+        }
+
+        let component_name = Arc::<CStr>::from(component_name);
+        component_names.insert(component_name.clone());
+        Ok(RBusComponentNameReservation {
+            library: self.clone(),
+            component_name,
+        })
+    }
+
+    fn reserved_component_names(&self) -> MutexGuard<'_, HashSet<Arc<CStr>>> {
+        self.inner
+            .reserved_component_names
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
     }
 }
 

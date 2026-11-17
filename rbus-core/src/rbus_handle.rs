@@ -1,14 +1,12 @@
 mod element;
 mod error;
-mod name;
 mod status;
 
-use crate::rbus_library::RBusLibrary;
+use crate::rbus_library::{RBusComponentNameReservation, RBusLibrary};
 use crate::rbus_value::RBusValue;
 use crate::{RBusValueReadable, RBusValueWritable};
 pub use element::*;
 pub use error::*;
-use name::RBusHandleName;
 use rbus_sys::*;
 pub use status::*;
 use std::ffi::CStr;
@@ -22,7 +20,7 @@ use std::os::raw::{c_char, c_int};
 pub struct RBusHandle {
     pub(crate) handle: rbusHandle_t,
     pub(crate) library: RBusLibrary,
-    _name_reservation: Option<RBusHandleName>,
+    _component_name_reservation: Option<RBusComponentNameReservation>,
 }
 
 unsafe impl Send for RBusHandle {}
@@ -50,14 +48,14 @@ impl RBusHandle {
     /// Used by: All RBus components to begin a connection with the bus.
     ///
     pub fn open(library: &RBusLibrary, name: &CStr) -> Result<Self, RBusError> {
-        let reserved_name = RBusHandleName::reserve(name)?;
+        let reserved_component_name = library.reserve_component_name(name)?;
         let mut handle = rbusHandle_t::default();
         let result = unsafe { library.as_raw().rbus_open(&mut handle, name.as_ptr()) };
 
         RBusError::map(result, || Self {
             handle,
             library: library.clone(),
-            _name_reservation: Some(reserved_name),
+            _component_name_reservation: Some(reserved_component_name),
         })
     }
 
@@ -303,7 +301,7 @@ impl RBusHandle {
         let handle = ManuallyDrop::new(Self {
             handle,
             library,
-            _name_reservation: None,
+            _component_name_reservation: None,
         });
         f(&handle)
     }
