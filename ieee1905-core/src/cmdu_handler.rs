@@ -1027,7 +1027,6 @@ mod tests {
     use crate::cmdu_codec::tests::make_dummy_cmdu;
     use crate::cmdu_message_id_generator::get_message_id_generator;
     use crate::cmdu_reassembler::CmduReassemblyError;
-    use crate::interface_manager::get_interface_info;
     use crate::interface_manager::get_local_al_mac;
     use tokio::sync::Mutex;
 
@@ -1288,12 +1287,7 @@ mod tests {
     async fn test_handle_cmdu_function_for_oversized_cmdu() {
         // Prepare forwarding interface
         let interface_name = "eth0".to_string();
-        let Some(forwarding_interface) = get_interface_info(&interface_name) else {
-            panic!("No Ethernet interface found for forwarding");
-        };
-
-        let forwarding_interface = &forwarding_interface.if_name;
-        tracing::info!("Forwarding interface: {forwarding_interface}");
+        let forwarding_interface = &interface_name;
 
         // Prepare sender
         let mutex_tx = Arc::new(Mutex::new(()));

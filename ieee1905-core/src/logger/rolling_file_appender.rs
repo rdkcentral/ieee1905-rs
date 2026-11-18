@@ -1,9 +1,9 @@
-use chrono::{DateTime, Datelike, Local, Timelike};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use time::OffsetDateTime;
 
 ///////////////////////////////////////////////////////////////////////////
 pub struct RollingFileAppender {
@@ -16,7 +16,7 @@ pub struct RollingFileAppender {
 }
 
 struct CurrentFile {
-    date: DateTime<Local>,
+    date: OffsetDateTime,
     writer: BufWriter<File>,
     bytes_written: usize,
 }
@@ -100,32 +100,29 @@ impl RollingFileAppender {
         files
     }
 
-    fn should_rollover(&self, file: &CurrentFile, now: &DateTime<Local>) -> bool {
-        file.bytes_written > self.max_file_size
-            || file.date.year() != now.year()
-            || file.date.month() != now.month()
-            || file.date.day() != now.day()
+    fn should_rollover(&self, file: &CurrentFile, now: OffsetDateTime) -> bool {
+        file.bytes_written > self.max_file_size || file.date.date() != now.date()
     }
 
-    fn format_file_name(&self, now: &DateTime<Local>) -> String {
+    fn format_file_name(&self, now: OffsetDateTime) -> String {
         format!(
             "{}{:04}{:02}{:02}_{:02}{:02}{:02}_{:03}{}",
             self.file_prefix,
             now.year(),
-            now.month(),
+            now.month() as u8,
             now.day(),
             now.hour(),
             now.minute(),
             now.second(),
-            now.timestamp_subsec_millis(),
+            now.millisecond(),
             self.file_suffix
         )
     }
 
     fn get_current_writer(&mut self) -> std::io::Result<&mut CurrentFile> {
-        let now = Local::now();
+        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
         if let Some(file) = self.current_file.take()
-            && !self.should_rollover(&file, &now)
+            && !self.should_rollover(&file, now)
         {
             return Ok(self.current_file.insert(file));
         }
@@ -133,7 +130,7 @@ impl RollingFileAppender {
         std::fs::create_dir_all(&self.folder)?;
         self.prune_old_logs();
 
-        let file_name = self.format_file_name(&now);
+        let file_name = self.format_file_name(now);
         let file_path = self.folder.join(file_name);
         let file = std::fs::OpenOptions::new()
             .create(true)
