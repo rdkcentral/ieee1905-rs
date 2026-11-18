@@ -1,6 +1,6 @@
 use bstr::BStr;
 use elements::RBusProviderElements;
-use rbus_core::{RBusError, RBusHandle, RBusProperty};
+use rbus_core::{RBusError, RBusHandleRef, RBusPropertyRef};
 use thiserror::Error;
 
 pub mod elements;
@@ -60,7 +60,7 @@ pub(crate) enum RBusProviderElementError {
 /// Arguments used by property getter handler
 ///
 pub(crate) struct RBusProviderGetterArgsInner<'a, UserData> {
-    pub property: &'a RBusProperty,
+    pub property: &'a RBusPropertyRef,
     pub path_full: &'a BStr,
     pub path_chunks: &'a [&'a BStr],
     pub table_idx: &'a mut Vec<u32>,
@@ -71,7 +71,7 @@ pub(crate) struct RBusProviderGetterArgsInner<'a, UserData> {
 /// Arguments used by table sync handler
 ///
 pub(crate) struct RBusProviderTableSyncArgsInner<'a, UserData> {
-    pub handle: &'a RBusHandle,
+    pub handle: &'a RBusHandleRef,
     pub path_full: &'a BStr,
     pub path_chunks: &'a [&'a BStr],
     pub table_idx: &'a mut Vec<u32>,

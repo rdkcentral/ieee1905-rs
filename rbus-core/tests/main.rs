@@ -10,7 +10,7 @@ struct TestProperty;
 static PROPERTY_VALUE: AtomicI32 = AtomicI32::new(42);
 
 impl RBusDataElementGet for TestProperty {
-    fn get(_handle: &RBusHandle, property: &RBusProperty) -> Result<(), RBusError> {
+    fn get(_handle: &RBusHandleRef, property: &RBusPropertyRef) -> Result<(), RBusError> {
         let raw = PROPERTY_VALUE.load(Ordering::Relaxed);
         println!("get_handler: {raw}");
 
@@ -20,8 +20,11 @@ impl RBusDataElementGet for TestProperty {
 }
 
 impl RBusDataElementSet for TestProperty {
-    fn set(_handle: &RBusHandle, property: &RBusProperty) -> Result<(), RBusError> {
+    fn set(_handle: &RBusHandleRef, property: &RBusPropertyRef) -> Result<(), RBusError> {
         let value = property.get::<i32>().unwrap();
+        if value < 0 {
+            return Err(RBusError::InvalidParameterValue);
+        }
 
         PROPERTY_VALUE.store(value, Ordering::Relaxed);
         println!("set_handler: {value}");
@@ -58,6 +61,12 @@ fn test_properties() -> anyhow::Result<()> {
     assert_eq!(get_al_mac(&bus)?, 2);
 
     set_al_mac(&bus, 3)?;
+    assert_eq!(get_al_mac(&bus)?, 3);
+
+    assert_eq!(
+        bus.set(TEST_VALUE, &-1_i32),
+        Err(RBusError::InvalidParameterValue)
+    );
     assert_eq!(get_al_mac(&bus)?, 3);
 
     Ok(())

@@ -1,10 +1,9 @@
-use crate::RBusHandle;
+use crate::RBusHandleRef;
 use crate::rbus_handle::RBusError;
-use crate::rbus_property::RBusProperty;
+use crate::rbus_property::RBusPropertyRef;
 use rbus_sys::*;
 use std::ffi::CStr;
 use std::marker::PhantomData;
-use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 
 ///
@@ -44,7 +43,7 @@ pub struct RBusDataElement<'a> {
 /// through this get handler.
 ///
 pub trait RBusDataElementGet {
-    fn get(handle: &RBusHandle, property: &RBusProperty) -> Result<(), RBusError>;
+    fn get(handle: &RBusHandleRef, property: &RBusPropertyRef) -> Result<(), RBusError>;
 }
 
 ///
@@ -60,7 +59,7 @@ pub trait RBusDataElementGet {
 /// of that property's value with the value contained within the property parameter.
 ///
 pub trait RBusDataElementSet {
-    fn set(handle: &RBusHandle, property: &RBusProperty) -> Result<(), RBusError>;
+    fn set(handle: &RBusHandleRef, property: &RBusPropertyRef) -> Result<(), RBusError>;
 }
 
 ///
@@ -74,7 +73,7 @@ pub trait RBusDataElementSet {
 /// * `table_name` - The name of a table (e.g. "Device.IP.Interface.")
 ///
 pub trait RBusTableSyncHandler {
-    fn sync_rows(handle: &RBusHandle, table_name: &CStr) -> Result<(), RBusError>;
+    fn sync_rows(handle: &RBusHandleRef, table_name: &CStr) -> Result<(), RBusError>;
 }
 
 ///
@@ -109,7 +108,7 @@ pub trait RBusDataElementRemoveRow {
     ///
     /// A provider must implement this handler to allow rows to be removed from a table.
     /// The rowName parameter will be a fully qualified name, specifying either the row's instance
-    /// number (e.g. "Device.IP.Interface.1") or the row's alias (e.g. "Device.IP.Interface.[lan1]").
+    /// number (e.g. "Device.IP.Interface.1") or the row's alias (e.g. `Device.IP.Interface.[lan1]`).
     ///
     /// # Arguments
     /// * `row_name`    The name of a table row (e.g. "Device.IP.Interface.1")
@@ -193,13 +192,13 @@ impl<'a> RBusDataElement<'a> {
                 return rbusError_t::RBUS_ERROR_INVALID_HANDLE;
             }
 
-            let result = RBusHandle::run_with_raw(handle, |handle| {
-                let property = ManuallyDrop::new(RBusProperty {
-                    handle: property,
-                    library: handle.library().clone(),
-                });
-                T::get(handle, &property)
-            });
+            // SAFETY: RBus keeps the connection and property valid for this callback.
+            let result = unsafe {
+                RBusHandleRef::run_with_raw(handle, |handle| {
+                    let property = RBusPropertyRef::from_raw(handle.library(), property);
+                    T::get(handle, &property)
+                })
+            };
 
             match result {
                 Ok(_) => rbusError_t::RBUS_ERROR_SUCCESS,
@@ -226,13 +225,13 @@ impl<'a> RBusDataElement<'a> {
                 return rbusError_t::RBUS_ERROR_INVALID_HANDLE;
             }
 
-            let result = RBusHandle::run_with_raw(handle, |handle| {
-                let property = ManuallyDrop::new(RBusProperty {
-                    handle: property,
-                    library: handle.library().clone(),
-                });
-                T::set(handle, &property)
-            });
+            // SAFETY: RBus keeps the connection and property valid for this callback.
+            let result = unsafe {
+                RBusHandleRef::run_with_raw(handle, |handle| {
+                    let property = RBusPropertyRef::from_raw(handle.library(), property);
+                    T::set(handle, &property)
+                })
+            };
 
             match result {
                 Ok(_) => rbusError_t::RBUS_ERROR_SUCCESS,

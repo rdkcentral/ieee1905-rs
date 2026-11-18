@@ -3,7 +3,9 @@ use crate::registry::instance::{RBusRegistryInstance, RBusRegistryInstanceTrait}
 use indexmap::IndexMap;
 use indexmap::map::Entry;
 use parking_lot::Mutex;
-use rbus_core::{RBusDataElementGet, RBusError, RBusHandle, RBusProperty, RBusTableSyncHandler};
+use rbus_core::{
+    RBusDataElementGet, RBusError, RBusHandle, RBusHandleRef, RBusPropertyRef, RBusTableSyncHandler,
+};
 use std::ffi::CStr;
 use std::sync::OnceLock;
 
@@ -71,7 +73,7 @@ impl Drop for RBusRegistryHandle {
 pub(crate) struct RBusProviderGetter;
 
 impl RBusDataElementGet for RBusProviderGetter {
-    fn get(handle: &RBusHandle, property: &RBusProperty) -> Result<(), RBusError> {
+    fn get(handle: &RBusHandleRef, property: &RBusPropertyRef) -> Result<(), RBusError> {
         let mut lock = RBusRegistryGlobal::get().lock();
         let Some(instance) = lock.instances.get_mut(&handle.to_raw().addr()) else {
             return Err(RBusError::InvalidHandle);
@@ -89,7 +91,7 @@ impl RBusDataElementGet for RBusProviderGetter {
 pub(crate) struct RBusProviderTableSync;
 
 impl RBusTableSyncHandler for RBusProviderTableSync {
-    fn sync_rows(handle: &RBusHandle, table_name: &CStr) -> Result<(), RBusError> {
+    fn sync_rows(handle: &RBusHandleRef, table_name: &CStr) -> Result<(), RBusError> {
         let mut lock = RBusRegistryGlobal::get().lock();
         let Some(instance) = lock.instances.get_mut(&handle.to_raw().addr()) else {
             return Err(RBusError::InvalidHandle);

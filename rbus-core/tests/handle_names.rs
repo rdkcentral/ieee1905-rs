@@ -1,6 +1,6 @@
 use rbus_core::{
-    RBusDataElement, RBusDataElementGet, RBusError, RBusHandle, RBusLibrary, RBusOpenError,
-    RBusProperty,
+    RBusDataElement, RBusDataElementGet, RBusError, RBusHandle, RBusHandleRef, RBusLibrary,
+    RBusOpenError, RBusPropertyRef,
 };
 use std::ffi::CString;
 use std::sync::Barrier;
@@ -21,7 +21,7 @@ fn load_library() -> anyhow::Result<Option<RBusLibrary>> {
 struct TestProperty;
 
 impl RBusDataElementGet for TestProperty {
-    fn get(_handle: &RBusHandle, property: &RBusProperty) -> Result<(), RBusError> {
+    fn get(_handle: &RBusHandleRef, property: &RBusPropertyRef) -> Result<(), RBusError> {
         property.set(&42_i32);
         Ok(())
     }
