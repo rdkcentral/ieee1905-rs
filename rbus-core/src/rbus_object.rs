@@ -3,9 +3,37 @@ use crate::rbus_property::RBusProperty;
 use crate::{RBusProperties, RBusValue};
 use rbus_sys::*;
 use std::ffi::{CStr, CString};
+use std::ops::Deref;
 
+/// An owning reference to a native object.
+/// Dereferences to [`RBusObjectRef`] for object operations.
 pub struct RBusObject {
-    pub(super) handle: rbusObject_t,
+    inner: RBusObjectRef,
+}
+
+/// Operations on an object, borrowed as `&RBusObjectRef`.
+/// This type does not release the native object and cannot be cloned or copied
+/// out of a borrow.
+///
+/// ```compile_fail,E0597
+/// use rbus_core::{RBusLibrary, RBusObject, RBusObjectRef};
+/// fn example(library: &RBusLibrary) {
+///     let borrowed: &RBusObjectRef = {
+///         let owner = RBusObject::new(library, c"borrowed-object");
+///         &owner
+///     };
+///     borrowed.get_name();
+/// }
+/// ```
+///
+/// ```compile_fail,E0507
+/// use rbus_core::RBusObjectRef;
+/// fn take_object(object: &RBusObjectRef) -> RBusObjectRef {
+///     *object
+/// }
+/// ```
+pub struct RBusObjectRef {
+    pub(crate) handle: rbusObject_t,
     pub(crate) library: RBusLibrary,
 }
 
@@ -18,6 +46,19 @@ impl RBusObject {
         unsafe {
             library.as_raw().rbusObject_Init(&mut handle, name.as_ptr());
         }
+        Self {
+            inner: RBusObjectRef {
+                handle,
+                library: library.clone(),
+            },
+        }
+    }
+}
+
+impl RBusObjectRef {
+    /// # Safety
+    /// The native object must remain valid while this wrapper is borrowed.
+    pub(crate) unsafe fn from_raw(library: &RBusLibrary, handle: rbusObject_t) -> Self {
         Self {
             handle,
             library: library.clone(),
@@ -109,10 +150,18 @@ impl RBusObject {
     }
 }
 
+impl Deref for RBusObject {
+    type Target = RBusObjectRef;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
 impl Drop for RBusObject {
     fn drop(&mut self) {
         unsafe {
-            self.library.as_raw().rbusObject_Release(self.handle);
+            self.library.as_raw().rbusObject_Release(self.inner.handle);
         }
     }
 }
@@ -121,11 +170,13 @@ impl Clone for RBusObject {
     fn clone(&self) -> Self {
         let library = self.library.as_raw();
         unsafe {
-            library.rbusObject_Retain(self.handle);
+            library.rbusObject_Retain(self.inner.handle);
         }
         Self {
-            handle: self.handle,
-            library: self.library.clone(),
+            inner: RBusObjectRef {
+                handle: self.inner.handle,
+                library: self.inner.library.clone(),
+            },
         }
     }
 }
