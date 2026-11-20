@@ -43,7 +43,7 @@ impl RBusEvent {
         let mut timeout =
             i32::try_from(options.timeout.as_secs()).map_err(|_| RBusError::InvalidInput)?;
 
-        // Round fractional seconds up to the next whole second.
+        // Round fractional seconds up so the final timeout is never smaller than requested.
         if options.timeout.subsec_nanos() != 0 {
             timeout = timeout.checked_add(1).ok_or(RBusError::InvalidInput)?;
         }
