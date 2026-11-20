@@ -1,4 +1,4 @@
-use rbus_core::{RBusEvent, RBusEventHandler, RBusEventRef, RBusHandle, RBusLibrary};
+use rbus_core::{RBusEventHandler, RBusEventRef, RBusHandle, RBusLibrary};
 use std::ffi::CString;
 
 struct EventHandler;
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_name = CString::new(event_name)?;
     let library = RBusLibrary::load()?;
     let bus = RBusHandle::open(&library, c"rbus-event-listener")?;
-    let subscription = RBusEvent::subscribe::<EventHandler>(&bus, &event_name)?;
+    let subscription = bus.subscribe_event::<EventHandler>(&event_name)?;
 
     println!("Subscribed. Press Enter to unsubscribe and exit.");
     std::io::stdin().read_line(&mut String::new())?;

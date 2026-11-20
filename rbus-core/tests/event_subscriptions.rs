@@ -1,7 +1,6 @@
 use rbus_core::{
-    RBusDataElement, RBusDataElementGet, RBusError, RBusEvent, RBusEventHandler, RBusEventRef,
-    RBusEventType, RBusHandle, RBusHandleRef, RBusLibrary, RBusOpenError, RBusPropertyRef,
-    RBusSubscribeOptions,
+    RBusDataElement, RBusDataElementGet, RBusError, RBusEventHandler, RBusEventRef, RBusEventType,
+    RBusHandle, RBusHandleRef, RBusLibrary, RBusOpenError, RBusPropertyRef, RBusSubscribeOptions,
 };
 use rbus_sys::*;
 use std::ffi::{CStr, CString};
@@ -176,9 +175,9 @@ fn receives_payload_rejects_duplicates_and_unsubscribes() -> anyhow::Result<()> 
     let bus = provider.client()?;
     let (sender, receiver) = mpsc::channel();
     SENDER.set(sender).unwrap();
-    let subscription = RBusEvent::subscribe::<Handler>(&bus, &provider.event)?;
+    let subscription = bus.subscribe_event::<Handler>(&provider.event)?;
     assert!(matches!(
-        RBusEvent::subscribe::<IgnoreEvent>(&bus, &provider.event),
+        bus.subscribe_event::<IgnoreEvent>(&provider.event),
         Err(RBusError::SubscriptionAlreadyExists)
     ));
     for count in 1..=2 {
@@ -196,7 +195,7 @@ fn receives_payload_rejects_duplicates_and_unsubscribes() -> anyhow::Result<()> 
     ));
 
     {
-        let _subscription = RBusEvent::subscribe::<Handler>(&bus, &provider.event)?;
+        let _subscription = bus.subscribe_event::<Handler>(&provider.event)?;
         assert_eq!(provider.publish(44), rbusError_t::RBUS_ERROR_SUCCESS);
         assert_eq!(
             receiver.recv_timeout(WAIT)?,
@@ -237,8 +236,8 @@ fn shared_handler_identifies_each_connection() -> anyhow::Result<()> {
     )?;
     let (sender, receiver) = mpsc::channel();
     SENDER.set(sender).unwrap();
-    let _first_subscription = RBusEvent::subscribe::<Handler>(&first, &provider.event)?;
-    let _second_subscription = RBusEvent::subscribe::<Handler>(&second, &provider.event)?;
+    let _first_subscription = first.subscribe_event::<Handler>(&provider.event)?;
+    let _second_subscription = second.subscribe_event::<Handler>(&provider.event)?;
     assert_eq!(provider.publish(1), rbusError_t::RBUS_ERROR_SUCCESS);
     let mut received = [receiver.recv_timeout(WAIT)?, receiver.recv_timeout(WAIT)?];
     let mut expected = [first.to_raw().addr(), second.to_raw().addr()];
@@ -286,7 +285,7 @@ fn subscribes_to_native_property_value_changes() -> anyhow::Result<()> {
     let bus = provider.client()?;
     let (sender, receiver) = mpsc::channel();
     SENDER.set(sender).unwrap();
-    let _subscription = RBusEvent::subscribe::<Handler>(&bus, &name)?;
+    let _subscription = bus.subscribe_event::<Handler>(&name)?;
     PROPERTY_VALUE.store(20, Ordering::Relaxed);
     // Some native RBus versions poll every 30 seconds.
     assert_eq!(
@@ -305,21 +304,20 @@ fn failed_subscriptions_can_be_retried_and_reject_invalid_timeouts() -> anyhow::
     let bus = provider.client()?;
     for _ in 0..2 {
         assert!(matches!(
-            RBusEvent::subscribe::<IgnoreEvent>(&bus, &provider.denied),
+            bus.subscribe_event::<IgnoreEvent>(&provider.denied),
             Err(RBusError::AccessNotAllowed)
         ));
     }
     for timeout in [Duration::MAX, Duration::from_secs(i32::MAX as u64)] {
         assert!(matches!(
-            RBusEvent::subscribe_with_options::<IgnoreEvent>(
-                &bus,
+            bus.subscribe_event_with_options::<IgnoreEvent>(
                 &provider.event,
                 RBusSubscribeOptions { timeout },
             ),
             Err(RBusError::InvalidInput)
         ));
     }
-    let _subscription = RBusEvent::subscribe::<IgnoreEvent>(&bus, &provider.event)?;
+    let _subscription = bus.subscribe_event::<IgnoreEvent>(&provider.event)?;
     Ok(())
 }
 
@@ -356,11 +354,11 @@ fn callback_panics_do_not_unwind_through_c() -> anyhow::Result<()> {
     let bus = provider.client()?;
     let (sender, receiver) = mpsc::channel();
     SENDER.set(sender).unwrap();
-    let subscription = RBusEvent::subscribe::<PanickingHandler>(&bus, &provider.event)?;
+    let subscription = bus.subscribe_event::<PanickingHandler>(&provider.event)?;
     assert_eq!(provider.publish(1), rbusError_t::RBUS_ERROR_SUCCESS);
     receiver.recv_timeout(WAIT)?;
     drop(subscription);
-    let _subscription = RBusEvent::subscribe::<Handler>(&bus, &provider.event)?;
+    let _subscription = bus.subscribe_event::<Handler>(&provider.event)?;
     assert_eq!(provider.publish(2), rbusError_t::RBUS_ERROR_SUCCESS);
     receiver.recv_timeout(WAIT)?;
     Ok(())

@@ -1,5 +1,5 @@
 use super::{RBusEventHandler, RBusEventRef};
-use crate::{RBusHandle, RBusHandleRef};
+use crate::RBusHandleRef;
 use rbus_sys::{rbusEvent_t, rbusEventSubscription_t, rbusHandle_t};
 use std::ffi::CString;
 use std::panic::catch_unwind;
@@ -14,12 +14,12 @@ pub struct RBusSubscribeOptions {
 }
 
 ///
-/// A subscription borrowing its owning connection.
+/// A subscription borrowing its connection.
 /// Dropping this guard requests unsubscription. Native RBus may still deliver
 /// a late callback after unsubscription.
 ///
 /// ```compile_fail,E0597
-/// use rbus_core::{RBusEvent, RBusEventHandler, RBusEventRef, RBusHandle, RBusLibrary};
+/// use rbus_core::{RBusEventHandler, RBusEventRef, RBusHandle, RBusLibrary};
 /// struct Handler;
 /// impl RBusEventHandler for Handler {
 ///     fn on_event(_: &RBusEventRef<'_>) {}
@@ -27,7 +27,7 @@ pub struct RBusSubscribeOptions {
 /// fn example(library: &RBusLibrary) -> Result<(), Box<dyn std::error::Error>> {
 ///     let subscription = {
 ///         let bus = RBusHandle::open(library, c"subscriber")?;
-///         RBusEvent::subscribe::<Handler>(&bus, c"Device.Test.Event!")?
+///         bus.subscribe_event::<Handler>(c"Device.Test.Event!")?
 ///     };
 ///     drop(subscription);
 ///     Ok(())
@@ -35,11 +35,11 @@ pub struct RBusSubscribeOptions {
 /// ```
 #[must_use = "keep the subscription alive to receive events"]
 pub struct RBusEventSubscription<'a> {
-    pub(super) handle: &'a RBusHandle,
-    pub(super) event_name: CString,
+    pub(crate) handle: &'a RBusHandleRef,
+    pub(crate) event_name: CString,
 }
 
-pub(super) unsafe extern "C" fn dispatch_event<T: RBusEventHandler>(
+pub(crate) unsafe extern "C" fn dispatch_event<T: RBusEventHandler>(
     handle: rbusHandle_t,
     event_data: *const rbusEvent_t,
     _subscription: *mut rbusEventSubscription_t,
