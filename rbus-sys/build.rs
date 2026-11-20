@@ -9,7 +9,7 @@ const RBUS_DIR: &str = "./c_src";
 /// https://github.com/messense/homebrew-macos-cross-toolchains
 ///
 fn main() -> anyhow::Result<()> {
-    let host_triple = std::env::var("HOST")?;
+    let target_triple = std::env::var("TARGET")?;
 
     let base_dir = Path::new(RBUS_DIR).canonicalize();
     let base_dir = base_dir.map_err(|e| anyhow!("path {RBUS_DIR} not found: {e:?}"))?;
@@ -18,7 +18,7 @@ fn main() -> anyhow::Result<()> {
     let include_dir = include_dir.to_string_lossy();
 
     let bindings = bindgen::Builder::default()
-        .clang_arg(format!("--target={host_triple}"))
+        .clang_arg(format!("--target={target_triple}"))
         .dynamic_library_name("RBusLibraryRaw")
         .dynamic_link_require_all(true)
         .headers([
