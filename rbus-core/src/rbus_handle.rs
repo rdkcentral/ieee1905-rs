@@ -2,9 +2,13 @@ mod element;
 mod error;
 mod status;
 
+use crate::rbus_event::dispatch_event;
 use crate::rbus_library::{RBusComponentNameReservation, RBusLibrary};
 use crate::rbus_value::RBusValue;
-use crate::{RBusValueReadable, RBusValueWritable};
+use crate::{
+    RBusEventHandler, RBusEventSubscription, RBusSubscribeOptions, RBusValueReadable,
+    RBusValueWritable,
+};
 pub use element::*;
 pub use error::*;
 use rbus_sys::*;
@@ -98,6 +102,60 @@ impl RBusHandleRef {
     /// Get library this handle was created with
     pub fn library(&self) -> &RBusLibrary {
         &self.library
+    }
+
+    ///
+    /// Subscribe with no retry when no provider is available.
+    /// See [`Self::subscribe_event_with_options`] for callback behavior.
+    ///
+    pub fn subscribe_event<T: RBusEventHandler>(
+        &self,
+        event_name: &CStr,
+    ) -> Result<RBusEventSubscription<'_>, RBusError> {
+        self.subscribe_event_with_options::<T>(event_name, RBusSubscribeOptions::default())
+    }
+
+    ///
+    /// Subscribe with options controlling retries during establishment.
+    /// The callback runs on an RBus thread and may begin before this returns.
+    /// With `panic = "unwind"`, callback panics are caught before returning to C.
+    /// With `panic = "abort"`, including this workspace's release profile,
+    /// a callback panic terminates the process.
+    /// Create and drop subscriptions from outside event callbacks.
+    /// Do not close the receiving connection from an event callback.
+    ///
+    pub fn subscribe_event_with_options<T: RBusEventHandler>(
+        &self,
+        event_name: &CStr,
+        options: RBusSubscribeOptions,
+    ) -> Result<RBusEventSubscription<'_>, RBusError> {
+        let mut timeout =
+            i32::try_from(options.timeout.as_secs()).map_err(|_| RBusError::InvalidInput)?;
+
+        // Round fractional seconds up so the final timeout is never smaller than requested.
+        if options.timeout.subsec_nanos() != 0 {
+            timeout = timeout.checked_add(1).ok_or(RBusError::InvalidInput)?;
+        }
+
+        // Native RBus multiplies the timeout by 1000 using a signed int.
+        if timeout > i32::MAX / 1000 {
+            return Err(RBusError::InvalidInput);
+        }
+
+        let event_name = event_name.to_owned();
+        let result = unsafe {
+            self.library().as_raw().rbusEvent_Subscribe(
+                self.handle,
+                event_name.as_ptr(),
+                Some(dispatch_event::<T>),
+                std::ptr::null_mut(),
+                timeout,
+            )
+        };
+        RBusError::map(result, || RBusEventSubscription {
+            handle: self,
+            event_name,
+        })
     }
 
     ///
