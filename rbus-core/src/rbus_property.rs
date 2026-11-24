@@ -1,6 +1,6 @@
 use crate::rbus_library::RBusLibrary;
 use crate::rbus_value::RBusValue;
-use crate::{RBusObject, RBusValueGetError, RBusValueReadable, RBusValueWritable};
+use crate::{RBusError, RBusObject, RBusValueGetError, RBusValueReadable, RBusValueWritable};
 use rbus_sys::*;
 use std::cmp::Ordering;
 use std::ffi::{CStr, CString};
@@ -77,15 +77,18 @@ impl RBusProperty {
 impl RBusPropertyRef {
     ///
     /// Wrap a callback property without retaining its native ownership.
+    /// Returns `RBusError::InvalidHandle` if the pointer is null.
+    /// Returns `RBusError::GeneralError` if the library cannot be loaded.
     ///
     /// # Safety
-    /// The property must remain valid while this wrapper or any reference to it is used.
+    /// A non-null property must remain valid while this wrapper or any reference to it is used.
     ///
-    pub(crate) unsafe fn from_raw(library: &RBusLibrary, handle: rbusProperty_t) -> Self {
-        Self {
-            handle,
-            library: library.clone(),
+    pub(crate) unsafe fn try_from_raw(handle: rbusProperty_t) -> Result<Self, RBusError> {
+        if handle.is_null() {
+            return Err(RBusError::InvalidHandle);
         }
+        let library = RBusLibrary::load().map_err(|_| RBusError::GeneralError)?;
+        Ok(Self { handle, library })
     }
 
     ///

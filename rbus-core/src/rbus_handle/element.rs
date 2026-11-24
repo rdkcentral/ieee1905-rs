@@ -125,16 +125,16 @@ unsafe fn call_property_handler(
     property: rbusProperty_t,
     handler: fn(&RBusHandleRef, &RBusPropertyRef) -> Result<(), RBusError>,
 ) -> rbusError_t {
-    if property.is_null() {
-        return rbusError_t::RBUS_ERROR_INVALID_HANDLE;
-    }
-
     // SAFETY: RBus keeps the connection and property valid for this callback.
     let handle = match unsafe { RBusHandleRef::try_from_raw(handle) } {
         Ok(handle) => handle,
         Err(error) => return error.to_raw(),
     };
-    let property = unsafe { RBusPropertyRef::from_raw(handle.library(), property) };
+    // SAFETY: RBus keeps the property valid for this callback.
+    let property = match unsafe { RBusPropertyRef::try_from_raw(property) } {
+        Ok(property) => property,
+        Err(error) => return error.to_raw(),
+    };
     let result = handler(&handle, &property);
 
     match result {

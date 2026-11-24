@@ -91,12 +91,8 @@ impl<'a> RBusEventRef<'a> {
     /// }
     /// ```
     pub fn with_data<T>(&self, f: impl FnOnce(&RBusObjectRef) -> T) -> Option<T> {
-        let data = self.event.data;
-        if data.is_null() {
-            return None;
-        }
         // SAFETY: RBus keeps the payload valid for the native callback.
-        let data = unsafe { RBusObjectRef::from_raw(self.handle.library(), data) };
+        let data = unsafe { RBusObjectRef::try_from_raw(self.event.data) }.ok()?;
         Some(f(&data))
     }
 }
