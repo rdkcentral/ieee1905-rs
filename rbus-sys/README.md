@@ -64,14 +64,3 @@ flags to bindgen via `BINDGEN_EXTRA_CLANG_ARGS`.
 
 `RBUS_DIR` is an RBus installation prefix, not a replacement for the toolchain's
 sysroot configuration.
-
-## Regression tests
-
-The Linux tests build a temporary C library and check both modes, path overrides,
-generated callbacks, and ELF dependencies without a system RBus installation.
-They require Python 3, Cargo, libclang, `cc`, and `readelf`. After fetching the
-crate's Cargo dependencies, run from this crate's directory:
-
-```shell
-python3 tests/link_modes.py
-```
