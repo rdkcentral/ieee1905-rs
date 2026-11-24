@@ -228,13 +228,7 @@ impl Ord for RBusPropertyRef {
     fn cmp(&self, other: &Self) -> Ordering {
         let library = self.library.as_raw();
         let result = unsafe { library.rbusProperty_Compare(self.handle, other.handle) };
-        if result < 0 {
-            return Ordering::Less;
-        }
-        if result > 0 {
-            return Ordering::Greater;
-        }
-        Ordering::Equal
+        result.cmp(&0)
     }
 }
 

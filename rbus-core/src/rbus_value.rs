@@ -196,13 +196,7 @@ impl Ord for RBusValue {
     fn cmp(&self, other: &Self) -> Ordering {
         let library = self.library.as_raw();
         let result = unsafe { library.rbusValue_Compare(self.handle, other.handle) };
-        if result < 0 {
-            return Ordering::Less;
-        }
-        if result > 0 {
-            return Ordering::Greater;
-        }
-        Ordering::Equal
+        result.cmp(&0)
     }
 }
 
