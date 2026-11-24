@@ -57,15 +57,13 @@ pub(crate) unsafe extern "C" fn dispatch_event<T: RBusEventHandler>(
             return;
         }
         // SAFETY: RBus keeps the connection and payload valid until this callback returns.
-        let _ = unsafe {
-            RBusHandleRef::run_with_raw(handle, |handle| {
-                T::on_event(&RBusEventRef {
-                    handle,
-                    event: event_data,
-                });
-                Ok(())
-            })
+        let Ok(handle) = (unsafe { RBusHandleRef::try_from_raw(handle) }) else {
+            return;
         };
+        T::on_event(&RBusEventRef {
+            handle: &handle,
+            event: event_data,
+        });
     }) {
         // Dropping the panic payload could panic across the FFI boundary.
         std::mem::forget(payload);

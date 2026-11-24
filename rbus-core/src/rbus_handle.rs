@@ -275,12 +275,12 @@ impl RBusHandleRef {
             }
 
             // SAFETY: RBus keeps the connection and terminated name valid for this callback.
-            let result = unsafe {
-                RBusHandleRef::run_with_raw(handle, |handle| {
-                    let table_name = CStr::from_ptr(table_name);
-                    T::sync_rows(handle, table_name)
-                })
+            let handle = match unsafe { RBusHandleRef::try_from_raw(handle) } {
+                Ok(handle) => handle,
+                Err(error) => return error.to_raw(),
             };
+            let table_name = unsafe { CStr::from_ptr(table_name) };
+            let result = T::sync_rows(&handle, table_name);
 
             match result {
                 Ok(_) => rbusError_t::RBUS_ERROR_SUCCESS,
@@ -391,19 +391,19 @@ impl RBusHandleRef {
     }
 
     ///
-    /// Borrow a connection for the duration of a native callback.
+    /// Construct a callback-local view of a borrowed connection without closing it.
     /// The temporary wrapper drops its library reference normally.
     ///
     /// # Safety
-    /// The native handle must remain valid until the callback returns.
+    /// A non-null native handle must remain valid while the returned wrapper or
+    /// any reference to it is used. The wrapper must not outlive the callback.
     ///
-    pub(crate) unsafe fn run_with_raw<T, F>(handle: rbusHandle_t, f: F) -> Result<T, RBusError>
-    where
-        F: FnOnce(&Self) -> Result<T, RBusError>,
-    {
+    pub(crate) unsafe fn try_from_raw(handle: rbusHandle_t) -> Result<Self, RBusError> {
+        if handle.is_null() {
+            return Err(RBusError::InvalidHandle);
+        }
         let library = RBusLibrary::load().map_err(|_| RBusError::GeneralError)?;
-        let handle = Self { handle, library };
-        f(&handle)
+        Ok(Self { handle, library })
     }
 }
 
