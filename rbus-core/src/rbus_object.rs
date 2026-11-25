@@ -58,16 +58,20 @@ impl RBusObject {
 impl RBusObjectRef {
     /// Wrap a borrowed object without retaining its native ownership.
     /// Returns `RBusError::InvalidHandle` if the pointer is null.
-    /// Returns `RBusError::GeneralError` if the library cannot be loaded.
     ///
     /// # Safety
     /// A non-null native object must remain valid while this wrapper or any reference to it is used.
-    pub(crate) unsafe fn try_from_raw(handle: rbusObject_t) -> Result<Self, RBusError> {
+    pub(crate) unsafe fn try_from_raw(
+        library: &RBusLibrary,
+        handle: rbusObject_t,
+    ) -> Result<Self, RBusError> {
         if handle.is_null() {
             return Err(RBusError::InvalidHandle);
         }
-        let library = RBusLibrary::load().map_err(|_| RBusError::GeneralError)?;
-        Ok(Self { handle, library })
+        Ok(Self {
+            handle,
+            library: library.clone(),
+        })
     }
 
     ///

@@ -116,33 +116,6 @@ pub trait RBusDataElementRemoveRow {
     fn remove_row(row_name: &CStr) -> Result<(), RBusError>;
 }
 
-/// Adapt a property callback to the Rust handler and convert its result to C.
-///
-/// # Safety
-/// Non-null handles must remain valid until the handler returns.
-unsafe fn call_property_handler(
-    handle: rbusHandle_t,
-    property: rbusProperty_t,
-    handler: fn(&RBusHandleRef, &RBusPropertyRef) -> Result<(), RBusError>,
-) -> rbusError_t {
-    // SAFETY: RBus keeps the connection and property valid for this callback.
-    let handle = match unsafe { RBusHandleRef::try_from_raw(handle) } {
-        Ok(handle) => handle,
-        Err(error) => return error.to_raw(),
-    };
-    // SAFETY: RBus keeps the property valid for this callback.
-    let property = match unsafe { RBusPropertyRef::try_from_raw(property) } {
-        Ok(property) => property,
-        Err(error) => return error.to_raw(),
-    };
-    let result = handler(&handle, &property);
-
-    match result {
-        Ok(()) => rbusError_t::RBUS_ERROR_SUCCESS,
-        Err(error) => error.to_raw(),
-    }
-}
-
 impl<'a> RBusDataElement<'a> {
     const fn new(name: &'a CStr, kind: rbusElementType_t) -> Self {
         let inner = rbusDataElement_t {
@@ -307,5 +280,32 @@ impl<'a> RBusDataElement<'a> {
         }
         self.inner.cbTable.tableRemoveRowHandler = Some(handler::<T>);
         self
+    }
+}
+
+/// Adapt a property callback to the Rust handler and convert its result to C.
+///
+/// # Safety
+/// Non-null handles must remain valid until the handler returns.
+unsafe fn call_property_handler(
+    handle: rbusHandle_t,
+    property: rbusProperty_t,
+    handler: fn(&RBusHandleRef, &RBusPropertyRef) -> Result<(), RBusError>,
+) -> rbusError_t {
+    if handle.is_null() {
+        return rbusError_t::RBUS_ERROR_INVALID_HANDLE;
+    }
+
+    // SAFETY: RBus keeps the connection and property valid for this callback.
+    let result = unsafe {
+        RBusHandleRef::run_with_raw(handle, |handle| {
+            let property = RBusPropertyRef::try_from_raw(handle.library(), property)?;
+            handler(handle, &property)
+        })
+    };
+
+    match result {
+        Ok(()) => rbusError_t::RBUS_ERROR_SUCCESS,
+        Err(error) => error.to_raw(),
     }
 }
