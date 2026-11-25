@@ -40,6 +40,14 @@ pub(crate) struct RBusProviderTable<Content, FSync> {
     content: Content,
 }
 
+fn take_row_index(path: &mut &[&BStr]) -> Result<u32, RBusError> {
+    let index = path
+        .split_off_first()
+        .ok_or(RBusError::ElementDoesNotExists)?;
+    let index = str::from_utf8(index).map_err(|_| RBusError::ElementDoesNotExists)?;
+    index.parse().map_err(|_| RBusError::ElementDoesNotExists)
+}
+
 impl<Content, FSync> RBusProviderElement for RBusProviderTable<Content, FSync>
 where
     Content: RBusProviderElement,
@@ -68,21 +76,7 @@ where
             return Err(RBusProviderElementError::WrongElement);
         }
 
-        let Some(index) = path.split_off_first() else {
-            return Err(RBusProviderElementError::RBus(
-                RBusError::ElementDoesNotExists,
-            ));
-        };
-        let Ok(index) = str::from_utf8(index) else {
-            return Err(RBusProviderElementError::RBus(
-                RBusError::ElementDoesNotExists,
-            ));
-        };
-        let Ok(index) = index.parse::<u32>() else {
-            return Err(RBusProviderElementError::RBus(
-                RBusError::ElementDoesNotExists,
-            ));
-        };
+        let index = take_row_index(&mut path)?;
 
         let Some(user_data) = args.user_data.1.get_mut(index as usize) else {
             return Err(RBusProviderElementError::RBus(
@@ -137,21 +131,7 @@ where
             return Ok(());
         }
 
-        let Some(index) = path.split_off_first() else {
-            return Err(RBusProviderElementError::RBus(
-                RBusError::ElementDoesNotExists,
-            ));
-        };
-        let Ok(index) = str::from_utf8(index) else {
-            return Err(RBusProviderElementError::RBus(
-                RBusError::ElementDoesNotExists,
-            ));
-        };
-        let Ok(index) = index.parse::<u32>() else {
-            return Err(RBusProviderElementError::RBus(
-                RBusError::ElementDoesNotExists,
-            ));
-        };
+        let index = take_row_index(&mut path)?;
 
         let Some(user_data) = args.user_data.1.get_mut(index as usize) else {
             return Err(RBusProviderElementError::RBus(
