@@ -19,9 +19,9 @@ pub enum RBusStatus {
 }
 
 impl RBusStatus {
-    pub fn map_err<F, E>(self, f: impl FnOnce(Self) -> E) -> Result<(), E>
+    pub fn map_err<F, E>(self, f: F) -> Result<(), E>
     where
-        F: FnOnce() -> E,
+        F: FnOnce(Self) -> E,
     {
         if self == Self::Enabled {
             Ok(())
