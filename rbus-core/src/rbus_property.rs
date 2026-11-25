@@ -203,16 +203,7 @@ impl Drop for RBusProperty {
 
 impl Clone for RBusProperty {
     fn clone(&self) -> Self {
-        let library = self.inner.library.as_raw();
-        unsafe {
-            library.rbusProperty_Retain(self.inner.handle);
-        }
-        Self {
-            inner: RBusPropertyRef {
-                handle: self.inner.handle,
-                library: self.inner.library.clone(),
-            },
-        }
+        Self::retain(&self.inner.library, self.inner.handle)
     }
 }
 
