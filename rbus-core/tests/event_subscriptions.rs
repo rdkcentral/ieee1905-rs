@@ -74,9 +74,7 @@ impl Provider {
 
     fn open(library: &RBusLibrary, component: CString) -> anyhow::Result<Self> {
         let bus = RBusHandle::open(library, &component)?;
-        let raw = unsafe {
-            RBusLibraryRaw::new("librbus.so.0").or_else(|_| RBusLibraryRaw::new("librbus.so"))?
-        };
+        let raw = unsafe { RBusLibraryRaw::load()? };
         let event = CString::new(format!("{}.Changed!", component.to_str()?))?;
         let denied = CString::new(format!("{}.Denied!", component.to_str()?))?;
         let elements: Vec<_> = [&event, &denied]

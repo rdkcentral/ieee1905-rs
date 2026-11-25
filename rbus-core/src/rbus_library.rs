@@ -31,26 +31,21 @@ impl Drop for RBusComponentNameReservation {
 }
 
 impl RBusLibrary {
-    /// Dynamically load RBus library
+    /// Access RBus using the selected link mode (runtime loading by default).
     pub fn load() -> Result<Self, RBusOpenError> {
         static CELL: OnceLock<Result<RBusLibrary, RBusOpenError>> = OnceLock::new();
         let library = CELL.get_or_init(|| {
-            for library_name in ["librbus.so.0", "librbus.so"] {
-                match unsafe { RBusLibraryRaw::new(library_name) } {
-                    Ok(e) => {
-                        return Ok(RBusLibrary {
-                            inner: Arc::new(RBusLibraryInner {
-                                handle: e,
-                                reserved_component_names: Mutex::new(HashSet::new()),
-                            }),
-                        });
-                    }
-                    Err(rbus_sys::libloading::Error::DlOpen { .. }) => continue,
-                    Err(rbus_sys::libloading::Error::DlOpenUnknown) => continue,
-                    Err(e) => return Err(RBusOpenError::LoadFailed(Arc::from(e.to_string()))),
-                }
-            }
-            Err(RBusOpenError::NotAvailable)
+            let handle = unsafe { RBusLibraryRaw::load() }.map_err(|error| match error {
+                rbus_sys::libloading::Error::DlOpen { .. }
+                | rbus_sys::libloading::Error::DlOpenUnknown => RBusOpenError::NotAvailable,
+                error => RBusOpenError::LoadFailed(Arc::from(error.to_string())),
+            })?;
+            Ok(RBusLibrary {
+                inner: Arc::new(RBusLibraryInner {
+                    handle,
+                    reserved_component_names: Mutex::new(HashSet::new()),
+                }),
+            })
         });
         library.clone()
     }
