@@ -173,14 +173,7 @@ impl Drop for RBusValue {
 
 impl Clone for RBusValue {
     fn clone(&self) -> Self {
-        let library = self.library.as_raw();
-        unsafe {
-            library.rbusValue_Retain(self.handle);
-        }
-        Self {
-            handle: self.handle,
-            library: self.library.clone(),
-        }
+        Self::retain(&self.library, self.handle)
     }
 }
 
