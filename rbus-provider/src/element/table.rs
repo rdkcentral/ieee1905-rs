@@ -68,26 +68,10 @@ where
             return Err(RBusProviderElementError::WrongElement);
         }
 
-        let Some(index) = path.split_off_first() else {
-            return Err(RBusProviderElementError::RBus(
-                RBusError::ElementDoesNotExists,
-            ));
-        };
-        let Ok(index) = str::from_utf8(index) else {
-            return Err(RBusProviderElementError::RBus(
-                RBusError::ElementDoesNotExists,
-            ));
-        };
-        let Ok(index) = index.parse::<u32>() else {
-            return Err(RBusProviderElementError::RBus(
-                RBusError::ElementDoesNotExists,
-            ));
-        };
+        let index = take_row_index(&mut path)?;
 
         let Some(user_data) = args.user_data.1.get_mut(index as usize) else {
-            return Err(RBusProviderElementError::RBus(
-                RBusError::ElementDoesNotExists,
-            ));
+            return Err(RBusError::ElementDoesNotExists.into());
         };
 
         args.table_idx.push(index);
@@ -137,26 +121,10 @@ where
             return Ok(());
         }
 
-        let Some(index) = path.split_off_first() else {
-            return Err(RBusProviderElementError::RBus(
-                RBusError::ElementDoesNotExists,
-            ));
-        };
-        let Ok(index) = str::from_utf8(index) else {
-            return Err(RBusProviderElementError::RBus(
-                RBusError::ElementDoesNotExists,
-            ));
-        };
-        let Ok(index) = index.parse::<u32>() else {
-            return Err(RBusProviderElementError::RBus(
-                RBusError::ElementDoesNotExists,
-            ));
-        };
+        let index = take_row_index(&mut path)?;
 
         let Some(user_data) = args.user_data.1.get_mut(index as usize) else {
-            return Err(RBusProviderElementError::RBus(
-                RBusError::ElementDoesNotExists,
-            ));
+            return Err(RBusError::ElementDoesNotExists.into());
         };
 
         args.table_idx.push(index);
@@ -192,4 +160,17 @@ pub trait RBusProviderTableSync: Send + 'static {
     /// Returns number of items in the table
     ///
     fn len(&mut self, args: RBusProviderTableSyncArgs<Self::UserData>) -> Result<u32, RBusError>;
+}
+
+fn take_row_index(path: &mut &[&BStr]) -> Result<u32, RBusError> {
+    let Some(index) = path.split_off_first() else {
+        return Err(RBusError::ElementDoesNotExists);
+    };
+    let Ok(index) = str::from_utf8(index) else {
+        return Err(RBusError::ElementDoesNotExists);
+    };
+    let Ok(index) = index.parse::<u32>() else {
+        return Err(RBusError::ElementDoesNotExists);
+    };
+    Ok(index)
 }
