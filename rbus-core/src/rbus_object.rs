@@ -1,6 +1,6 @@
 use crate::rbus_library::RBusLibrary;
 use crate::rbus_property::RBusProperty;
-use crate::{RBusProperties, RBusValue};
+use crate::{RBusError, RBusProperties, RBusValue};
 use rbus_sys::*;
 use std::ffi::{CStr, CString};
 use std::ops::Deref;
@@ -56,13 +56,22 @@ impl RBusObject {
 }
 
 impl RBusObjectRef {
+    /// Wrap a borrowed object without retaining its native ownership.
+    /// Returns `RBusError::InvalidHandle` if the pointer is null.
+    ///
     /// # Safety
-    /// The native object must remain valid while this wrapper is borrowed.
-    pub(crate) unsafe fn from_raw(library: &RBusLibrary, handle: rbusObject_t) -> Self {
-        Self {
+    /// A non-null native object must remain valid while this wrapper or any reference to it is used.
+    pub(crate) unsafe fn try_from_raw(
+        library: &RBusLibrary,
+        handle: rbusObject_t,
+    ) -> Result<Self, RBusError> {
+        if handle.is_null() {
+            return Err(RBusError::InvalidHandle);
+        }
+        Ok(Self {
             handle,
             library: library.clone(),
-        }
+        })
     }
 
     ///
