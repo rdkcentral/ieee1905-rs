@@ -715,7 +715,7 @@ async fn send_cmdu_from_sdu(sdu: SDU) -> Result<()> {
             cmdu_from_sdu_transmission(
                 sap_guard.interface_name.clone(),
                 sap_guard.sender.clone(),
-                sdu.clone(),
+                sdu,
             ),
         );
         Ok(())
