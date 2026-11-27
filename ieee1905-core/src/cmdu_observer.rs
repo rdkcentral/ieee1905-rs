@@ -46,9 +46,8 @@ impl EthernetFrameObserver for CMDUObserver {
         source_mac: MacAddr,
         destination_mac: MacAddr,
     ) {
-        let frame_owned = frame.to_vec();
-        tracing::trace!("Parsing CMDU on_frame <{frame_owned:?}>");
-        match CMDU::parse(&frame_owned) {
+        tracing::trace!("Parsing CMDU on_frame <{frame:?}>");
+        match CMDU::parse(frame) {
             Ok((_, cmdu)) => {
                 let cmdu_type = CMDUType::from_u16(cmdu.message_type);
 

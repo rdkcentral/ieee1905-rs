@@ -124,16 +124,15 @@ impl CmduReassembler {
             }),
         };
 
-        let inserted = entry
-            .get_mut()
-            .fragments
-            .insert(fragment.fragment, fragment.clone());
+        let fragment_id = fragment.fragment;
+        let is_last_fragment = fragment.is_last_fragment();
+        let inserted = entry.get_mut().fragments.insert(fragment_id, fragment);
         if inserted.is_some() {
-            tracing::trace!("Duplicated fragment: {:?}", fragment.fragment);
+            tracing::trace!("Duplicated fragment: {:?}", fragment_id);
             return Some(Err(CmduReassemblyError::DuplicatedFragment));
         }
 
-        if fragment.is_last_fragment() {
+        if is_last_fragment {
             tracing::trace!("All fragments arrived. Generating reassembled CMDU");
             let fragments_map = entry.remove().fragments;
             let fragments: Vec<CMDU> = fragments_map.into_values().collect();
